@@ -10,8 +10,8 @@ const STATE = globalThis.__putterState ?? {
 };
 globalThis.__putterState = STATE;
 
-const TTL_MS = 3 * 60 * 1000;     // 3 minutes cache
-const COOLDOWN_MS = 45 * 1000;    // 45 seconds pause after hitting rate limit
+const TTL_MS = 10 * 60 * 1000;     // 10 minutes cache
+const COOLDOWN_MS = 5 * 60 * 1000;    // 5 minutes
 
 function getCache(key) {
   const hit = STATE.cache.get(key);
@@ -51,7 +51,7 @@ async function callEbay(q) {
     "RESPONSE-DATA-FORMAT": "JSON",
     "GLOBAL-ID": "EBAY-US",
     // Start conservative; you can raise later
-    "paginationInput.entriesPerPage": "12",
+    "paginationInput.entriesPerPage": "6",
     sortOrder: "PricePlusShippingLowest",
     keywords: q,
   });
