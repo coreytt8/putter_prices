@@ -1,39 +1,20 @@
-"use client";
-
-import { useEffect, useState } from "react";
+// app/page.js
+import Link from "next/link";
 
 export default function Home() {
-  const [putters, setPutters] = useState([]);
-
-  useEffect(() => {
-    async function fetchPutters() {
-      try {
-        const res = await fetch("http://localhost:8000/putters");
-        if (!res.ok) throw new Error("Failed to fetch putters");
-        const data = await res.json();
-        setPutters(data);
-      } catch (err) {
-        console.error("Error fetching putters:", err);
-      }
-    }
-
-    fetchPutters();
-  }, []);
-
   return (
-    <main style={{ padding: "2rem", fontFamily: "sans-serif" }}>
-      <h1>Putter Price Comparison</h1>
-      {putters.length === 0 ? (
-        <p>Loading putters...</p>
-      ) : (
-        <ul>
-          {putters.map((p) => (
-            <li key={p.id}>
-              <strong>{p.name}</strong> – ${p.price} ({p.source})
-            </li>
-          ))}
-        </ul>
-      )}
+    <main className="flex min-h-screen flex-col items-center justify-center p-8">
+      <h1 className="text-4xl font-bold mb-4">Welcome to Putter Prices</h1>
+      <p className="mb-6 text-lg text-center max-w-xl">
+        Search and compare golf putter prices from across the internet. 
+        We aggregate listings so you can find the best deals fast.
+      </p>
+      <Link
+        href="/putters"
+        className="rounded bg-blue-600 px-4 py-2 text-white hover:bg-blue-700"
+      >
+        Browse Putters
+      </Link>
     </main>
   );
 }
