@@ -13,7 +13,14 @@ const EPN_CAMPAIGN_ID = process.env.EPN_CAMPAIGN_ID || ""; // your 10-digit camp
 function wrapEpn(url) {
   if (!url || !EPN_ROVER_PATH || !EPN_CAMPAIGN_ID) return url;
   const base = `https://rover.ebay.com/rover/1/${EPN_ROVER_PATH}/1`;
-  const params = new URLSearchParams({ campid: EPN_CAMPAIGN_ID, to: url });
+
+  // Ensure single encode only
+  const cleanUrl = decodeURIComponent(url); 
+  const params = new URLSearchParams({
+    campid: EPN_CAMPAIGN_ID,
+    to: encodeURIComponent(cleanUrl), // single encoding
+  });
+
   return `${base}?${params.toString()}`;
 }
 
