@@ -1,5 +1,5 @@
-// app/layout.js
 import "./globals.css";
+import Script from "next/script";
 
 export const metadata = {
   title: "PutterIQ – Golf Putter Price Comparison",
@@ -7,20 +7,21 @@ export const metadata = {
 };
 
 export default function RootLayout({ children }) {
+  const pub = process.env.NEXT_PUBLIC_EPN_PUBLISHER_ID; // must be set in Vercel
   return (
     <html lang="en">
-      <head>
-        {/* EPN Smart Links */}
-        {process.env.NEXT_PUBLIC_EPN_PUBLISHER_ID && (
-          <script
-            async
-            src="https://epn.ebay.com/static/js/epn-smart-frontend.js"
-            data-epn-publisher-id={process.env.NEXT_PUBLIC_EPN_PUBLISHER_ID}
-          />
-        )}
-      </head>
+      <head />
       <body>
         {children}
+
+        {/* EPN Smart Links (afterInteractive ensures it runs after hydration) */}
+        {!!pub && (
+          <Script
+            src="https://epn.ebay.com/static/js/epn-smart-frontend.js"
+            strategy="afterInteractive"
+            data-epn-publisher-id={pub}
+          />
+        )}
       </body>
     </html>
   );
