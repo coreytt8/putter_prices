@@ -6,56 +6,50 @@ const CLIENT_ID = process.env.EBAY_CLIENT_ID;
 const CLIENT_SECRET = process.env.EBAY_CLIENT_SECRET;
 const MARKETPLACE = process.env.EBAY_MARKETPLACE || "EBAY_US";
 
-// ====== EPN (server-side rover wrapping) ======
-const EPN_ROVER_PATH = process.env.EPN_ROVER_PATH || "";   // e.g. "711-53200-19255-0"
-const EPN_CAMPAIGN_ID = process.env.EPN_CAMPAIGN_ID || ""; // e.g. "5339121522"
+// ====== EPN (inline tagging) ======
+const EPN_ROVER_PATH = process.env.EPN_ROVER_PATH || "";   // e.g. "711-53200-19255-0" -> becomes mkrid
+const EPN_CAMPAIGN_ID = process.env.EPN_CAMPAIGN_ID || ""; // e.g. "5339121522"        -> becomes campid
 
-// --- Clean an eBay URL so rover can redirect reliably (avoid 1x1 pixel) ---
-function cleanEbayUrl(raw) {
+// --- Normalize to a canonical eBay item URL and strip noisy params ---
+function canonicalEbayItemUrl(raw) {
   try {
     const u = new URL(raw);
-
-    // Only normalize eBay hostnames; otherwise return as-is
+    // Only touch ebay.* hosts
     if (!/(^|\.)ebay\.(com|co\.uk|ca|de|fr|it|es|com\.au|co\.jp)$/i.test(u.hostname)) {
       return raw;
     }
-
-    // Prefer a canonical item URL: https://www.ebay.com/itm/<itemId>
+    // Prefer https://www.ebay.com/itm/<itemId>
     const m = u.pathname.match(/\/itm\/(\d{6,})/);
     if (m && m[1]) {
-      const itemId = m[1];
-      return `https://www.ebay.com/itm/${itemId}`;
+      return `https://www.ebay.com/itm/${m[1]}`;
     }
-
-    // If no /itm/<id> pattern, just drop query/hash to avoid tracking params
+    // If no /itm/<id>, keep origin+path only
     return `${u.origin}${u.pathname}`;
   } catch {
-    // If URL constructor fails, return original string
     return raw;
   }
 }
 
-// Build a rover link with correct param name (mpre) and single encoding
-function wrapEpn(url, customId = "") {
-  if (!url || !EPN_ROVER_PATH || !EPN_CAMPAIGN_ID) return url;
+// --- Inline-tag for EPN (no rover redirect, opens item directly) ---
+function tagInlineEpn(itemUrl, customIdSeed = "") {
+  if (!itemUrl || !EPN_ROVER_PATH || !EPN_CAMPAIGN_ID) return itemUrl;
 
-  // 1) Clean destination URL (normalize /itm/<id>, strip tracking params)
-  const clean = cleanEbayUrl(url);
+  const base = canonicalEbayItemUrl(itemUrl);
+  const u = new URL(base);
 
-  // 2) Build rover link using mpre (destination). URLSearchParams handles encoding once.
-  const base = `https://rover.ebay.com/rover/1/${EPN_ROVER_PATH}/1`;
-  const params = new URLSearchParams({
-    campid: EPN_CAMPAIGN_ID,
-    mpre: clean, // <— important (mpre avoids the 1×1 pixel issue)
-  });
+  // Required affiliate params
+  u.searchParams.set("mkcid", "1");
+  u.searchParams.set("mkrid", EPN_ROVER_PATH);     // e.g., 711-53200-19255-0
+  u.searchParams.set("campid", EPN_CAMPAIGN_ID);   // your campaign id
+  u.searchParams.set("mkevt", "1");
 
-  // Optional: attribute by search term in EPN reports
-  if (customId) {
-    const safe = customId.toLowerCase().replace(/[^a-z0-9]+/g, "-").slice(0, 60);
-    if (safe) params.set("customid", safe);
+  // Optional: include customid for reporting (normalized)
+  if (customIdSeed) {
+    const safe = customIdSeed.toLowerCase().replace(/[^a-z0-9]+/g, "-").slice(0, 60);
+    if (safe) u.searchParams.set("customid", safe);
   }
 
-  return `${base}?${params.toString()}`;
+  return u.toString();
 }
 
 // ====== OAuth token cache ======
@@ -88,12 +82,12 @@ async function getAppToken() {
   return _token;
 }
 
-// ====== Map Browse API results to your UI shape (now with EPN wrapping) ======
+// ====== Map Browse API results to your UI shape (now with inline EPN) ======
 function mapSummaries(summaries = [], customIdSeed = "") {
   return summaries.map((it) => ({
     id: it.itemId || it.legacyItemId || "",
     title: it.title || "",
-    url: wrapEpn(it.itemWebUrl || "", customIdSeed),
+    url: tagInlineEpn(it.itemWebUrl || "", customIdSeed),
     image: it?.image?.imageUrl || it?.thumbnailImages?.[0]?.imageUrl || null,
     price: it?.price?.value ? Number(it.price.value) : null,
     currency: it?.price?.currency || "USD",
