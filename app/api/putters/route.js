@@ -8,17 +8,46 @@ const MARKETPLACE = process.env.EBAY_MARKETPLACE || "EBAY_US";
 
 // ====== EPN (server-side rover wrapping) ======
 const EPN_ROVER_PATH = process.env.EPN_ROVER_PATH || "";   // e.g. "711-53200-19255-0"
-const EPN_CAMPAIGN_ID = process.env.EPN_CAMPAIGN_ID || ""; // your 10-digit campaign id
+const EPN_CAMPAIGN_ID = process.env.EPN_CAMPAIGN_ID || ""; // e.g. "5339121522"
 
+// --- Clean an eBay URL so rover can redirect reliably (avoid 1x1 pixel) ---
+function cleanEbayUrl(raw) {
+  try {
+    const u = new URL(raw);
+
+    // Only normalize eBay hostnames; otherwise return as-is
+    if (!/(^|\.)ebay\.(com|co\.uk|ca|de|fr|it|es|com\.au|co\.jp)$/i.test(u.hostname)) {
+      return raw;
+    }
+
+    // Prefer a canonical item URL: https://www.ebay.com/itm/<itemId>
+    // Extract numeric item id if present in the path
+    const m = u.pathname.match(/\/itm\/(\d{6,})/);
+    if (m && m[1]) {
+      const itemId = m[1];
+      return `https://www.ebay.com/itm/${itemId}`;
+    }
+
+    // If no /itm/<id> pattern, just drop query/hash to avoid tracking params
+    return `${u.origin}${u.pathname}`;
+  } catch {
+    // If URL constructor fails, return original string
+    return raw;
+  }
+}
+
+// Build a rover link with single, correct encoding of the destination
 function wrapEpn(url) {
   if (!url || !EPN_ROVER_PATH || !EPN_CAMPAIGN_ID) return url;
-  const base = `https://rover.ebay.com/rover/1/${EPN_ROVER_PATH}/1`;
 
-  // Ensure single encode only
-  const cleanUrl = decodeURIComponent(url); 
+  // 1) Clean destination URL (strip _skw, amdata, etc. and normalize /itm/<id> when possible)
+  const clean = cleanEbayUrl(url);
+
+  // 2) DO NOT pre-encode here. URLSearchParams will encode exactly once.
+  const base = `https://rover.ebay.com/rover/1/${EPN_ROVER_PATH}/1`;
   const params = new URLSearchParams({
     campid: EPN_CAMPAIGN_ID,
-    to: encodeURIComponent(cleanUrl), // single encoding
+    to: clean,
   });
 
   return `${base}?${params.toString()}`;
@@ -76,13 +105,14 @@ export async function GET(req) {
     const token = await getAppToken();
     const { searchParams } = new URL(req.url);
 
+    // Base keyword
     const q = (searchParams.get("q") || "golf putter").trim();
 
     // Filters
     const minPriceRaw = searchParams.get("minPrice");
     const maxPriceRaw = searchParams.get("maxPrice");
-    const conditions  = searchParams.get("conditions");
-    const buying      = searchParams.get("buyingOptions");
+    const conditions  = searchParams.get("conditions");     // "NEW,USED"
+    const buying      = searchParams.get("buyingOptions");  // "FIXED_PRICE,AUCTION"
     const categoryIds = searchParams.get("categoryIds") || "115280"; // Golf Putters
     const deliveryCountry = searchParams.get("deliveryCountry") || "US";
 
@@ -99,12 +129,14 @@ export async function GET(req) {
       filters.push(`price:[${lo}..${hi}]`);
     }
 
+    // Conditions
     if (conditions) {
       const allowed = new Set(["NEW","USED","CERTIFIED_REFURBISHED","SELLER_REFURBISHED"]);
       const vals = conditions.split(",").map(s=>s.trim().toUpperCase()).filter(v=>allowed.has(v));
       if (vals.length) filters.push(`conditions:{${vals.join("|")}}`);
     }
 
+    // Buying options
     if (buying) {
       const allowed = new Set(["FIXED_PRICE","AUCTION","BEST_OFFER","CLASSIFIED_AD"]);
       const vals = buying.split(",").map(s=>s.trim().toUpperCase()).filter(v=>allowed.has(v));
