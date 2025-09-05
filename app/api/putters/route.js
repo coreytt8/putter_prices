@@ -6,10 +6,9 @@ const CLIENT_ID = process.env.EBAY_CLIENT_ID;
 const CLIENT_SECRET = process.env.EBAY_CLIENT_SECRET;
 const MARKETPLACE = process.env.EBAY_MARKETPLACE || "EBAY_US";
 
-// ====== Minimal in-memory OAuth token cache (fine to start) ======
+// ====== Minimal in-memory OAuth token cache ======
 let _token = null;
 let _expMs = 0;
-
 async function getAppToken() {
   if (_token && Date.now() < _expMs - 60_000) return _token; // reuse until ~60s before expiry
   if (!CLIENT_ID || !CLIENT_SECRET) throw new Error("missing_creds");
@@ -60,46 +59,43 @@ export async function GET(req) {
 
   try {
     const token = await getAppToken();
-
     const { searchParams } = new URL(req.url);
 
-    // Base keyword (already normalized by the client; we still trim here)
+    // Base keyword
     const q = (searchParams.get("q") || "golf putter").trim();
 
-    // Filters coming from the client UI
-    const minPrice = searchParams.get("minPrice");        // "100"
-    const maxPrice = searchParams.get("maxPrice");        // "300"
-    const conditions = searchParams.get("conditions");    // "NEW,USED"
-    const buying = searchParams.get("buyingOptions");     // "FIXED_PRICE,AUCTION"
-    const categoryIds = searchParams.get("categoryIds");  // e.g. "115280" (Golf Putters)
+    // Filters from UI
+    const minPriceRaw = searchParams.get("minPrice");       // e.g. "100"
+    const maxPriceRaw = searchParams.get("maxPrice");       // e.g. "300"
+    const conditions  = searchParams.get("conditions");     // "NEW,USED"
+    const buying      = searchParams.get("buyingOptions");  // "FIXED_PRICE,AUCTION"
+    const categoryIds = searchParams.get("categoryIds") || "115280"; // default: Golf Putters
+    const deliveryCountry = searchParams.get("deliveryCountry") || "US";
 
     // Build Browse filter string
     const filters = [];
 
-    // Price
-    if (minPrice || maxPrice) {
-      const lo = minPrice ? String(parseFloat(minPrice)) : "";
-      const hi = maxPrice ? String(parseFloat(maxPrice)) : "";
-      filters.push(`price:[${lo}..${hi}]`); // supports open ranges, e.g., [..200], [50..]
+    // ---- PRICE: always a closed range ----
+    let minP = Number.isFinite(parseFloat(minPriceRaw)) ? Math.max(0, parseFloat(minPriceRaw)) : null;
+    let maxP = Number.isFinite(parseFloat(maxPriceRaw)) ? Math.max(0, parseFloat(maxPriceRaw)) : null;
+    if (minP !== null && maxP !== null && minP > maxP) { const t = minP; minP = maxP; maxP = t; }
+    if (minP !== null || maxP !== null) {
+      const lo = (minP !== null) ? minP.toFixed(2) : "0";
+      const hi = (maxP !== null) ? maxP.toFixed(2) : "999999.00";
+      filters.push(`price:[${lo}..${hi}]`);
     }
 
-    // Conditions (NEW, USED, CERTIFIED_REFURBISHED, SELLER_REFURBISHED)
+    // ---- CONDITIONS ----
     if (conditions) {
-      const allowed = new Set(["NEW", "USED", "CERTIFIED_REFURBISHED", "SELLER_REFURBISHED"]);
-      const vals = conditions
-        .split(",")
-        .map((s) => s.trim().toUpperCase())
-        .filter((v) => allowed.has(v));
+      const allowed = new Set(["NEW","USED","CERTIFIED_REFURBISHED","SELLER_REFURBISHED"]);
+      const vals = conditions.split(",").map(s=>s.trim().toUpperCase()).filter(v=>allowed.has(v));
       if (vals.length) filters.push(`conditions:{${vals.join("|")}}`);
     }
 
-    // Buying options (FIXED_PRICE, AUCTION, BEST_OFFER, CLASSIFIED_AD)
+    // ---- BUYING OPTIONS ----
     if (buying) {
-      const allowed = new Set(["FIXED_PRICE", "AUCTION", "BEST_OFFER", "CLASSIFIED_AD"]);
-      const vals = buying
-        .split(",")
-        .map((s) => s.trim().toUpperCase())
-        .filter((v) => allowed.has(v));
+      const allowed = new Set(["FIXED_PRICE","AUCTION","BEST_OFFER","CLASSIFIED_AD"]);
+      const vals = buying.split(",").map(s=>s.trim().toUpperCase()).filter(v=>allowed.has(v));
       if (vals.length) filters.push(`buyingOptions:{${vals.join("|")}}`);
     }
 
@@ -107,9 +103,10 @@ export async function GET(req) {
     const params = new URLSearchParams({
       q,
       limit: "24",
+      deliveryCountry, // helps relevance & availability
     });
     if (filters.length) params.set("filter", filters.join(","));
-    if (categoryIds) params.set("category_ids", categoryIds);
+    if (categoryIds)   params.set("category_ids", categoryIds);
 
     const r = await fetch(
       `https://api.ebay.com/buy/browse/v1/item_summary/search?${params.toString()}`,

@@ -1,22 +1,19 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 
-// Preset chips you requested
+// Preset brands you wanted
 const PRESETS = ["Scotty Cameron", "Odyssey", "Ping", "TaylorMade", "Bettinardi", "L.A.B."];
 
-// Optional keyword-based helpers (expand query for shape/hand)
+// Optional keyword helpers
 const SHAPES = ["Mallet", "Blade"];
 const HANDS = ["Right Hand", "Left Hand"];
 
-// Normalize user text -> broader query (ensures "putter", handles simple shorthands)
+// Normalize text -> broader query (ensure "putter", handle shorthands)
 function normalizeQuery(raw) {
   const s = String(raw || "").trim();
   if (!s) return "";
-  // Lowercase, strip most punctuation, collapse spaces
   let q = s.toLowerCase().replace(/[^a-z0-9\s.]/g, " ").replace(/\s+/g, " ").trim();
-
-  // Simple shorthands
   const synonyms = {
     "lab": "lab",
     "l a b": "lab",
@@ -26,19 +23,16 @@ function normalizeQuery(raw) {
     "scotty": "scotty cameron",
   };
   if (synonyms[q]) q = synonyms[q];
-
-  // Always ensure "putter" is present to broaden
   if (!q.includes("putter")) q = `${q} putter`;
-
   return q;
 }
 
 export default function PuttersPage() {
-  // Search + results
-  const [q, setQ] = useState("");            // starts empty
+  // Search
+  const [q, setQ] = useState("");
   const [loading, setLoading] = useState(false);
   const [items, setItems] = useState([]);
-  const [meta, setMeta] = useState({});      // { cached, stale, cooldown, error, message, status, code, details, ts }
+  const [meta, setMeta] = useState({}); // { error, message, status, details, cached, stale, cooldown, ts }
 
   // Filters
   const [minPrice, setMinPrice] = useState("");
@@ -47,8 +41,12 @@ export default function PuttersPage() {
   const [condUsed, setCondUsed] = useState(true);
   const [optFixed, setOptFixed] = useState(true);
   const [optAuction, setOptAuction] = useState(false);
-  const [shape, setShape] = useState("");    // "Mallet" | "Blade" | ""
-  const [hand, setHand] = useState("");      // "Right Hand" | "Left Hand" | ""
+  const [shape, setShape] = useState("");
+  const [hand, setHand] = useState("");
+
+  // Sorting (client-side)
+  // options: "relevance" | "price_asc" | "price_desc"
+  const [sort, setSort] = useState("relevance");
 
   // Prefill q from ?q= if present (no auto-fetch)
   useEffect(() => {
@@ -57,7 +55,7 @@ export default function PuttersPage() {
     if (qs) setQ(qs);
   }, []);
 
-  // Build querystring for the API
+  // Build querystring for API
   function buildParams() {
     const params = new URLSearchParams();
 
@@ -83,8 +81,9 @@ export default function PuttersPage() {
     if (optAuction) buys.push("AUCTION");
     if (buys.length) params.set("buyingOptions", buys.join(","));
 
-    // (Optional) lock to Golf Putters category
-    // params.set("categoryIds", "115280");
+    // Always lock to Golf Putters and US delivery
+    params.set("categoryIds", "115280");
+    params.set("deliveryCountry", "US");
 
     return params;
   }
@@ -115,6 +114,20 @@ export default function PuttersPage() {
       setLoading(false);
     }
   }
+
+  // Client-side sort by price
+  const sortedItems = useMemo(() => {
+    if (sort === "relevance") return items;
+    const withPrice = [...items];
+    withPrice.sort((a, b) => {
+      const pa = (typeof a.price === "number" && Number.isFinite(a.price)) ? a.price : Infinity;
+      const pb = (typeof b.price === "number" && Number.isFinite(b.price)) ? b.price : Infinity;
+      if (sort === "price_asc") return pa - pb;
+      if (sort === "price_desc") return pb - pa;
+      return 0;
+    });
+    return withPrice;
+  }, [items, sort]);
 
   return (
     <main className="p-6 max-w-6xl mx-auto">
@@ -249,6 +262,20 @@ export default function PuttersPage() {
         </div>
       </section>
 
+      {/* Sort bar */}
+      <div className="flex items-center gap-2 mb-4">
+        <label className="text-sm text-gray-700">Sort:</label>
+        <select
+          className="border rounded px-2 py-1"
+          value={sort}
+          onChange={(e) => setSort(e.target.value)}
+        >
+          <option value="relevance">Relevance</option>
+          <option value="price_asc">Price: Low → High</option>
+          <option value="price_desc">Price: High → Low</option>
+        </select>
+      </div>
+
       {/* Status banners */}
       {meta.error && (
         <div className="mb-4 rounded border border-red-300 bg-red-50 px-3 py-2 text-sm text-red-700">
@@ -267,13 +294,13 @@ export default function PuttersPage() {
         </div>
       )}
 
-      {!loading && items.length === 0 && !meta.error && (
+      {!loading && sortedItems.length === 0 && !meta.error && (
         <p className="text-gray-600">No results yet — enter a keyword and press Search.</p>
       )}
 
       {/* Results */}
       <ul className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
-        {items.map((it) => {
+        {sortedItems.map((it) => {
           const priceOk = typeof it.price === "number" && Number.isFinite(it.price);
           return (
             <li key={it.id || `${it.title}-${Math.random()}`} className="border rounded-lg p-3 flex flex-col">
