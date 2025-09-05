@@ -1,7 +1,7 @@
 // app/api/putters/route.js
 import { NextResponse } from "next/server";
 
-// ====== eBay App creds ======
+// ====== eBay App creds (set in Vercel) ======
 const CLIENT_ID = process.env.EBAY_CLIENT_ID;
 const CLIENT_SECRET = process.env.EBAY_CLIENT_SECRET;
 const MARKETPLACE = process.env.EBAY_MARKETPLACE || "EBAY_US";
@@ -21,7 +21,6 @@ function cleanEbayUrl(raw) {
     }
 
     // Prefer a canonical item URL: https://www.ebay.com/itm/<itemId>
-    // Extract numeric item id if present in the path
     const m = u.pathname.match(/\/itm\/(\d{6,})/);
     if (m && m[1]) {
       const itemId = m[1];
@@ -36,19 +35,25 @@ function cleanEbayUrl(raw) {
   }
 }
 
-// Build a rover link with single, correct encoding of the destination
-function wrapEpn(url) {
+// Build a rover link with correct param name (mpre) and single encoding
+function wrapEpn(url, customId = "") {
   if (!url || !EPN_ROVER_PATH || !EPN_CAMPAIGN_ID) return url;
 
-  // 1) Clean destination URL (strip _skw, amdata, etc. and normalize /itm/<id> when possible)
+  // 1) Clean destination URL (normalize /itm/<id>, strip tracking params)
   const clean = cleanEbayUrl(url);
 
-  // 2) DO NOT pre-encode here. URLSearchParams will encode exactly once.
+  // 2) Build rover link using mpre (destination). URLSearchParams handles encoding once.
   const base = `https://rover.ebay.com/rover/1/${EPN_ROVER_PATH}/1`;
   const params = new URLSearchParams({
     campid: EPN_CAMPAIGN_ID,
-    to: clean,
+    mpre: clean, // <— important (mpre avoids the 1×1 pixel issue)
   });
+
+  // Optional: attribute by search term in EPN reports
+  if (customId) {
+    const safe = customId.toLowerCase().replace(/[^a-z0-9]+/g, "-").slice(0, 60);
+    if (safe) params.set("customid", safe);
+  }
 
   return `${base}?${params.toString()}`;
 }
@@ -84,11 +89,11 @@ async function getAppToken() {
 }
 
 // ====== Map Browse API results to your UI shape (now with EPN wrapping) ======
-function mapSummaries(summaries = []) {
+function mapSummaries(summaries = [], customIdSeed = "") {
   return summaries.map((it) => ({
     id: it.itemId || it.legacyItemId || "",
     title: it.title || "",
-    url: wrapEpn(it.itemWebUrl || ""),
+    url: wrapEpn(it.itemWebUrl || "", customIdSeed),
     image: it?.image?.imageUrl || it?.thumbnailImages?.[0]?.imageUrl || null,
     price: it?.price?.value ? Number(it.price.value) : null,
     currency: it?.price?.currency || "USD",
@@ -143,6 +148,7 @@ export async function GET(req) {
       if (vals.length) filters.push(`buyingOptions:{${vals.join("|")}}`);
     }
 
+    // Build Browse querystring
     const params = new URLSearchParams({
       q,
       limit: "24",
@@ -171,7 +177,7 @@ export async function GET(req) {
     }
 
     const data = JSON.parse(text);
-    const items = mapSummaries(data.itemSummaries || []);
+    const items = mapSummaries(data.itemSummaries || [], q);
     return NextResponse.json({ results: items, ts: Date.now() }, { status: 200, headers });
   } catch (e) {
     return NextResponse.json(
