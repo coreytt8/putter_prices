@@ -2,6 +2,7 @@
 
 import { useEffect, useMemo, useState } from "react";
 
+// --- Brand quick filters ---
 const BRANDS = [
   { label: "Scotty Cameron", q: "scotty cameron putter" },
   { label: "TaylorMade", q: "taylormade putter" },
@@ -10,6 +11,7 @@ const BRANDS = [
   { label: "L.A.B.", q: "lab golf putter" },
 ];
 
+// --- Filters ---
 const CONDITION_OPTIONS = [
   { label: "New", value: "NEW" },
   { label: "Used", value: "USED" },
@@ -23,6 +25,7 @@ const BUYING_OPTIONS = [
   { label: "Best Offer", value: "BEST_OFFER" },
 ];
 
+// --- Sorting options ---
 const SORT_OPTIONS = [
   { label: "Best Price: Low → High", value: "best_price_asc" },
   { label: "Best Price: High → Low", value: "best_price_desc" },
@@ -30,6 +33,26 @@ const SORT_OPTIONS = [
   { label: "A → Z (Model)", value: "model_asc" },
 ];
 
+// --- Retailer legend (expand as you add sources) ---
+const RETAILER_LEGEND = [
+  {
+    name: "eBay",
+    logo: "https://upload.wikimedia.org/wikipedia/commons/1/1b/EBay_logo.svg",
+    href: "https://www.ebay.com",
+  },
+  // When you integrate more, add them here and to `retailerLogos` below
+  // { name: "Golf Galaxy", logo: "/logos/golf-galaxy.svg", href: "https://www.golfgalaxy.com" },
+  // { name: "2nd Swing",   logo: "/logos/2ndswing.svg",    href: "https://www.2ndswing.com" },
+  // { name: "GlobalGolf",  logo: "/logos/globalgolf.svg",  href: "https://www.globalgolf.com" },
+  // { name: "PGA Superstore", logo: "/logos/pga-superstore.svg", href: "https://www.pgatoursuperstore.com" },
+];
+
+// --- Inline logo by retailer name (used in offers list) ---
+const retailerLogos = {
+  eBay: "https://upload.wikimedia.org/wikipedia/commons/1/1b/EBay_logo.svg",
+};
+
+// --- helpers ---
 function formatPrice(value, currency = "USD") {
   if (typeof value !== "number") return "—";
   try {
@@ -37,6 +60,19 @@ function formatPrice(value, currency = "USD") {
   } catch {
     return `$${value.toFixed(2)}`;
   }
+}
+
+function timeAgo(ts) {
+  if (!ts) return "";
+  const mins = Math.floor((Date.now() - ts) / 60000);
+  if (mins < 1) return "just now";
+  if (mins === 1) return "1 minute ago";
+  if (mins < 60) return `${mins} minutes ago`;
+  const hrs = Math.floor(mins / 60);
+  if (hrs === 1) return "1 hour ago";
+  if (hrs < 24) return `${hrs} hours ago`;
+  const days = Math.floor(hrs / 24);
+  return days === 1 ? "1 day ago" : `${days} days ago`;
 }
 
 export default function PuttersPage() {
@@ -50,10 +86,11 @@ export default function PuttersPage() {
 
   // data state
   const [groups, setGroups] = useState([]);
+  const [ts, setTs] = useState(null);
   const [loading, setLoading] = useState(false);
   const [err, setErr] = useState("");
 
-  // build querystring for /api/putters
+  // Build API URL from filters
   const apiUrl = useMemo(() => {
     const params = new URLSearchParams();
     if (q.trim()) params.set("q", q.trim());
@@ -64,7 +101,7 @@ export default function PuttersPage() {
     return `/api/putters?${params.toString()}`;
   }, [q, minPrice, maxPrice, selectedConds, selectedBuying]);
 
-  // fetch on filter change (debounced)
+  // Fetch data on change (debounced)
   useEffect(() => {
     let ignore = false;
     const timer = setTimeout(async () => {
@@ -74,8 +111,8 @@ export default function PuttersPage() {
         const res = await fetch(apiUrl, { cache: "no-store" });
         const data = await res.json();
         if (!ignore) {
-          const arr = Array.isArray(data.groups) ? data.groups : [];
-          setGroups(arr);
+          setGroups(Array.isArray(data.groups) ? data.groups : []);
+          setTs(data.ts || null);
         }
       } catch (e) {
         if (!ignore) setErr("Failed to load results. Please try again.");
@@ -89,7 +126,7 @@ export default function PuttersPage() {
     };
   }, [apiUrl]);
 
-  // client-side sorting of groups
+  // Client-side sorting of groups
   const sortedGroups = useMemo(() => {
     const arr = [...groups];
     if (sortBy === "best_price_asc") {
@@ -104,12 +141,11 @@ export default function PuttersPage() {
     return arr;
   }, [groups, sortBy]);
 
+  // Toggle helpers
   const toggleCond = (val) =>
     setSelectedConds((prev) => (prev.includes(val) ? prev.filter((v) => v !== val) : [...prev, val]));
-
   const toggleBuying = (val) =>
     setSelectedBuying((prev) => (prev.includes(val) ? prev.filter((v) => v !== val) : [...prev, val]));
-
   const clearAll = () => {
     setQ("");
     setMinPrice("");
@@ -138,6 +174,33 @@ export default function PuttersPage() {
             {b.label}
           </button>
         ))}
+      </section>
+
+      {/* Retailer Legend */}
+      <section className="mt-4 rounded-lg border border-gray-200 bg-white px-3 py-3">
+        <div className="flex flex-wrap items-center gap-4 overflow-x-auto whitespace-nowrap">
+          <span className="text-xs font-semibold uppercase tracking-wide text-gray-500">
+            Comparing:
+          </span>
+          {RETAILER_LEGEND.map((r) => (
+            <a
+              key={r.name}
+              href={r.href}
+              target="_blank"
+              rel="noopener noreferrer"
+              title={r.name}
+              className="flex items-center gap-2 rounded-md border border-gray-100 px-2 py-1 hover:bg-gray-50"
+            >
+              <img
+                src={r.logo}
+                alt={`${r.name} logo`}
+                className="h-4 w-12 object-contain"
+                loading="lazy"
+              />
+              <span className="text-xs text-gray-700">{r.name}</span>
+            </a>
+          ))}
+        </div>
       </section>
 
       {/* Search + sort */}
@@ -170,7 +233,7 @@ export default function PuttersPage() {
 
       {/* Filters */}
       <section className="mt-4 grid grid-cols-1 gap-4 md:grid-cols-4">
-        {/* Price */}
+        {/* Price filter */}
         <div className="rounded-lg border border-gray-200 p-4">
           <h3 className="mb-3 text-sm font-semibold uppercase tracking-wide text-gray-600">Price</h3>
           <div className="flex items-center gap-2">
@@ -194,7 +257,7 @@ export default function PuttersPage() {
           </div>
         </div>
 
-        {/* Condition */}
+        {/* Condition filter */}
         <div className="rounded-lg border border-gray-200 p-4">
           <h3 className="mb-3 text-sm font-semibold uppercase tracking-wide text-gray-600">Condition</h3>
           <div className="flex flex-col gap-2">
@@ -211,7 +274,7 @@ export default function PuttersPage() {
           </div>
         </div>
 
-        {/* Buying Options */}
+        {/* Buying options filter */}
         <div className="rounded-lg border border-gray-200 p-4">
           <h3 className="mb-3 text-sm font-semibold uppercase tracking-wide text-gray-600">Buying Options</h3>
           <div className="flex flex-col gap-2">
@@ -239,7 +302,7 @@ export default function PuttersPage() {
         </div>
       </section>
 
-      {/* Status */}
+      {/* Results */}
       {loading && (
         <div className="mt-6 rounded-md border border-gray-200 bg-white p-4 shadow-sm">
           <p className="text-sm text-gray-600">Loading grouped prices…</p>
@@ -251,16 +314,15 @@ export default function PuttersPage() {
         </div>
       )}
 
-      {/* Groups grid */}
       {!loading && !err && (
         <section className="mt-6 grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-2">
           {sortedGroups.map((g) => (
             <article key={g.model} className="overflow-hidden rounded-xl border border-gray-200 bg-white shadow-sm">
-              {/* Image */}
-              <div className="relative aspect-[5/3] w-full bg-gray-100">
+              {/* Smaller/cleaner image */}
+              <div className="relative aspect-[4/3] w-full max-h-48 bg-gray-100">
                 {g.image ? (
                   // eslint-disable-next-line @next/next/no-img-element
-                  <img src={g.image} alt={g.model} className="h-full w-full object-cover" loading="lazy" />
+                  <img src={g.image} alt={g.model} className="h-full w-full object-contain" loading="lazy" />
                 ) : (
                   <div className="flex h-full w-full items-center justify-center text-xs text-gray-400">
                     No image
@@ -268,11 +330,9 @@ export default function PuttersPage() {
                 )}
               </div>
 
-              {/* Content */}
               <div className="p-4">
                 <div className="flex items-start justify-between gap-2">
                   <h3 className="text-lg font-semibold leading-tight">{g.model}</h3>
-                  {/* Best price badge */}
                   <div className="shrink-0 rounded-full bg-green-100 px-3 py-1 text-xs font-semibold text-green-700">
                     Best: {formatPrice(g.bestPrice, g.bestCurrency)}
                   </div>
@@ -282,20 +342,30 @@ export default function PuttersPage() {
                   {g.count} offer{g.count === 1 ? "" : "s"} · {g.retailers.join(", ")}
                 </p>
 
-                {/* Offers list */}
+                {/* Offers (top 5, sorted by price ASC) */}
                 <ul className="mt-4 space-y-2">
                   {g.offers
-                    .slice(0, 5) // show top 5 for compactness
+                    .slice(0, 5)
                     .sort((a, b) => (a.price ?? Infinity) - (b.price ?? Infinity))
                     .map((o) => (
                       <li
                         key={o.productId + o.url}
                         className="flex items-center justify-between gap-3 rounded border border-gray-100 p-2"
                       >
-                        <div className="min-w-0">
-                          <div className="truncate text-sm font-medium">{o.retailer}</div>
-                          <div className="mt-0.5 truncate text-xs text-gray-500">
-                            {o.condition ? o.condition.replace(/_/g, " ") : "—"}
+                        <div className="flex min-w-0 items-center gap-2">
+                          {retailerLogos[o.retailer] && (
+                            // eslint-disable-next-line @next/next/no-img-element
+                            <img
+                              src={retailerLogos[o.retailer]}
+                              alt={o.retailer}
+                              className="h-4 w-12 object-contain"
+                            />
+                          )}
+                          <div>
+                            <div className="truncate text-sm font-medium">{o.retailer}</div>
+                            <div className="mt-0.5 truncate text-xs text-gray-500">
+                              {o.condition ? o.condition.replace(/_/g, " ") : "—"}
+                            </div>
                           </div>
                         </div>
                         <div className="flex items-center gap-3">
@@ -313,7 +383,7 @@ export default function PuttersPage() {
                     ))}
                 </ul>
 
-                {/* View best offer CTA */}
+                {/* Best price CTA */}
                 {g.bestOffer?.url && (
                   <a
                     href={g.bestOffer.url}
@@ -323,6 +393,13 @@ export default function PuttersPage() {
                   >
                     Go to Best Price
                   </a>
+                )}
+
+                {/* Freshness indicator */}
+                {ts && (
+                  <p className="mt-3 text-right text-xs text-gray-400">
+                    Updated {timeAgo(ts)}
+                  </p>
                 )}
               </div>
             </article>
