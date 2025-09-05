@@ -2,337 +2,339 @@
 
 import { useEffect, useMemo, useState } from "react";
 
-// Preset brands you wanted
-const PRESETS = ["Scotty Cameron", "Odyssey", "Ping", "TaylorMade", "Bettinardi", "L.A.B."];
+const BRANDS = [
+  { label: "Scotty Cameron", q: "scotty cameron putter" },
+  { label: "TaylorMade", q: "taylormade putter" },
+  { label: "Ping", q: "ping putter" },
+  { label: "Odyssey", q: "odyssey putter" },
+  { label: "L.A.B.", q: "lab golf putter" },
+];
 
-// Optional keyword helpers
-const SHAPES = ["Mallet", "Blade"];
-const HANDS = ["Right Hand", "Left Hand"];
+const CONDITION_OPTIONS = [
+  { label: "New", value: "NEW" },
+  { label: "Used", value: "USED" },
+  { label: "Certified Refurbished", value: "CERTIFIED_REFURBISHED" },
+  { label: "Seller Refurbished", value: "SELLER_REFURBISHED" },
+];
 
-// Normalize text -> broader query (ensure "putter", handle shorthands)
-function normalizeQuery(raw) {
-  const s = String(raw || "").trim();
-  if (!s) return "";
-  let q = s.toLowerCase().replace(/[^a-z0-9\s.]/g, " ").replace(/\s+/g, " ").trim();
-  const synonyms = {
-    "lab": "lab",
-    "l a b": "lab",
-    "l.a.b.": "lab",
-    "l.a.b": "lab",
-    "tm": "taylormade",
-    "scotty": "scotty cameron",
-  };
-  if (synonyms[q]) q = synonyms[q];
-  if (!q.includes("putter")) q = `${q} putter`;
-  return q;
+const BUYING_OPTIONS = [
+  { label: "Buy It Now", value: "FIXED_PRICE" },
+  { label: "Auction", value: "AUCTION" },
+  { label: "Best Offer", value: "BEST_OFFER" },
+];
+
+const SORT_OPTIONS = [
+  { label: "Best Price: Low → High", value: "best_price_asc" },
+  { label: "Best Price: High → Low", value: "best_price_desc" },
+  { label: "Most Offers", value: "count_desc" },
+  { label: "A → Z (Model)", value: "model_asc" },
+];
+
+function formatPrice(value, currency = "USD") {
+  if (typeof value !== "number") return "—";
+  try {
+    return new Intl.NumberFormat("en-US", { style: "currency", currency }).format(value);
+  } catch {
+    return `$${value.toFixed(2)}`;
+  }
 }
 
 export default function PuttersPage() {
-  // Search
+  // UI state
   const [q, setQ] = useState("");
-  const [loading, setLoading] = useState(false);
-  const [items, setItems] = useState([]);
-  const [meta, setMeta] = useState({}); // { error, message, status, details, cached, stale, cooldown, ts }
-
-  // Filters
   const [minPrice, setMinPrice] = useState("");
   const [maxPrice, setMaxPrice] = useState("");
-  const [condNew, setCondNew] = useState(true);
-  const [condUsed, setCondUsed] = useState(true);
-  const [optFixed, setOptFixed] = useState(true);
-  const [optAuction, setOptAuction] = useState(false);
-  const [shape, setShape] = useState("");
-  const [hand, setHand] = useState("");
+  const [selectedConds, setSelectedConds] = useState([]);
+  const [selectedBuying, setSelectedBuying] = useState([]);
+  const [sortBy, setSortBy] = useState("best_price_asc");
 
-  // Sorting (client-side)
-  // options: "relevance" | "price_asc" | "price_desc"
-  const [sort, setSort] = useState("relevance");
+  // data state
+  const [groups, setGroups] = useState([]);
+  const [loading, setLoading] = useState(false);
+  const [err, setErr] = useState("");
 
-  // Prefill q from ?q= if present (no auto-fetch)
-  useEffect(() => {
-    const url = new URL(window.location.href);
-    const qs = url.searchParams.get("q") || "";
-    if (qs) setQ(qs);
-  }, []);
-
-  // Build querystring for API
-  function buildParams() {
+  // build querystring for /api/putters
+  const apiUrl = useMemo(() => {
     const params = new URLSearchParams();
+    if (q.trim()) params.set("q", q.trim());
+    if (minPrice) params.set("minPrice", String(minPrice));
+    if (maxPrice) params.set("maxPrice", String(maxPrice));
+    if (selectedConds.length) params.set("conditions", selectedConds.join(","));
+    if (selectedBuying.length) params.set("buyingOptions", selectedBuying.join(","));
+    return `/api/putters?${params.toString()}`;
+  }, [q, minPrice, maxPrice, selectedConds, selectedBuying]);
 
-    // Keyword — expand with optional shape/hand
-    let norm = normalizeQuery(q);
-    if (shape) norm = `${norm} ${shape.toLowerCase()} putter`;
-    if (hand) norm = `${norm} ${hand.toLowerCase()}`;
-    params.set("q", norm);
+  // fetch on filter change (debounced)
+  useEffect(() => {
+    let ignore = false;
+    const timer = setTimeout(async () => {
+      setLoading(true);
+      setErr("");
+      try {
+        const res = await fetch(apiUrl, { cache: "no-store" });
+        const data = await res.json();
+        if (!ignore) {
+          const arr = Array.isArray(data.groups) ? data.groups : [];
+          setGroups(arr);
+        }
+      } catch (e) {
+        if (!ignore) setErr("Failed to load results. Please try again.");
+      } finally {
+        if (!ignore) setLoading(false);
+      }
+    }, 300);
+    return () => {
+      ignore = true;
+      clearTimeout(timer);
+    };
+  }, [apiUrl]);
 
-    // Price
-    if (minPrice) params.set("minPrice", String(parseFloat(minPrice)));
-    if (maxPrice) params.set("maxPrice", String(parseFloat(maxPrice)));
-
-    // Conditions
-    const conds = [];
-    if (condNew) conds.push("NEW");
-    if (condUsed) conds.push("USED");
-    if (conds.length) params.set("conditions", conds.join(","));
-
-    // Buying options
-    const buys = [];
-    if (optFixed) buys.push("FIXED_PRICE");
-    if (optAuction) buys.push("AUCTION");
-    if (buys.length) params.set("buyingOptions", buys.join(","));
-
-    // Always lock to Golf Putters and US delivery
-    params.set("categoryIds", "115280");
-    params.set("deliveryCountry", "US");
-
-    return params;
-  }
-
-  async function runSearch(e) {
-    e?.preventDefault?.();
-    if (!q.trim()) return;
-
-    const params = buildParams();
-
-    // Keep URL in sync (shareable)
-    const url = new URL(window.location.href);
-    url.searchParams.set("q", params.get("q") || "");
-    history.replaceState({}, "", url.toString());
-
-    setLoading(true);
-    setMeta({});
-    try {
-      const res = await fetch(`/api/putters?${params.toString()}`, { cache: "no-store" });
-      const data = await res.json();
-      setItems(Array.isArray(data.results) ? data.results : []);
-      const { cached, stale, cooldown, error, message, status, code, ts, details } = data;
-      setMeta({ cached, stale, cooldown, error, message, status, code, ts, details });
-    } catch (err) {
-      setItems([]);
-      setMeta({ error: "client_exception", message: String(err) });
-    } finally {
-      setLoading(false);
+  // client-side sorting of groups
+  const sortedGroups = useMemo(() => {
+    const arr = [...groups];
+    if (sortBy === "best_price_asc") {
+      arr.sort((a, b) => (a.bestPrice ?? Infinity) - (b.bestPrice ?? Infinity));
+    } else if (sortBy === "best_price_desc") {
+      arr.sort((a, b) => (b.bestPrice ?? -Infinity) - (a.bestPrice ?? -Infinity));
+    } else if (sortBy === "count_desc") {
+      arr.sort((a, b) => (b.count ?? 0) - (a.count ?? 0));
+    } else if (sortBy === "model_asc") {
+      arr.sort((a, b) => (a.model || "").localeCompare(b.model || ""));
     }
-  }
+    return arr;
+  }, [groups, sortBy]);
 
-  // Client-side sort by price
-  const sortedItems = useMemo(() => {
-    if (sort === "relevance") return items;
-    const withPrice = [...items];
-    withPrice.sort((a, b) => {
-      const pa = (typeof a.price === "number" && Number.isFinite(a.price)) ? a.price : Infinity;
-      const pb = (typeof b.price === "number" && Number.isFinite(b.price)) ? b.price : Infinity;
-      if (sort === "price_asc") return pa - pb;
-      if (sort === "price_desc") return pb - pa;
-      return 0;
-    });
-    return withPrice;
-  }, [items, sort]);
+  const toggleCond = (val) =>
+    setSelectedConds((prev) => (prev.includes(val) ? prev.filter((v) => v !== val) : [...prev, val]));
+
+  const toggleBuying = (val) =>
+    setSelectedBuying((prev) => (prev.includes(val) ? prev.filter((v) => v !== val) : [...prev, val]));
+
+  const clearAll = () => {
+    setQ("");
+    setMinPrice("");
+    setMaxPrice("");
+    setSelectedConds([]);
+    setSelectedBuying([]);
+    setSortBy("best_price_asc");
+  };
 
   return (
-    <main className="p-6 max-w-6xl mx-auto">
-      <h1 className="text-2xl font-bold mb-4">Putter Price Search</h1>
+    <main className="mx-auto max-w-6xl px-4 py-8">
+      <h1 className="text-3xl font-semibold tracking-tight">Compare Putter Prices</h1>
+      <p className="mt-1 text-sm text-gray-500">
+        Grouped by model. See the <span className="font-medium">Best Price</span> and compare multiple offers.
+      </p>
 
-      {/* Search + submit */}
-      <form onSubmit={runSearch} className="flex flex-wrap gap-3 mb-3">
-        <input
-          className="border rounded px-3 py-2 flex-1 min-w-[260px]"
-          placeholder="Search (e.g., 'Scotty Cameron', 'Odyssey', 'Ping', 'LAB')"
-          value={q}
-          onChange={(e) => setQ(e.target.value)}
-        />
-        <button
-          className="rounded px-4 py-2 bg-black text-white disabled:opacity-60"
-          type="submit"
-          disabled={loading || !q.trim()}
-        >
-          {loading ? "Searching..." : "Search"}
-        </button>
-      </form>
-
-      {/* Preset brand chips */}
-      <div className="flex flex-wrap gap-2 mb-4">
-        {PRESETS.map((p) => (
+      {/* Brand quick filters */}
+      <section className="mt-6 flex flex-wrap gap-2">
+        {BRANDS.map((b) => (
           <button
-            key={p}
-            className="text-sm border rounded-full px-3 py-1 hover:bg-gray-50"
-            type="button"
-            onClick={() => { setQ(p); setTimeout(() => runSearch(), 0); }}
+            key={b.label}
+            onClick={() => setQ(b.q)}
+            className="rounded-full border border-gray-300 px-3 py-1 text-sm hover:bg-gray-100"
+            title={`Search ${b.label}`}
           >
-            {p}
+            {b.label}
           </button>
         ))}
-      </div>
+      </section>
+
+      {/* Search + sort */}
+      <section className="mt-6 grid grid-cols-1 gap-3 sm:grid-cols-3">
+        <div className="sm:col-span-2">
+          <label className="mb-1 block text-sm font-medium">Search</label>
+          <input
+            type="text"
+            value={q}
+            onChange={(e) => setQ(e.target.value)}
+            placeholder="e.g. scotty cameron newport"
+            className="w-full rounded-md border border-gray-300 px-3 py-2 outline-none focus:ring-2 focus:ring-blue-500"
+          />
+        </div>
+        <div>
+          <label className="mb-1 block text-sm font-medium">Sort</label>
+          <select
+            value={sortBy}
+            onChange={(e) => setSortBy(e.target.value)}
+            className="w-full rounded-md border border-gray-300 px-3 py-2"
+          >
+            {SORT_OPTIONS.map((s) => (
+              <option key={s.value} value={s.value}>
+                {s.label}
+              </option>
+            ))}
+          </select>
+        </div>
+      </section>
 
       {/* Filters */}
-      <section className="mb-5 grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
+      <section className="mt-4 grid grid-cols-1 gap-4 md:grid-cols-4">
         {/* Price */}
-        <div className="border rounded p-3">
-          <div className="font-medium mb-2">Price</div>
-          <div className="flex gap-2">
+        <div className="rounded-lg border border-gray-200 p-4">
+          <h3 className="mb-3 text-sm font-semibold uppercase tracking-wide text-gray-600">Price</h3>
+          <div className="flex items-center gap-2">
             <input
-              className="border rounded px-2 py-1 w-24"
               type="number"
               min="0"
               placeholder="Min"
               value={minPrice}
               onChange={(e) => setMinPrice(e.target.value)}
+              className="w-full rounded-md border border-gray-300 px-2 py-1"
             />
+            <span className="text-gray-400">—</span>
             <input
-              className="border rounded px-2 py-1 w-24"
               type="number"
               min="0"
               placeholder="Max"
               value={maxPrice}
               onChange={(e) => setMaxPrice(e.target.value)}
+              className="w-full rounded-md border border-gray-300 px-2 py-1"
             />
           </div>
         </div>
 
         {/* Condition */}
-        <div className="border rounded p-3">
-          <div className="font-medium mb-2">Condition</div>
-          <label className="flex items-center gap-2">
-            <input type="checkbox" checked={condNew} onChange={(e) => setCondNew(e.target.checked)} />
-            New
-          </label>
-          <label className="flex items-center gap-2 mt-1">
-            <input type="checkbox" checked={condUsed} onChange={(e) => setCondUsed(e.target.checked)} />
-            Used
-          </label>
+        <div className="rounded-lg border border-gray-200 p-4">
+          <h3 className="mb-3 text-sm font-semibold uppercase tracking-wide text-gray-600">Condition</h3>
+          <div className="flex flex-col gap-2">
+            {CONDITION_OPTIONS.map((c) => (
+              <label key={c.value} className="flex items-center gap-2 text-sm">
+                <input
+                  type="checkbox"
+                  checked={selectedConds.includes(c.value)}
+                  onChange={() => toggleCond(c.value)}
+                />
+                {c.label}
+              </label>
+            ))}
+          </div>
         </div>
 
         {/* Buying Options */}
-        <div className="border rounded p-3">
-          <div className="font-medium mb-2">Buying Options</div>
-          <label className="flex items-center gap-2">
-            <input type="checkbox" checked={optFixed} onChange={(e) => setOptFixed(e.target.checked)} />
-            Buy It Now (Fixed Price)
-          </label>
-          <label className="flex items-center gap-2 mt-1">
-            <input type="checkbox" checked={optAuction} onChange={(e) => setOptAuction(e.target.checked)} />
-            Auction
-          </label>
-        </div>
-
-        {/* Head Shape (keyword-based) */}
-        <div className="border rounded p-3">
-          <div className="font-medium mb-2">Head Shape</div>
-          <div className="flex gap-2 flex-wrap">
-            {SHAPES.map((s) => (
-              <button
-                key={s}
-                type="button"
-                onClick={() => setShape((prev) => (prev === s ? "" : s))}
-                className={`text-sm border rounded-full px-3 py-1 ${shape === s ? "bg-gray-900 text-white" : "hover:bg-gray-50"}`}
-              >
-                {s}
-              </button>
+        <div className="rounded-lg border border-gray-200 p-4">
+          <h3 className="mb-3 text-sm font-semibold uppercase tracking-wide text-gray-600">Buying Options</h3>
+          <div className="flex flex-col gap-2">
+            {BUYING_OPTIONS.map((b) => (
+              <label key={b.value} className="flex items-center gap-2 text-sm">
+                <input
+                  type="checkbox"
+                  checked={selectedBuying.includes(b.value)}
+                  onChange={() => toggleBuying(b.value)}
+                />
+                {b.label}
+              </label>
             ))}
           </div>
         </div>
 
-        {/* Handedness (keyword-based) */}
-        <div className="border rounded p-3">
-          <div className="font-medium mb-2">Handedness</div>
-          <div className="flex gap-2 flex-wrap">
-            {HANDS.map((h) => (
-              <button
-                key={h}
-                type="button"
-                onClick={() => setHand((prev) => (prev === h ? "" : h))}
-                className={`text-sm border rounded-full px-3 py-1 ${hand === h ? "bg-gray-900 text-white" : "hover:bg-gray-50"}`}
-              >
-                {h}
-              </button>
-            ))}
-          </div>
-        </div>
-
-        {/* Apply */}
-        <div className="border rounded p-3 flex items-end">
+        {/* Actions */}
+        <div className="flex items-end gap-2">
           <button
-            onClick={() => runSearch()}
-            type="button"
-            className="rounded px-4 py-2 bg-blue-600 text-white hover:bg-blue-700"
-            disabled={loading || !q.trim()}
+            onClick={clearAll}
+            className="w-full rounded-md border border-gray-300 px-3 py-2 text-sm hover:bg-gray-100"
           >
-            Apply Filters
+            Clear filters
           </button>
         </div>
       </section>
 
-      {/* Sort bar */}
-      <div className="flex items-center gap-2 mb-4">
-        <label className="text-sm text-gray-700">Sort:</label>
-        <select
-          className="border rounded px-2 py-1"
-          value={sort}
-          onChange={(e) => setSort(e.target.value)}
-        >
-          <option value="relevance">Relevance</option>
-          <option value="price_asc">Price: Low → High</option>
-          <option value="price_desc">Price: High → Low</option>
-        </select>
-      </div>
-
-      {/* Status banners */}
-      {meta.error && (
-        <div className="mb-4 rounded border border-red-300 bg-red-50 px-3 py-2 text-sm text-red-700">
-          {meta.message || `Upstream error: ${meta.error}${meta.status ? ` (${meta.status})` : ""}`}
-          {meta.code ? ` [${meta.code}]` : ""}
-          {meta.details ? ` · ${String(meta.details).slice(0, 160)}…` : ""}
-          {meta.cooldown ? " · Cooling down to respect API limits." : ""}
+      {/* Status */}
+      {loading && (
+        <div className="mt-6 rounded-md border border-gray-200 bg-white p-4 shadow-sm">
+          <p className="text-sm text-gray-600">Loading grouped prices…</p>
         </div>
       )}
-      {!meta.error && (meta.cached || meta.stale || meta.cooldown) && (
-        <div className="mb-3 rounded border border-blue-300 bg-blue-50 px-3 py-2 text-sm text-blue-800">
-          {meta.cached && "Served from cache. "}
-          {meta.stale && "Showing stale results due to upstream limits. "}
-          {meta.cooldown && "Temporarily cooling down after rate limit. "}
-          {meta.ts ? `· ${new Date(meta.ts).toLocaleTimeString()}` : ""}
+      {err && (
+        <div className="mt-6 rounded-md border border-red-200 bg-red-50 p-4">
+          <p className="text-sm text-red-700">{err}</p>
         </div>
       )}
 
-      {!loading && sortedItems.length === 0 && !meta.error && (
-        <p className="text-gray-600">No results yet — enter a keyword and press Search.</p>
+      {/* Groups grid */}
+      {!loading && !err && (
+        <section className="mt-6 grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-2">
+          {sortedGroups.map((g) => (
+            <article key={g.model} className="overflow-hidden rounded-xl border border-gray-200 bg-white shadow-sm">
+              {/* Image */}
+              <div className="relative aspect-[5/3] w-full bg-gray-100">
+                {g.image ? (
+                  // eslint-disable-next-line @next/next/no-img-element
+                  <img src={g.image} alt={g.model} className="h-full w-full object-cover" loading="lazy" />
+                ) : (
+                  <div className="flex h-full w-full items-center justify-center text-xs text-gray-400">
+                    No image
+                  </div>
+                )}
+              </div>
+
+              {/* Content */}
+              <div className="p-4">
+                <div className="flex items-start justify-between gap-2">
+                  <h3 className="text-lg font-semibold leading-tight">{g.model}</h3>
+                  {/* Best price badge */}
+                  <div className="shrink-0 rounded-full bg-green-100 px-3 py-1 text-xs font-semibold text-green-700">
+                    Best: {formatPrice(g.bestPrice, g.bestCurrency)}
+                  </div>
+                </div>
+
+                <p className="mt-1 text-xs text-gray-500">
+                  {g.count} offer{g.count === 1 ? "" : "s"} · {g.retailers.join(", ")}
+                </p>
+
+                {/* Offers list */}
+                <ul className="mt-4 space-y-2">
+                  {g.offers
+                    .slice(0, 5) // show top 5 for compactness
+                    .sort((a, b) => (a.price ?? Infinity) - (b.price ?? Infinity))
+                    .map((o) => (
+                      <li
+                        key={o.productId + o.url}
+                        className="flex items-center justify-between gap-3 rounded border border-gray-100 p-2"
+                      >
+                        <div className="min-w-0">
+                          <div className="truncate text-sm font-medium">{o.retailer}</div>
+                          <div className="mt-0.5 truncate text-xs text-gray-500">
+                            {o.condition ? o.condition.replace(/_/g, " ") : "—"}
+                          </div>
+                        </div>
+                        <div className="flex items-center gap-3">
+                          <span className="text-sm font-semibold">{formatPrice(o.price, o.currency)}</span>
+                          <a
+                            href={o.url}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            className="inline-flex items-center rounded-md bg-blue-600 px-3 py-1.5 text-sm font-medium text-white hover:bg-blue-700"
+                          >
+                            View
+                          </a>
+                        </div>
+                      </li>
+                    ))}
+                </ul>
+
+                {/* View best offer CTA */}
+                {g.bestOffer?.url && (
+                  <a
+                    href={g.bestOffer.url}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="mt-4 inline-flex w-full items-center justify-center rounded-md border border-green-600 px-3 py-2 text-sm font-medium text-green-700 hover:bg-green-50"
+                  >
+                    Go to Best Price
+                  </a>
+                )}
+              </div>
+            </article>
+          ))}
+        </section>
       )}
 
-      {/* Results */}
-      <ul className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
-        {sortedItems.map((it) => {
-          const priceOk = typeof it.price === "number" && Number.isFinite(it.price);
-          return (
-            <li key={it.id || `${it.title}-${Math.random()}`} className="border rounded-lg p-3 flex flex-col">
-              {it.image && (
-                <img
-                  src={it.image}
-                  alt={it.title || "Putter"}
-                  className="w-full h-40 object-contain mb-2"
-                  loading="lazy"
-                />
-              )}
-              <h3 className="font-medium line-clamp-2">{it.title || "Untitled listing"}</h3>
-              <div className="mt-1 text-sm text-gray-600">
-                {(it.condition || "Condition: —") + " · " + (it.location || "Location: —")}
-              </div>
-              <div className="mt-2 font-semibold">
-                {priceOk ? `${it.currency || "USD"} $${it.price.toFixed(2)}` : "Price: —"}
-              </div>
-              {it.url && (
-                <a
-                  className="mt-3 inline-flex items-center justify-center rounded bg-blue-600 text-white px-3 py-2 hover:bg-blue-700"
-                  href={it.url}
-                  target="_blank"
-                  rel="noopener noreferrer"
-                >
-                  View on eBay
-                </a>
-              )}
-            </li>
-          );
-        })}
-      </ul>
+      {!loading && !err && sortedGroups.length === 0 && (
+        <div className="mt-10 text-center text-sm text-gray-500">
+          No models found. Try another brand or widen your filters.
+        </div>
+      )}
     </main>
   );
 }
