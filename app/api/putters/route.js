@@ -52,10 +52,7 @@ async function getAppToken() {
 
   const r = await fetch("https://api.ebay.com/identity/v1/oauth2/token", {
     method: "POST",
-    headers: {
-      "Content-Type": "application/x-www-form-urlencoded",
-      Authorization: `Basic ${basic}`,
-    },
+    headers: { "Content-Type": "application/x-www-form-urlencoded", Authorization: `Basic ${basic}` },
     body,
     cache: "no-store",
   });
@@ -67,34 +64,7 @@ async function getAppToken() {
   return _token;
 }
 
-// ====== Model/Family taxonomy (Scotty Cameron first) ======
-const FAMILIES = [
-  { key: "Newport", rx: /\bnewport\s?(1\.5|2|2\.5|3|4|5|6|7|8|9)?\b/i },
-  { key: "Phantom X", rx: /\bphantom\s*x\b|\bpx\s*\d{1,2}\b/i },
-  { key: "Special Select", rx: /\bspecial\s+select\b/i },
-  { key: "Super Select", rx: /\bsuper\s+select\b/i },
-  { key: "Futura", rx: /\bfutura\b/i },
-  { key: "Circa", rx: /\bcirca\b/i },
-  { key: "Studio Style|Studio Select", rx: /\bstudio\s+(style|select)\b/i },
-  { key: "GoLo", rx: /\bgolo\b/i },
-  { key: "Detour", rx: /\bdetour\b/i },
-  { key: "Squareback|Fastback", rx: /\b(squareback|fastback)\b/i },
-  { key: "CT / Circle T", rx: /\b(circle\s*t|ct)\b/i },
-];
-
-// Basic normalize -> “family” label from title
-function deriveFamily(title = "") {
-  const t = title || "";
-  for (const f of FAMILIES) {
-    if (f.rx.test(t)) return f.key;
-  }
-  // lightweight blade/mallet hint
-  if (/\bmallet\b/i.test(t) || /\bphantom\b/i.test(t)) return "Mallet (other)";
-  if (/\bblade\b/i.test(t) || /\banser\b/i.test(t) || /\bnewport\b/i.test(t)) return "Blade (other)";
-  return "Other";
-}
-
-// Tighter model key (brand + key tokens)
+// ====== Title normalization & model key ======
 function normalizeModelFromTitle(title = "") {
   const t = (title || "").toLowerCase();
   let s = t
@@ -105,6 +75,7 @@ function normalizeModelFromTitle(title = "") {
     .replace(/[^\w\s\-]+/g, " ")
     .replace(/\s+/g, " ")
     .trim();
+
   const brands = ["scotty cameron", "taylormade", "ping", "odyssey", "l.a.b.", "lab golf", "lab"];
   let brand = "";
   for (const b of brands) {
@@ -119,16 +90,51 @@ function normalizeModelFromTitle(title = "") {
   return titleCase(s.split(/\s+/).slice(0, 4).join(" "));
 }
 
-// Map summaries -> offers (drop blanks)
-function mapOffers(summaries = [], customIdSeed = "", onlyComplete = false) {
+// Keyword AND filter (drop stopwords)
+const STOPWORDS = new Set([
+  "the","and","a","an","for","with","of","by","to","from","in","on","at","new","used"
+]);
+function titleMatchesAllKeywords(title, rawQ) {
+  if (!rawQ) return true;
+  const tokens = rawQ
+    .toLowerCase()
+    .split(/[^a-z0-9]+/i)
+    .map((t) => t.trim())
+    .filter((t) => t && !STOPWORDS.has(t));
+  if (!tokens.length) return true;
+  const t = (title || "").toLowerCase();
+  return tokens.every((tok) => t.includes(tok));
+}
+
+// Exclusions to reduce irrelevant items
+const EXCLUDE_PATTERNS = [
+  /\bhead\s*cover\b/i,
+  /\bheadcover\b/i,
+  /\bcover\s*only\b/i,
+  /\bhead\s*only\b/i,
+  /\bshaft\s*only\b/i,
+  /\bgrip\s*only\b/i,
+  /\bweight(s)?\s*(kit|set)?\b/i,
+  /\btraining\s*aid\b/i,
+  /\balignment\s*(tool|aid)\b/i,
+  /\bhead\s*weight(s)?\b/i,
+];
+function isExcludedTitle(title = "") {
+  return EXCLUDE_PATTERNS.some((rx) => rx.test(title));
+}
+
+// Map summaries -> offers (drop blanks conditionally + exclusions + keyword AND)
+function mapOffers(summaries = [], q = "", onlyComplete = false) {
   const out = [];
   for (const it of summaries) {
-    const price = it?.price?.value ? Number(it.price.value) : null;
-    const url = tagInlineEpn(it.itemWebUrl || "", customIdSeed);
     const title = it.title || "";
+    if (isExcludedTitle(title)) continue;
+    if (!titleMatchesAllKeywords(title, q)) continue;
+
+    const price = it?.price?.value ? Number(it.price.value) : null;
+    const url = tagInlineEpn(it.itemWebUrl || "", q);
     const image = it?.image?.imageUrl || it?.thumbnailImages?.[0]?.imageUrl || null;
 
-    // Drop obviously incomplete/blank ones if toggle is on
     if (onlyComplete) {
       if (!price || !url || !title || !image) continue;
     }
@@ -136,7 +142,6 @@ function mapOffers(summaries = [], customIdSeed = "", onlyComplete = false) {
     out.push({
       productId: it.itemId || it.legacyItemId || "",
       title,
-      family: deriveFamily(title),
       modelKey: normalizeModelFromTitle(title),
       price,
       currency: it?.price?.currency || "USD",
@@ -149,49 +154,36 @@ function mapOffers(summaries = [], customIdSeed = "", onlyComplete = false) {
   return out;
 }
 
-// Group offers by family → then by modelKey
-function groupByFamilyAndModel(offers = []) {
-  const famMap = new Map();
+// Group offers by modelKey
+function groupByModel(offers = []) {
+  const m = new Map();
   for (const o of offers) {
-    const fam = o.family || "Other";
-    if (!famMap.has(fam)) famMap.set(fam, new Map());
-    const modelMap = famMap.get(fam);
-    const key = o.modelKey || "Other";
-    if (!modelMap.has(key)) modelMap.set(key, []);
-    modelMap.get(key).push(o);
+    const k = o.modelKey || "Other";
+    if (!m.has(k)) m.set(k, []);
+    m.get(k).push(o);
   }
-
-  const families = [];
-  for (const [family, modelMap] of famMap) {
-    const models = [];
-    for (const [model, list] of modelMap) {
-      const best = list
-        .filter((x) => typeof x.price === "number")
-        .sort((a, b) => a.price - b.price)[0] || null;
-      models.push({
-        model,
-        offers: list,
-        bestPrice: best?.price ?? null,
-        bestCurrency: best?.currency ?? "USD",
-        bestOffer: best || null,
-        image: best?.image || list[0]?.image || null,
-        retailers: Array.from(new Set(list.map((x) => x.retailer))),
-        count: list.length,
-      });
-    }
-    // sort models within family by best price
-    models.sort((a, b) => {
-      if (a.bestPrice == null && b.bestPrice == null) return 0;
-      if (a.bestPrice == null) return 1;
-      if (b.bestPrice == null) return -1;
-      return a.bestPrice - b.bestPrice;
+  const groups = [];
+  for (const [model, list] of m) {
+    const best = list.filter(x => typeof x.price === "number").sort((a,b)=>a.price-b.price)[0] || null;
+    groups.push({
+      model,
+      offers: list,
+      bestPrice: best?.price ?? null,
+      bestCurrency: best?.currency ?? "USD",
+      bestOffer: best || null,
+      image: best?.image || list[0]?.image || null,
+      retailers: Array.from(new Set(list.map(x => x.retailer))),
+      count: list.length,
     });
-    families.push({ family, models, total: models.reduce((n, m) => n + m.count, 0) });
   }
-
-  // sort families by total offers desc
-  families.sort((a, b) => (b.total ?? 0) - (a.total ?? 0));
-  return families;
+  // Default sort: best price asc (UI can override)
+  groups.sort((a,b)=>{
+    if (a.bestPrice == null && b.bestPrice == null) return 0;
+    if (a.bestPrice == null) return 1;
+    if (b.bestPrice == null) return -1;
+    return a.bestPrice - b.bestPrice;
+  });
+  return groups;
 }
 
 export async function GET(req) {
@@ -201,21 +193,15 @@ export async function GET(req) {
     const token = await getAppToken();
     const { searchParams } = new URL(req.url);
 
-    let q = (searchParams.get("q") || "golf putter").trim();
+    const q = (searchParams.get("q") || "golf putter").trim();
+    const onlyComplete = (searchParams.get("onlyComplete") || "").toLowerCase() === "true";
+
     const minPriceRaw = searchParams.get("minPrice");
     const maxPriceRaw = searchParams.get("maxPrice");
     const conditions  = searchParams.get("conditions");
     const buying      = searchParams.get("buyingOptions");
     const categoryIds = searchParams.get("categoryIds") || "115280"; // Golf Putters
     const deliveryCountry = searchParams.get("deliveryCountry") || "US";
-    const onlyComplete = (searchParams.get("onlyComplete") || "").toLowerCase() === "true";
-    const familyFilter = searchParams.get("family") || ""; // e.g., "Newport", "Phantom X"
-
-    // If a Scotty sub-family is chosen, bias the query
-    if (/scotty cameron/i.test(q) && familyFilter) {
-      // keep it simple/robust: include family term in q
-      q = `${q} "${familyFilter}"`;
-    }
 
     const filters = [];
     // price
@@ -242,7 +228,7 @@ export async function GET(req) {
 
     const params = new URLSearchParams({
       q,
-      limit: "72",                 // fetch more for better grouping
+      limit: "72",
       deliveryCountry,
     });
     if (filters.length) params.set("filter", filters.join(","));
@@ -262,25 +248,18 @@ export async function GET(req) {
     const text = await r.text();
     if (!r.ok) {
       return NextResponse.json(
-        { error: "browse_http_error", status: r.status, details: text, families: [] },
+        { error: "browse_http_error", status: r.status, details: text, groups: [] },
         { status: 200, headers }
       );
     }
 
     const data = JSON.parse(text);
-    // Map with stricter completeness toggle
     const offers = mapOffers(data.itemSummaries || [], q, onlyComplete);
-
-    // Optional client-side family filtering (post-map) for extra safety
-    const filtered = familyFilter
-      ? offers.filter(o => (o.family || "").toLowerCase() === familyFilter.toLowerCase())
-      : offers;
-
-    const families = groupByFamilyAndModel(filtered);
-    return NextResponse.json({ families, ts: Date.now() }, { status: 200, headers });
+    const groups = groupByModel(offers);
+    return NextResponse.json({ groups, ts: Date.now() }, { status: 200, headers });
   } catch (e) {
     return NextResponse.json(
-      { error: "exception", details: String(e), families: [] },
+      { error: "exception", details: String(e), groups: [] },
       { status: 200, headers }
     );
   }
