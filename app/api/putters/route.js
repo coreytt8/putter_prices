@@ -1,16 +1,27 @@
 // app/api/putters/route.js
 import { NextResponse } from "next/server";
 
-// ====== ENV ======
+// ====== eBay App creds ======
 const CLIENT_ID = process.env.EBAY_CLIENT_ID;
 const CLIENT_SECRET = process.env.EBAY_CLIENT_SECRET;
 const MARKETPLACE = process.env.EBAY_MARKETPLACE || "EBAY_US";
 
-// ====== Minimal in-memory OAuth token cache ======
+// ====== EPN (server-side rover wrapping) ======
+const EPN_ROVER_PATH = process.env.EPN_ROVER_PATH || "";   // e.g. "711-53200-19255-0"
+const EPN_CAMPAIGN_ID = process.env.EPN_CAMPAIGN_ID || ""; // your 10-digit campaign id
+
+function wrapEpn(url) {
+  if (!url || !EPN_ROVER_PATH || !EPN_CAMPAIGN_ID) return url;
+  const base = `https://rover.ebay.com/rover/1/${EPN_ROVER_PATH}/1`;
+  const params = new URLSearchParams({ campid: EPN_CAMPAIGN_ID, to: url });
+  return `${base}?${params.toString()}`;
+}
+
+// ====== OAuth token cache ======
 let _token = null;
 let _expMs = 0;
 async function getAppToken() {
-  if (_token && Date.now() < _expMs - 60_000) return _token; // reuse until ~60s before expiry
+  if (_token && Date.now() < _expMs - 60_000) return _token;
   if (!CLIENT_ID || !CLIENT_SECRET) throw new Error("missing_creds");
 
   const basic = Buffer.from(`${CLIENT_ID}:${CLIENT_SECRET}`).toString("base64");
@@ -29,22 +40,19 @@ async function getAppToken() {
     cache: "no-store",
   });
 
-  if (!r.ok) {
-    const text = await r.text();
-    throw new Error(`oauth_error ${r.status}: ${text}`);
-  }
+  if (!r.ok) throw new Error(`oauth_error ${r.status}: ${await r.text()}`);
   const j = await r.json();
   _token = j.access_token;
-  _expMs = Date.now() + j.expires_in * 1000; // seconds -> ms
+  _expMs = Date.now() + j.expires_in * 1000;
   return _token;
 }
 
-// ====== Map Browse API results to your UI shape ======
+// ====== Map Browse API results to your UI shape (now with EPN wrapping) ======
 function mapSummaries(summaries = []) {
   return summaries.map((it) => ({
     id: it.itemId || it.legacyItemId || "",
     title: it.title || "",
-    url: it.itemWebUrl || "",
+    url: wrapEpn(it.itemWebUrl || ""),
     image: it?.image?.imageUrl || it?.thumbnailImages?.[0]?.imageUrl || null,
     price: it?.price?.value ? Number(it.price.value) : null,
     currency: it?.price?.currency || "USD",
@@ -61,21 +69,20 @@ export async function GET(req) {
     const token = await getAppToken();
     const { searchParams } = new URL(req.url);
 
-    // Base keyword
     const q = (searchParams.get("q") || "golf putter").trim();
 
-    // Filters from UI
-    const minPriceRaw = searchParams.get("minPrice");       // e.g. "100"
-    const maxPriceRaw = searchParams.get("maxPrice");       // e.g. "300"
-    const conditions  = searchParams.get("conditions");     // "NEW,USED"
-    const buying      = searchParams.get("buyingOptions");  // "FIXED_PRICE,AUCTION"
-    const categoryIds = searchParams.get("categoryIds") || "115280"; // default: Golf Putters
+    // Filters
+    const minPriceRaw = searchParams.get("minPrice");
+    const maxPriceRaw = searchParams.get("maxPrice");
+    const conditions  = searchParams.get("conditions");
+    const buying      = searchParams.get("buyingOptions");
+    const categoryIds = searchParams.get("categoryIds") || "115280"; // Golf Putters
     const deliveryCountry = searchParams.get("deliveryCountry") || "US";
 
-    // Build Browse filter string
+    // Build filter string
     const filters = [];
 
-    // ---- PRICE: always a closed range ----
+    // Closed price range
     let minP = Number.isFinite(parseFloat(minPriceRaw)) ? Math.max(0, parseFloat(minPriceRaw)) : null;
     let maxP = Number.isFinite(parseFloat(maxPriceRaw)) ? Math.max(0, parseFloat(maxPriceRaw)) : null;
     if (minP !== null && maxP !== null && minP > maxP) { const t = minP; minP = maxP; maxP = t; }
@@ -85,25 +92,22 @@ export async function GET(req) {
       filters.push(`price:[${lo}..${hi}]`);
     }
 
-    // ---- CONDITIONS ----
     if (conditions) {
       const allowed = new Set(["NEW","USED","CERTIFIED_REFURBISHED","SELLER_REFURBISHED"]);
       const vals = conditions.split(",").map(s=>s.trim().toUpperCase()).filter(v=>allowed.has(v));
       if (vals.length) filters.push(`conditions:{${vals.join("|")}}`);
     }
 
-    // ---- BUYING OPTIONS ----
     if (buying) {
       const allowed = new Set(["FIXED_PRICE","AUCTION","BEST_OFFER","CLASSIFIED_AD"]);
       const vals = buying.split(",").map(s=>s.trim().toUpperCase()).filter(v=>allowed.has(v));
       if (vals.length) filters.push(`buyingOptions:{${vals.join("|")}}`);
     }
 
-    // Build querystring for Browse
     const params = new URLSearchParams({
       q,
       limit: "24",
-      deliveryCountry, // helps relevance & availability
+      deliveryCountry,
     });
     if (filters.length) params.set("filter", filters.join(","));
     if (categoryIds)   params.set("category_ids", categoryIds);
@@ -113,7 +117,7 @@ export async function GET(req) {
       {
         headers: {
           Authorization: `Bearer ${token}`,
-          "X-EBAY-C-MARKETPLACE-ID": MARKETPLACE, // e.g., EBAY_US
+          "X-EBAY-C-MARKETPLACE-ID": MARKETPLACE,
         },
         cache: "no-store",
       }
