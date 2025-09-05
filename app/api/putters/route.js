@@ -1,17 +1,17 @@
 // app/api/putters/route.js
 import { NextResponse } from "next/server";
 
-// env
+// ====== ENV ======
 const CLIENT_ID = process.env.EBAY_CLIENT_ID;
 const CLIENT_SECRET = process.env.EBAY_CLIENT_SECRET;
 const MARKETPLACE = process.env.EBAY_MARKETPLACE || "EBAY_US";
 
-// simple in-memory token cache (good enough to start)
+// ====== Minimal in-memory OAuth token cache (fine to start) ======
 let _token = null;
 let _expMs = 0;
 
 async function getAppToken() {
-  if (_token && Date.now() < _expMs - 60_000) return _token; // reuse until 60s before expiry
+  if (_token && Date.now() < _expMs - 60_000) return _token; // reuse until ~60s before expiry
   if (!CLIENT_ID || !CLIENT_SECRET) throw new Error("missing_creds");
 
   const basic = Buffer.from(`${CLIENT_ID}:${CLIENT_SECRET}`).toString("base64");
@@ -40,6 +40,7 @@ async function getAppToken() {
   return _token;
 }
 
+// ====== Map Browse API results to your UI shape ======
 function mapSummaries(summaries = []) {
   return summaries.map((it) => ({
     id: it.itemId || it.legacyItemId || "",
@@ -56,26 +57,66 @@ function mapSummaries(summaries = []) {
 
 export async function GET(req) {
   const headers = { "Cache-Control": "no-store, no-cache, max-age=0" };
+
   try {
     const token = await getAppToken();
 
     const { searchParams } = new URL(req.url);
+
+    // Base keyword (already normalized by the client; we still trim here)
     const q = (searchParams.get("q") || "golf putter").trim();
 
-    // Build Browse search
+    // Filters coming from the client UI
+    const minPrice = searchParams.get("minPrice");        // "100"
+    const maxPrice = searchParams.get("maxPrice");        // "300"
+    const conditions = searchParams.get("conditions");    // "NEW,USED"
+    const buying = searchParams.get("buyingOptions");     // "FIXED_PRICE,AUCTION"
+    const categoryIds = searchParams.get("categoryIds");  // e.g. "115280" (Golf Putters)
+
+    // Build Browse filter string
+    const filters = [];
+
+    // Price
+    if (minPrice || maxPrice) {
+      const lo = minPrice ? String(parseFloat(minPrice)) : "";
+      const hi = maxPrice ? String(parseFloat(maxPrice)) : "";
+      filters.push(`price:[${lo}..${hi}]`); // supports open ranges, e.g., [..200], [50..]
+    }
+
+    // Conditions (NEW, USED, CERTIFIED_REFURBISHED, SELLER_REFURBISHED)
+    if (conditions) {
+      const allowed = new Set(["NEW", "USED", "CERTIFIED_REFURBISHED", "SELLER_REFURBISHED"]);
+      const vals = conditions
+        .split(",")
+        .map((s) => s.trim().toUpperCase())
+        .filter((v) => allowed.has(v));
+      if (vals.length) filters.push(`conditions:{${vals.join("|")}}`);
+    }
+
+    // Buying options (FIXED_PRICE, AUCTION, BEST_OFFER, CLASSIFIED_AD)
+    if (buying) {
+      const allowed = new Set(["FIXED_PRICE", "AUCTION", "BEST_OFFER", "CLASSIFIED_AD"]);
+      const vals = buying
+        .split(",")
+        .map((s) => s.trim().toUpperCase())
+        .filter((v) => allowed.has(v));
+      if (vals.length) filters.push(`buyingOptions:{${vals.join("|")}}`);
+    }
+
+    // Build querystring for Browse
     const params = new URLSearchParams({
       q,
       limit: "24",
-      // Optional once you confirm results: category_ids: "115280"  // Golf Putters
-      // Optional filters later: filter: 'price:[50..600],buyingOptions:{FIXED_PRICE|BEST_OFFER}'
     });
+    if (filters.length) params.set("filter", filters.join(","));
+    if (categoryIds) params.set("category_ids", categoryIds);
 
     const r = await fetch(
       `https://api.ebay.com/buy/browse/v1/item_summary/search?${params.toString()}`,
       {
         headers: {
           Authorization: `Bearer ${token}`,
-          "X-EBAY-C-MARKETPLACE-ID": MARKETPLACE, // EBAY_US
+          "X-EBAY-C-MARKETPLACE-ID": MARKETPLACE, // e.g., EBAY_US
         },
         cache: "no-store",
       }
