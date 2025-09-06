@@ -206,10 +206,10 @@ export async function GET(req) {
     const deliveryCountry = searchParams.get("deliveryCountry") || "US";
     const sortParam = (searchParams.get("sort") || "").toLowerCase();
 
-    // NEW: pagination params
+    // pagination
     const page = Math.max(1, parseInt(searchParams.get("page") || "1", 10));
     const perPageRaw = parseInt(searchParams.get("perPage") || "72", 10);
-    const perPage = Math.min(Math.max(1, perPageRaw || 72), 100); // cap at 100
+    const perPage = Math.min(Math.max(1, perPageRaw || 72), 100);
     const offset = (page - 1) * perPage;
 
     const EBAY_SORTS = new Set(["newlylisted"]); // allowlisted sorts
@@ -245,7 +245,7 @@ export async function GET(req) {
     });
     if (filters.length) params.set("filter", filters.join(","));
     if (categoryIds)   params.set("category_ids", categoryIds);
-    if (EBAY_SORTS.has(sortParam)) params.set("sort", "newlyListed"); // forward "recent" from UI
+    if (EBAY_SORTS.has(sortParam)) params.set("sort", "newlyListed"); // forward "recent"
 
     const r = await fetch(
       `https://api.ebay.com/buy/browse/v1/item_summary/search?${params.toString()}`,
@@ -261,27 +261,28 @@ export async function GET(req) {
     const text = await r.text();
     if (!r.ok) {
       return NextResponse.json(
-        { error: "browse_http_error", status: r.status, details: text, groups: [], page, perPage, total: 0, hasNext: false, hasPrev: page > 1 },
+        { error: "browse_http_error", status: r.status, details: text, groups: [], page, perPage, total: 0, hasNext: false, hasPrev: page > 1, fetchedCount: 0, keptCount: 0 },
         { status: 200, headers }
       );
     }
 
     const data = JSON.parse(text);
+    const fetchedCount = (data.itemSummaries || []).length;
     const offers = mapOffers(data.itemSummaries || [], q, onlyComplete);
+    const keptCount = offers.length;
     const groups = groupByModel(offers);
 
-    // eBay Browse returns paging info; prefer "total" if present, else infer via "href/next"
     const total = Number.isFinite(data.total) ? data.total : undefined;
     const hasNext = Boolean(data.next);
     const hasPrev = page > 1 || Boolean(data.prev);
 
     return NextResponse.json(
-      { groups, ts: Date.now(), page, perPage, total: total ?? null, hasNext, hasPrev },
+      { groups, ts: Date.now(), page, perPage, total: total ?? null, hasNext, hasPrev, fetchedCount, keptCount },
       { status: 200, headers }
     );
   } catch (e) {
     return NextResponse.json(
-      { error: "exception", details: String(e), groups: [], page: 1, perPage: 72, total: 0, hasNext: false, hasPrev: false },
+      { error: "exception", details: String(e), groups: [], page: 1, perPage: 72, total: 0, hasNext: false, hasPrev: false, fetchedCount: 0, keptCount: 0 },
       { status: 200, headers }
     );
   }

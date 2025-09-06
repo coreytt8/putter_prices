@@ -85,6 +85,8 @@ export default function PuttersPage() {
   const [err, setErr] = useState("");
   const [hasNext, setHasNext] = useState(false);
   const [hasPrev, setHasPrev] = useState(false);
+  const [fetchedCount, setFetchedCount] = useState(null);
+  const [keptCount, setKeptCount] = useState(null);
 
   // Build API URL
   const apiUrl = useMemo(() => {
@@ -120,6 +122,8 @@ export default function PuttersPage() {
           setTs(data.ts || null);
           setHasNext(Boolean(data.hasNext));
           setHasPrev(Boolean(data.hasPrev));
+          setFetchedCount(typeof data.fetchedCount === "number" ? data.fetchedCount : null);
+          setKeptCount(typeof data.keptCount === "number" ? data.keptCount : null);
         }
       } catch (e) {
         if (!ignore) setErr("Failed to load results. Please try again.");
@@ -356,6 +360,22 @@ export default function PuttersPage() {
           </button>
         </div>
       </section>
+
+      {/* Counts summary */}
+      {!loading && !err && (
+        <div className="mt-2 text-sm text-gray-600">
+          {typeof keptCount === "number" && typeof fetchedCount === "number" ? (
+            <>
+              Showing <span className="font-medium">{groups.length}</span> model groups from{" "}
+              <span className="font-medium">{keptCount}</span> kept listings (fetched {fetchedCount}).
+            </>
+          ) : (
+            <>
+              Showing <span className="font-medium">{groups.length}</span> model groups.
+            </>
+          )}
+        </div>
+      )}
 
       {/* Results */}
       {loading && (
