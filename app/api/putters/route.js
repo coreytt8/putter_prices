@@ -134,6 +134,7 @@ function mapOffers(summaries = [], q = "", onlyComplete = false) {
     const price = it?.price?.value ? Number(it.price.value) : null;
     const url = tagInlineEpn(it.itemWebUrl || "", q);
     const image = it?.image?.imageUrl || it?.thumbnailImages?.[0]?.imageUrl || null;
+    const created = it?.itemCreationDate || null;
 
     if (onlyComplete) {
       if (!price || !url || !title || !image) continue;
@@ -149,6 +150,7 @@ function mapOffers(summaries = [], q = "", onlyComplete = false) {
       retailer: "eBay",
       url,
       image,
+      createdAt: created,
     });
   }
   return out;
@@ -202,6 +204,8 @@ export async function GET(req) {
     const buying      = searchParams.get("buyingOptions");
     const categoryIds = searchParams.get("categoryIds") || "115280"; // Golf Putters
     const deliveryCountry = searchParams.get("deliveryCountry") || "US";
+    const sortParam = (searchParams.get("sort") || "").toLowerCase();
+    const EBAY_SORTS = new Set(["newlylisted"]); // allowlisted sorts
 
     const filters = [];
     // price
@@ -233,6 +237,7 @@ export async function GET(req) {
     });
     if (filters.length) params.set("filter", filters.join(","));
     if (categoryIds)   params.set("category_ids", categoryIds);
+    if (EBAY_SORTS.has(sortParam)) params.set("sort", "newlyListed"); // forward "recent" from UI
 
     const r = await fetch(
       `https://api.ebay.com/buy/browse/v1/item_summary/search?${params.toString()}`,

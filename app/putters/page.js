@@ -27,6 +27,7 @@ const BUYING_OPTIONS = [
 const SORT_OPTIONS = [
   { label: "Best Price: Low → High", value: "best_price_asc" },
   { label: "Best Price: High → Low", value: "best_price_desc" },
+  { label: "Recently listed", value: "recent" },      // NEW
   { label: "Most Offers", value: "count_desc" },
   { label: "A → Z (Model)", value: "model_asc" },
 ];
@@ -87,8 +88,9 @@ export default function PuttersPage() {
     if (maxPrice) params.set("maxPrice", String(maxPrice));
     if (selectedConds.length) params.set("conditions", selectedConds.join(","));
     if (selectedBuying.length) params.set("buyingOptions", selectedBuying.join(","));
+    if (sortBy === "recent") params.set("sort", "newlylisted"); // pass to API
     return `/api/putters?${params.toString()}`;
-  }, [q, onlyComplete, minPrice, maxPrice, selectedConds, selectedBuying]);
+  }, [q, onlyComplete, minPrice, maxPrice, selectedConds, selectedBuying, sortBy]);
 
   // Fetch
   useEffect(() => {
@@ -118,6 +120,10 @@ export default function PuttersPage() {
   // Sort models (groups)
   const sortedGroups = useMemo(() => {
     const arr = [...groups];
+    if (sortBy === "recent") {
+      // keep order returned by API (newly listed)
+      return arr;
+    }
     if (sortBy === "best_price_asc") {
       arr.sort((a, b) => (a.bestPrice ?? Infinity) - (b.bestPrice ?? Infinity));
     } else if (sortBy === "best_price_desc") {
@@ -136,7 +142,7 @@ export default function PuttersPage() {
     if (sortBy === "best_price_desc") {
       list.sort((a, b) => (b.price ?? -Infinity) - (a.price ?? -Infinity));
     } else {
-      // default and best_price_asc: cheapest first
+      // default + best_price_asc + recent/count/model
       list.sort((a, b) => (a.price ?? Infinity) - (b.price ?? Infinity));
     }
     return list.slice(0, 5);
@@ -376,6 +382,9 @@ export default function PuttersPage() {
                           <div className="truncate text-sm font-medium">{o.retailer}</div>
                           <div className="mt-0.5 truncate text-xs text-gray-500">
                             {o.condition ? o.condition.replace(/_/g, " ") : "—"}
+                            {o.createdAt && (
+                              <> · listed {timeAgo(new Date(o.createdAt).getTime())}</>
+                            )}
                           </div>
                         </div>
                       </div>
