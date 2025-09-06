@@ -27,12 +27,13 @@ const BUYING_OPTIONS = [
 const SORT_OPTIONS = [
   { label: "Best Price: Low → High", value: "best_price_asc" },
   { label: "Best Price: High → Low", value: "best_price_desc" },
-  { label: "Recently listed", value: "recent" },      // NEW
+  { label: "Recently listed", value: "recent" },
   { label: "Most Offers", value: "count_desc" },
   { label: "A → Z (Model)", value: "model_asc" },
 ];
 
-// Retailer legend
+const PAGE_SIZES = [24, 48, 72, 100];
+
 const RETAILER_LEGEND = [
   { name: "eBay", logo: "https://upload.wikimedia.org/wikipedia/commons/1/1b/EBay_logo.svg", href: "https://www.ebay.com" },
 ];
@@ -73,11 +74,17 @@ export default function PuttersPage() {
   const [selectedBuying, setSelectedBuying] = useState([]);
   const [sortBy, setSortBy] = useState("best_price_asc");
 
+  // pagination
+  const [page, setPage] = useState(1);
+  const [perPage, setPerPage] = useState(72);
+
   // data
   const [groups, setGroups] = useState([]);
   const [ts, setTs] = useState(null);
   const [loading, setLoading] = useState(false);
   const [err, setErr] = useState("");
+  const [hasNext, setHasNext] = useState(false);
+  const [hasPrev, setHasPrev] = useState(false);
 
   // Build API URL
   const apiUrl = useMemo(() => {
@@ -88,9 +95,16 @@ export default function PuttersPage() {
     if (maxPrice) params.set("maxPrice", String(maxPrice));
     if (selectedConds.length) params.set("conditions", selectedConds.join(","));
     if (selectedBuying.length) params.set("buyingOptions", selectedBuying.join(","));
-    if (sortBy === "recent") params.set("sort", "newlylisted"); // pass to API
+    if (sortBy === "recent") params.set("sort", "newlylisted");
+    params.set("page", String(page));
+    params.set("perPage", String(perPage));
     return `/api/putters?${params.toString()}`;
-  }, [q, onlyComplete, minPrice, maxPrice, selectedConds, selectedBuying, sortBy]);
+  }, [q, onlyComplete, minPrice, maxPrice, selectedConds, selectedBuying, sortBy, page, perPage]);
+
+  // Reset to page 1 when filters/sort/search change (but not when only page/perPage change)
+  useEffect(() => {
+    setPage(1);
+  }, [q, onlyComplete, minPrice, maxPrice, selectedConds, selectedBuying, sortBy, perPage]);
 
   // Fetch
   useEffect(() => {
@@ -104,13 +118,15 @@ export default function PuttersPage() {
         if (!ignore) {
           setGroups(Array.isArray(data.groups) ? data.groups : []);
           setTs(data.ts || null);
+          setHasNext(Boolean(data.hasNext));
+          setHasPrev(Boolean(data.hasPrev));
         }
       } catch (e) {
         if (!ignore) setErr("Failed to load results. Please try again.");
       } finally {
         if (!ignore) setLoading(false);
       }
-    }, 300);
+    }, 250);
     return () => {
       ignore = true;
       clearTimeout(t);
@@ -142,7 +158,6 @@ export default function PuttersPage() {
     if (sortBy === "best_price_desc") {
       list.sort((a, b) => (b.price ?? -Infinity) - (a.price ?? -Infinity));
     } else {
-      // default + best_price_asc + recent/count/model
       list.sort((a, b) => (a.price ?? Infinity) - (b.price ?? Infinity));
     }
     return list.slice(0, 5);
@@ -160,7 +175,12 @@ export default function PuttersPage() {
     setSelectedConds([]);
     setSelectedBuying([]);
     setSortBy("best_price_asc");
+    setPerPage(72);
+    setPage(1);
   };
+
+  const canPrev = hasPrev && page > 1 && !loading;
+  const canNext = hasNext && !loading;
 
   return (
     <main className="mx-auto max-w-6xl px-4 py-8">
@@ -203,8 +223,8 @@ export default function PuttersPage() {
         </div>
       </section>
 
-      {/* Search + Sort */}
-      <section className="mt-6 grid grid-cols-1 gap-3 sm:grid-cols-3">
+      {/* Search + Sort + Page size */}
+      <section className="mt-6 grid grid-cols-1 gap-3 sm:grid-cols-4">
         <div className="sm:col-span-2">
           <label className="mb-1 block text-sm font-medium">Search</label>
           <input
@@ -225,6 +245,20 @@ export default function PuttersPage() {
             {SORT_OPTIONS.map((s) => (
               <option key={s.value} value={s.value}>
                 {s.label}
+              </option>
+            ))}
+          </select>
+        </div>
+        <div>
+          <label className="mb-1 block text-sm font-medium">Results per page</label>
+          <select
+            value={perPage}
+            onChange={(e) => setPerPage(parseInt(e.target.value, 10))}
+            className="w-full rounded-md border border-gray-300 px-3 py-2"
+          >
+            {PAGE_SIZES.map((n) => (
+              <option key={n} value={n}>
+                {n}
               </option>
             ))}
           </select>
@@ -336,89 +370,101 @@ export default function PuttersPage() {
       )}
 
       {!loading && !err && (
-        <section className="mt-6 grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-2">
-          {sortedGroups.map((g) => (
-            <article key={g.model} className="overflow-hidden rounded-xl border border-gray-200 bg-white shadow-sm">
-              <div className="relative aspect-[4/3] w-full max-h-48 bg-gray-100">
-                {g.image ? (
-                  // eslint-disable-next-line @next/next/no-img-element
-                  <img src={g.image} alt={g.model} className="h-full w-full object-contain" loading="lazy" />
-                ) : (
-                  <div className="flex h-full w-full items-center justify-center text-xs text-gray-400">
-                    No image
-                  </div>
-                )}
-              </div>
-
-              <div className="p-4">
-                <div className="flex items-start justify-between gap-2">
-                  <h3 className="text-lg font-semibold leading-tight">{g.model}</h3>
-                  <div className="shrink-0 rounded-full bg-green-100 px-3 py-1 text-xs font-semibold text-green-700">
-                    Best: {formatPrice(g.bestPrice, g.bestCurrency)}
-                  </div>
+        <>
+          <section className="mt-6 grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-2">
+            {sortedGroups.map((g) => (
+              <article key={g.model} className="overflow-hidden rounded-xl border border-gray-200 bg-white shadow-sm">
+                <div className="relative aspect-[4/3] w-full max-h-48 bg-gray-100">
+                  {g.image ? (
+                    // eslint-disable-next-line @next/next/no-img-element
+                    <img src={g.image} alt={g.model} className="h-full w-full object-contain" loading="lazy" />
+                  ) : (
+                    <div className="flex h-full w-full items-center justify-center text-xs text-gray-400">
+                      No image
+                    </div>
+                  )}
                 </div>
 
-                <p className="mt-1 text-xs text-gray-500">
-                  {g.count} offer{g.count === 1 ? "" : "s"} · {g.retailers.join(", ")}
-                </p>
+                <div className="p-4">
+                  <div className="flex items-start justify-between gap-2">
+                    <h3 className="text-lg font-semibold leading-tight">{g.model}</h3>
+                    <div className="shrink-0 rounded-full bg-green-100 px-3 py-1 text-xs font-semibold text-green-700">
+                      Best: {formatPrice(g.bestPrice, g.bestCurrency)}
+                    </div>
+                  </div>
 
-                {/* Offers: order aligns with sort selection */}
-                <ul className="mt-4 space-y-2">
-                  {orderOffers(g.offers).map((o) => (
-                    <li
-                      key={o.productId + o.url}
-                      className="flex items-center justify-between gap-3 rounded border border-gray-100 p-2"
-                    >
-                      <div className="flex min-w-0 items-center gap-2">
-                        {retailerLogos[o.retailer] && (
-                          // eslint-disable-next-line @next/next/no-img-element
-                          <img
-                            src={retailerLogos[o.retailer]}
-                            alt={o.retailer}
-                            className="h-4 w-12 object-contain"
-                          />
-                        )}
-                        <div>
-                          <div className="truncate text-sm font-medium">{o.retailer}</div>
-                          <div className="mt-0.5 truncate text-xs text-gray-500">
-                            {o.condition ? o.condition.replace(/_/g, " ") : "—"}
-                            {o.createdAt && (
-                              <> · listed {timeAgo(new Date(o.createdAt).getTime())}</>
-                            )}
+                  <p className="mt-1 text-xs text-gray-500">
+                    {g.count} offer{g.count === 1 ? "" : "s"} · {g.retailers.join(", ")}
+                  </p>
+
+                  {/* Offers */}
+                  <ul className="mt-4 space-y-2">
+                    {orderOffers(g.offers).map((o) => (
+                      <li
+                        key={o.productId + o.url}
+                        className="flex items-center justify-between gap-3 rounded border border-gray-100 p-2"
+                      >
+                        <div className="flex min-w-0 items-center gap-2">
+                          {retailerLogos[o.retailer] && (
+                            // eslint-disable-next-line @next/next/no-img-element
+                            <img
+                              src={retailerLogos[o.retailer]}
+                              alt={o.retailer}
+                              className="h-4 w-12 object-contain"
+                            />
+                          )}
+                          <div>
+                            <div className="truncate text-sm font-medium">{o.retailer}</div>
+                            <div className="mt-0.5 truncate text-xs text-gray-500">
+                              {o.condition ? o.condition.replace(/_/g, " ") : "—"}
+                              {o.createdAt && (
+                                <> · listed {timeAgo(new Date(o.createdAt).getTime())}</>
+                              )}
+                            </div>
                           </div>
                         </div>
-                      </div>
-                      <div className="flex items-center gap-3">
-                        <span className="text-sm font-semibold">{formatPrice(o.price, o.currency)}</span>
-                        <a
-                          href={o.url}
-                          target="_blank"
-                          rel="noopener noreferrer"
-                          className="inline-flex items-center rounded-md bg-blue-600 px-3 py-1.5 text-sm font-medium text-white hover:bg-blue-700"
-                        >
-                          View
-                        </a>
-                      </div>
-                    </li>
-                  ))}
-                </ul>
+                        <div className="flex items-center gap-3">
+                          <span className="text-sm font-semibold">{formatPrice(o.price, o.currency)}</span>
+                          <a
+                            href={o.url}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            className="inline-flex items-center rounded-md bg-blue-600 px-3 py-1.5 text-sm font-medium text-white hover:bg-blue-700"
+                          >
+                            View
+                          </a>
+                        </div>
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              </article>
+            ))}
+          </section>
 
-                {g.bestOffer?.url && (
-                  <a
-                    href={g.bestOffer.url}
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    className="mt-4 inline-flex w-full items-center justify-center rounded-md border border-green-600 px-3 py-2 text-sm font-medium text-green-700 hover:bg-green-50"
-                  >
-                    Go to Best Price
-                  </a>
-                )}
+          {/* Pagination controls */}
+          <div className="mt-8 flex items-center justify-between">
+            <button
+              disabled={!canPrev}
+              onClick={() => setPage((p) => Math.max(1, p - 1))}
+              className={`rounded-md border px-3 py-2 text-sm ${canPrev ? "hover:bg-gray-100" : "opacity-50 cursor-not-allowed"}`}
+            >
+              ← Prev
+            </button>
 
-                {ts && <p className="mt-3 text-right text-xs text-gray-400">Updated {timeAgo(ts)}</p>}
-              </div>
-            </article>
-          ))}
-        </section>
+            <div className="text-sm text-gray-600">
+              Page <span className="font-medium">{page}</span> · {perPage} per page
+            </div>
+
+            <button
+              disabled={!canNext}
+              onClick={() => setPage((p) => p + 1)}
+              className={`rounded-md border px-3 py-2 text-sm ${canNext ? "hover:bg-gray-100" : "opacity-50 cursor-not-allowed"}`}
+            >
+              Next →
+            </button>
+          </div>
+        </>
       )}
 
       {!loading && !err && sortedGroups.length === 0 && (

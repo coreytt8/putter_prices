@@ -205,6 +205,13 @@ export async function GET(req) {
     const categoryIds = searchParams.get("categoryIds") || "115280"; // Golf Putters
     const deliveryCountry = searchParams.get("deliveryCountry") || "US";
     const sortParam = (searchParams.get("sort") || "").toLowerCase();
+
+    // NEW: pagination params
+    const page = Math.max(1, parseInt(searchParams.get("page") || "1", 10));
+    const perPageRaw = parseInt(searchParams.get("perPage") || "72", 10);
+    const perPage = Math.min(Math.max(1, perPageRaw || 72), 100); // cap at 100
+    const offset = (page - 1) * perPage;
+
     const EBAY_SORTS = new Set(["newlylisted"]); // allowlisted sorts
 
     const filters = [];
@@ -232,7 +239,8 @@ export async function GET(req) {
 
     const params = new URLSearchParams({
       q,
-      limit: "72",
+      limit: String(perPage),
+      offset: String(offset),
       deliveryCountry,
     });
     if (filters.length) params.set("filter", filters.join(","));
@@ -253,7 +261,7 @@ export async function GET(req) {
     const text = await r.text();
     if (!r.ok) {
       return NextResponse.json(
-        { error: "browse_http_error", status: r.status, details: text, groups: [] },
+        { error: "browse_http_error", status: r.status, details: text, groups: [], page, perPage, total: 0, hasNext: false, hasPrev: page > 1 },
         { status: 200, headers }
       );
     }
@@ -261,10 +269,19 @@ export async function GET(req) {
     const data = JSON.parse(text);
     const offers = mapOffers(data.itemSummaries || [], q, onlyComplete);
     const groups = groupByModel(offers);
-    return NextResponse.json({ groups, ts: Date.now() }, { status: 200, headers });
+
+    // eBay Browse returns paging info; prefer "total" if present, else infer via "href/next"
+    const total = Number.isFinite(data.total) ? data.total : undefined;
+    const hasNext = Boolean(data.next);
+    const hasPrev = page > 1 || Boolean(data.prev);
+
+    return NextResponse.json(
+      { groups, ts: Date.now(), page, perPage, total: total ?? null, hasNext, hasPrev },
+      { status: 200, headers }
+    );
   } catch (e) {
     return NextResponse.json(
-      { error: "exception", details: String(e), groups: [] },
+      { error: "exception", details: String(e), groups: [], page: 1, perPage: 72, total: 0, hasNext: false, hasPrev: false },
       { status: 200, headers }
     );
   }
