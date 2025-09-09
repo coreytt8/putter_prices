@@ -1,12 +1,12 @@
 // app/api/putters/route.js
 import { NextResponse } from "next/server";
 
-// ====== eBay App creds (set in Vercel) ======
+// ===== eBay App creds (set in Vercel env) =====
 const CLIENT_ID = process.env.EBAY_CLIENT_ID;
 const CLIENT_SECRET = process.env.EBAY_CLIENT_SECRET;
 const MARKETPLACE = process.env.EBAY_MARKETPLACE || "EBAY_US";
 
-// ====== EPN (inline tagging) ======
+// ===== EPN (inline tagging) =====
 const EPN_ROVER_PATH = process.env.EPN_ROVER_PATH || "";   // e.g. 711-53200-19255-0
 const EPN_CAMPAIGN_ID = process.env.EPN_CAMPAIGN_ID || ""; // e.g. 5339121522
 
@@ -37,7 +37,7 @@ function tagInlineEpn(itemUrl, customIdSeed = "") {
   return u.toString();
 }
 
-// ====== OAuth token cache ======
+// ===== OAuth token cache =====
 let _token = null;
 let _expMs = 0;
 async function getAppToken() {
@@ -64,7 +64,7 @@ async function getAppToken() {
   return _token;
 }
 
-// ====== Title normalization & model key ======
+// ===== Normalization / filters =====
 function normalizeModelFromTitle(title = "") {
   const t = (title || "").toLowerCase();
   let s = t
@@ -90,10 +90,7 @@ function normalizeModelFromTitle(title = "") {
   return titleCase(s.split(/\s+/).slice(0, 4).join(" "));
 }
 
-// Keyword AND filter (drop stopwords)
-const STOPWORDS = new Set([
-  "the","and","a","an","for","with","of","by","to","from","in","on","at","new","used"
-]);
+const STOPWORDS = new Set(["the","and","a","an","for","with","of","by","to","from","in","on","at","new","used"]);
 function titleMatchesAllKeywords(title, rawQ) {
   if (!rawQ) return true;
   const tokens = rawQ
@@ -106,7 +103,6 @@ function titleMatchesAllKeywords(title, rawQ) {
   return tokens.every((tok) => t.includes(tok));
 }
 
-// Exclusions to reduce irrelevant items
 const EXCLUDE_PATTERNS = [
   /\bhead\s*cover\b/i,
   /\bheadcover\b/i,
@@ -123,40 +119,31 @@ function isExcludedTitle(title = "") {
   return EXCLUDE_PATTERNS.some((rx) => rx.test(title));
 }
 
-// Map summaries -> offers (drop blanks conditionally + exclusions + keyword AND)
-function mapOffers(summaries = [], q = "", onlyComplete = false) {
-  const out = [];
-  for (const it of summaries) {
-    const title = it.title || "";
-    if (isExcludedTitle(title)) continue;
-    if (!titleMatchesAllKeywords(title, q)) continue;
+function toOffer(it, q, onlyComplete) {
+  const title = it.title || "";
+  if (isExcludedTitle(title)) return null;
+  if (!titleMatchesAllKeywords(title, q)) return null;
 
-    const price = it?.price?.value ? Number(it.price.value) : null;
-    const url = tagInlineEpn(it.itemWebUrl || "", q);
-    const image = it?.image?.imageUrl || it?.thumbnailImages?.[0]?.imageUrl || null;
-    const created = it?.itemCreationDate || null;
+  const price = it?.price?.value ? Number(it.price.value) : null;
+  const url = tagInlineEpn(it.itemWebUrl || "", q);
+  const image = it?.image?.imageUrl || it?.thumbnailImages?.[0]?.imageUrl || null;
 
-    if (onlyComplete) {
-      if (!price || !url || !title || !image) continue;
-    }
+  if (onlyComplete && (!price || !url || !title || !image)) return null;
 
-    out.push({
-      productId: it.itemId || it.legacyItemId || "",
-      title,
-      modelKey: normalizeModelFromTitle(title),
-      price,
-      currency: it?.price?.currency || "USD",
-      condition: it?.condition || null,
-      retailer: "eBay",
-      url,
-      image,
-      createdAt: created,
-    });
-  }
-  return out;
+  return {
+    productId: it.itemId || it.legacyItemId || "",
+    title,
+    modelKey: normalizeModelFromTitle(title),
+    price,
+    currency: it?.price?.currency || "USD",
+    condition: it?.condition || null,
+    retailer: "eBay",
+    url,
+    image,
+    createdAt: it?.itemCreationDate || null,
+  };
 }
 
-// Group offers by modelKey
 function groupByModel(offers = []) {
   const m = new Map();
   for (const o of offers) {
@@ -178,7 +165,6 @@ function groupByModel(offers = []) {
       count: list.length,
     });
   }
-  // Default sort: best price asc (UI can override)
   groups.sort((a,b)=>{
     if (a.bestPrice == null && b.bestPrice == null) return 0;
     if (a.bestPrice == null) return 1;
@@ -186,6 +172,26 @@ function groupByModel(offers = []) {
     return a.bestPrice - b.bestPrice;
   });
   return groups;
+}
+
+// ===== Browse helper =====
+async function fetchBrowse({ token, q, limit, offset, deliveryCountry, market, filter, category_ids, sort }) {
+  const params = new URLSearchParams({
+    q, limit: String(limit), offset: String(offset), deliveryCountry
+  });
+  if (filter) params.set("filter", filter);
+  if (category_ids) params.set("category_ids", category_ids);
+  if (sort) params.set("sort", sort);
+
+  const r = await fetch(`https://api.ebay.com/buy/browse/v1/item_summary/search?${params.toString()}`, {
+    headers: {
+      Authorization: `Bearer ${token}`,
+      "X-EBAY-C-MARKETPLACE-ID": market,
+    },
+    cache: "no-store",
+  });
+  const text = await r.text();
+  return { ok: r.ok, status: r.status, text };
 }
 
 export async function GET(req) {
@@ -197,6 +203,7 @@ export async function GET(req) {
 
     const q = (searchParams.get("q") || "golf putter").trim();
     const onlyComplete = (searchParams.get("onlyComplete") || "").toLowerCase() === "true";
+    const groupMode = (searchParams.get("group") ?? "true").toLowerCase() !== "false"; // default: true
 
     const minPriceRaw = searchParams.get("minPrice");
     const maxPriceRaw = searchParams.get("maxPrice");
@@ -210,9 +217,8 @@ export async function GET(req) {
     const page = Math.max(1, parseInt(searchParams.get("page") || "1", 10));
     const perPageRaw = parseInt(searchParams.get("perPage") || "72", 10);
     const perPage = Math.min(Math.max(1, perPageRaw || 72), 100);
-    const offset = (page - 1) * perPage;
 
-    const EBAY_SORTS = new Set(["newlylisted"]); // allowlisted sorts
+    const EBAY_SORTS = new Set(["newlylisted"]); // allow-listed external sorts
 
     const filters = [];
     // price
@@ -236,53 +242,98 @@ export async function GET(req) {
       const vals = buying.split(",").map(s=>s.trim().toUpperCase()).filter(v=>allowed.has(v));
       if (vals.length) filters.push(`buyingOptions:{${vals.join("|")}}`);
     }
+    const filterStr = filters.length ? filters.join(",") : undefined;
+    const sortForward = EBAY_SORTS.has(sortParam) ? "newlyListed" : undefined;
 
-    const params = new URLSearchParams({
-      q,
-      limit: String(perPage),
-      offset: String(offset),
-      deliveryCountry,
-    });
-    if (filters.length) params.set("filter", filters.join(","));
-    if (categoryIds)   params.set("category_ids", categoryIds);
-    if (EBAY_SORTS.has(sortParam)) params.set("sort", "newlyListed"); // forward "recent"
-
-    const r = await fetch(
-      `https://api.ebay.com/buy/browse/v1/item_summary/search?${params.toString()}`,
-      {
-        headers: {
-          Authorization: `Bearer ${token}`,
-          "X-EBAY-C-MARKETPLACE-ID": MARKETPLACE,
-        },
-        cache: "no-store",
+    // ===== Grouped mode =====
+    if (groupMode) {
+      const limit = perPage;
+      const offset = (page - 1) * perPage;
+      const { ok, status, text } = await fetchBrowse({
+        token, q, limit, offset, deliveryCountry, market: MARKETPLACE,
+        filter: filterStr, category_ids: categoryIds, sort: sortForward
+      });
+      if (!ok) {
+        return NextResponse.json(
+          { mode: "group", error: "browse_http_error", status, details: text, groups: [], page, perPage, total: 0, hasNext: false, hasPrev: page > 1, fetchedCount: 0, keptCount: 0 },
+          { status: 200, headers }
+        );
       }
-    );
+      const data = JSON.parse(text);
+      const items = data.itemSummaries || [];
+      const fetchedCount = items.length;
+      const offers = items.map(it => toOffer(it, q, onlyComplete)).filter(Boolean);
+      const keptCount = offers.length;
+      const groups = groupByModel(offers);
 
-    const text = await r.text();
-    if (!r.ok) {
+      const total = Number.isFinite(data.total) ? data.total : undefined;
+      const hasNext = Boolean(data.next);
+      const hasPrev = page > 1 || Boolean(data.prev);
+
       return NextResponse.json(
-        { error: "browse_http_error", status: r.status, details: text, groups: [], page, perPage, total: 0, hasNext: false, hasPrev: page > 1, fetchedCount: 0, keptCount: 0 },
+        { mode: "group", groups, ts: Date.now(), page, perPage, total: total ?? null, hasNext, hasPrev, fetchedCount, keptCount },
         { status: 200, headers }
       );
     }
 
-    const data = JSON.parse(text);
-    const fetchedCount = (data.itemSummaries || []).length;
-    const offers = mapOffers(data.itemSummaries || [], q, onlyComplete);
-    const keptCount = offers.length;
-    const groups = groupByModel(offers);
+    // ===== Flat mode (exact listings per page) =====
+    // Collect enough *kept* listings to fill page N by scanning from raw offset 0.
+    const targetStart = (page - 1) * perPage;
+    const targetEnd = page * perPage;
 
-    const total = Number.isFinite(data.total) ? data.total : undefined;
-    const hasNext = Boolean(data.next);
-    const hasPrev = page > 1 || Boolean(data.prev);
+    let browseOffset = 0;       // always from 0 to avoid skipping keepable items
+    let fetchedTotal = 0;       // diagnostics
+    let keptAll = [];           // cumulative kept
+    let hasNextRaw = false;     // whether upstream has more
+    const MAX_SCANS = 8;        // up to ~800 raw items
+
+    for (let i = 0; i < MAX_SCANS && keptAll.length < targetEnd; i++) {
+      const limit = 100; // efficient scan size
+      const { ok, status, text } = await fetchBrowse({
+        token, q, limit, offset: browseOffset, deliveryCountry,
+        market: MARKETPLACE, filter: filterStr, category_ids: categoryIds, sort: sortForward
+      });
+      if (!ok) {
+        return NextResponse.json(
+          { mode: "flat", error: "browse_http_error", status, details: text, offers: [], page, perPage, hasNext: false, hasPrev: page > 1, fetchedCount: fetchedTotal, keptCount: keptAll.length },
+          { status: 200, headers }
+        );
+      }
+
+      const data = JSON.parse(text);
+      const items = data.itemSummaries || [];
+      fetchedTotal += items.length;
+
+      const mapped = items.map(it => toOffer(it, q, onlyComplete)).filter(Boolean);
+      keptAll = keptAll.concat(mapped);
+
+      hasNextRaw = Boolean(data.next);
+      browseOffset += limit;
+      if (!hasNextRaw) break;
+    }
+
+    const pageOffers = keptAll.slice(targetStart, targetEnd);
+    const hasPrev = page > 1;
+    const hasNext = keptAll.length > targetEnd || hasNextRaw;
 
     return NextResponse.json(
-      { groups, ts: Date.now(), page, perPage, total: total ?? null, hasNext, hasPrev, fetchedCount, keptCount },
+      {
+        mode: "flat",
+        offers: pageOffers,
+        ts: Date.now(),
+        page,
+        perPage,
+        hasNext,
+        hasPrev,
+        fetchedCount: fetchedTotal,
+        keptCount: keptAll.length
+      },
       { status: 200, headers }
     );
+
   } catch (e) {
     return NextResponse.json(
-      { error: "exception", details: String(e), groups: [], page: 1, perPage: 72, total: 0, hasNext: false, hasPrev: false, fetchedCount: 0, keptCount: 0 },
+      { error: "exception", details: String(e), mode: "group", groups: [], page: 1, perPage: 72, hasNext: false, hasPrev: false, fetchedCount: 0, keptCount: 0 },
       { status: 200, headers }
     );
   }

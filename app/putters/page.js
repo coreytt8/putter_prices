@@ -34,10 +34,6 @@ const SORT_OPTIONS = [
 
 const PAGE_SIZES = [24, 48, 72, 100];
 
-const RETAILER_LEGEND = [
-  { name: "eBay", logo: "https://upload.wikimedia.org/wikipedia/commons/1/1b/EBay_logo.svg", href: "https://www.ebay.com" },
-];
-
 const retailerLogos = {
   eBay: "https://upload.wikimedia.org/wikipedia/commons/1/1b/EBay_logo.svg",
 };
@@ -73,6 +69,7 @@ export default function PuttersPage() {
   const [selectedConds, setSelectedConds] = useState([]);
   const [selectedBuying, setSelectedBuying] = useState([]);
   const [sortBy, setSortBy] = useState("best_price_asc");
+  const [groupMode, setGroupMode] = useState(true); // NEW: toggle
 
   // pagination
   const [page, setPage] = useState(1);
@@ -80,7 +77,7 @@ export default function PuttersPage() {
 
   // data
   const [groups, setGroups] = useState([]);
-  const [ts, setTs] = useState(null);
+  const [offers, setOffers] = useState([]); // NEW: flat list
   const [loading, setLoading] = useState(false);
   const [err, setErr] = useState("");
   const [hasNext, setHasNext] = useState(false);
@@ -100,13 +97,14 @@ export default function PuttersPage() {
     if (sortBy === "recent") params.set("sort", "newlylisted");
     params.set("page", String(page));
     params.set("perPage", String(perPage));
+    params.set("group", groupMode ? "true" : "false"); // NEW
     return `/api/putters?${params.toString()}`;
-  }, [q, onlyComplete, minPrice, maxPrice, selectedConds, selectedBuying, sortBy, page, perPage]);
+  }, [q, onlyComplete, minPrice, maxPrice, selectedConds, selectedBuying, sortBy, page, perPage, groupMode]);
 
-  // Reset to page 1 when filters/sort/search change (but not when only page/perPage change)
+  // Reset to page 1 on filter/sort/perPage/group change
   useEffect(() => {
     setPage(1);
-  }, [q, onlyComplete, minPrice, maxPrice, selectedConds, selectedBuying, sortBy, perPage]);
+  }, [q, onlyComplete, minPrice, maxPrice, selectedConds, selectedBuying, sortBy, perPage, groupMode]);
 
   // Fetch
   useEffect(() => {
@@ -119,7 +117,7 @@ export default function PuttersPage() {
         const data = await res.json();
         if (!ignore) {
           setGroups(Array.isArray(data.groups) ? data.groups : []);
-          setTs(data.ts || null);
+          setOffers(Array.isArray(data.offers) ? data.offers : []);
           setHasNext(Boolean(data.hasNext));
           setHasPrev(Boolean(data.hasPrev));
           setFetchedCount(typeof data.fetchedCount === "number" ? data.fetchedCount : null);
@@ -137,13 +135,10 @@ export default function PuttersPage() {
     };
   }, [apiUrl]);
 
-  // Sort models (groups)
+  // Sort (grouped view only; flat view uses upstream order)
   const sortedGroups = useMemo(() => {
     const arr = [...groups];
-    if (sortBy === "recent") {
-      // keep order returned by API (newly listed)
-      return arr;
-    }
+    if (sortBy === "recent") return arr; // Browse already sorts
     if (sortBy === "best_price_asc") {
       arr.sort((a, b) => (a.bestPrice ?? Infinity) - (b.bestPrice ?? Infinity));
     } else if (sortBy === "best_price_desc") {
@@ -156,21 +151,15 @@ export default function PuttersPage() {
     return arr;
   }, [groups, sortBy]);
 
-  // Offer ordering per card, synced to sort selection
+  // Offer ordering inside each group card
   const orderOffers = (offers) => {
     const list = [...offers];
-    if (sortBy === "best_price_desc") {
-      list.sort((a, b) => (b.price ?? -Infinity) - (a.price ?? -Infinity));
-    } else {
-      list.sort((a, b) => (a.price ?? Infinity) - (b.price ?? Infinity));
-    }
+    if (sortBy === "best_price_desc") list.sort((a, b) => (b.price ?? -Infinity) - (a.price ?? -Infinity));
+    else list.sort((a, b) => (a.price ?? Infinity) - (b.price ?? Infinity));
     return list.slice(0, 5);
+    // (show top 5 offers per model card)
   };
 
-  const toggleCond = (val) =>
-    setSelectedConds((prev) => (prev.includes(val) ? prev.filter((v) => v !== val) : [...prev, val]));
-  const toggleBuying = (val) =>
-    setSelectedBuying((prev) => (prev.includes(val) ? prev.filter((v) => v !== val) : [...prev, val]));
   const clearAll = () => {
     setQ("");
     setOnlyComplete(true);
@@ -180,6 +169,7 @@ export default function PuttersPage() {
     setSelectedBuying([]);
     setSortBy("best_price_asc");
     setPerPage(72);
+    setGroupMode(true);
     setPage(1);
   };
 
@@ -190,7 +180,7 @@ export default function PuttersPage() {
     <main className="mx-auto max-w-6xl px-4 py-8">
       <h1 className="text-3xl font-semibold tracking-tight">Compare Putter Prices</h1>
       <p className="mt-1 text-sm text-gray-500">
-        Accurate keyword search, grouped by model, with <span className="font-medium">Best Price</span> highlighted.
+        Toggle <span className="font-medium">Group similar listings</span> to switch between model cards and a flat list.
       </p>
 
       {/* Brand quick filters */}
@@ -207,28 +197,8 @@ export default function PuttersPage() {
         ))}
       </section>
 
-      {/* Retailer Legend */}
-      <section className="mt-4 rounded-lg border border-gray-200 bg-white px-3 py-3">
-        <div className="flex flex-wrap items-center gap-4 overflow-x-auto whitespace-nowrap">
-          <span className="text-xs font-semibold uppercase tracking-wide text-gray-500">Comparing:</span>
-          {RETAILER_LEGEND.map((r) => (
-            <a
-              key={r.name}
-              href={r.href}
-              target="_blank"
-              rel="noopener noreferrer"
-              className="flex items-center gap-2 rounded-md border border-gray-100 px-2 py-1 hover:bg-gray-50"
-            >
-              {/* eslint-disable-next-line @next/next/no-img-element */}
-              <img src={r.logo} alt={`${r.name} logo`} className="h-4 w-12 object-contain" />
-              <span className="text-xs text-gray-700">{r.name}</span>
-            </a>
-          ))}
-        </div>
-      </section>
-
-      {/* Search + Sort + Page size */}
-      <section className="mt-6 grid grid-cols-1 gap-3 sm:grid-cols-4">
+      {/* Controls */}
+      <section className="mt-6 grid grid-cols-1 gap-3 sm:grid-cols-5">
         <div className="sm:col-span-2">
           <label className="mb-1 block text-sm font-medium">Search</label>
           <input
@@ -239,6 +209,7 @@ export default function PuttersPage() {
             className="w-full rounded-md border border-gray-300 px-3 py-2 outline-none focus:ring-2 focus:ring-blue-500"
           />
         </div>
+
         <div>
           <label className="mb-1 block text-sm font-medium">Sort</label>
           <select
@@ -253,19 +224,31 @@ export default function PuttersPage() {
             ))}
           </select>
         </div>
+
         <div>
-          <label className="mb-1 block text-sm font-medium">Results per page</label>
+          <label className="mb-1 block text-sm font-medium">
+            {groupMode ? "Groups per page" : "Listings per page"}
+          </label>
           <select
             value={perPage}
             onChange={(e) => setPerPage(parseInt(e.target.value, 10))}
             className="w-full rounded-md border border-gray-300 px-3 py-2"
           >
             {PAGE_SIZES.map((n) => (
-              <option key={n} value={n}>
-                {n}
-              </option>
+              <option key={n} value={n}>{n}</option>
             ))}
           </select>
+        </div>
+
+        <div className="flex items-end gap-2">
+          <label className="flex items-center gap-2 text-sm">
+            <input
+              type="checkbox"
+              checked={groupMode}
+              onChange={(e) => setGroupMode(e.target.checked)}
+            />
+            Group similar listings
+          </label>
         </div>
       </section>
 
@@ -366,21 +349,29 @@ export default function PuttersPage() {
         <div className="mt-2 text-sm text-gray-600">
           {typeof keptCount === "number" && typeof fetchedCount === "number" ? (
             <>
-              Showing <span className="font-medium">{groups.length}</span> model groups from{" "}
-              <span className="font-medium">{keptCount}</span> kept listings (fetched {fetchedCount}).
+              Showing{" "}
+              <span className="font-medium">
+                {groupMode ? (groups?.length ?? 0) : (offers?.length ?? 0)}
+              </span>{" "}
+              {groupMode ? "model groups" : "listings"} from{" "}
+              <span className="font-medium">{keptCount}</span> kept (fetched {fetchedCount}).
             </>
           ) : (
             <>
-              Showing <span className="font-medium">{groups.length}</span> model groups.
+              Showing{" "}
+              <span className="font-medium">
+                {groupMode ? (groups?.length ?? 0) : (offers?.length ?? 0)}
+              </span>{" "}
+              {groupMode ? "model groups" : "listings"}.
             </>
           )}
         </div>
       )}
 
-      {/* Results */}
+      {/* Loading / Error */}
       {loading && (
         <div className="mt-6 rounded-md border border-gray-200 bg-white p-4 shadow-sm">
-          <p className="text-sm text-gray-600">Loading grouped prices…</p>
+          <p className="text-sm text-gray-600">Loading results…</p>
         </div>
       )}
       {err && (
@@ -389,7 +380,8 @@ export default function PuttersPage() {
         </div>
       )}
 
-      {!loading && !err && (
+      {/* Grouped view */}
+      {!loading && !err && groupMode && (
         <>
           <section className="mt-6 grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-2">
             {sortedGroups.map((g) => (
@@ -417,40 +409,27 @@ export default function PuttersPage() {
                     {g.count} offer{g.count === 1 ? "" : "s"} · {g.retailers.join(", ")}
                   </p>
 
-                  {/* Offers */}
                   <ul className="mt-4 space-y-2">
-                    {orderOffers(g.offers).map((o) => (
-                      <li
-                        key={o.productId + o.url}
-                        className="flex items-center justify-between gap-3 rounded border border-gray-100 p-2"
-                      >
+                    {([...g.offers]
+                      .sort((a,b)=> (sortBy==="best_price_desc" ? (b.price ?? -Infinity)-(a.price ?? -Infinity) : (a.price ?? Infinity)-(b.price ?? Infinity)))
+                      .slice(0,5)).map((o) => (
+                      <li key={o.productId + o.url} className="flex items-center justify-between gap-3 rounded border border-gray-100 p-2">
                         <div className="flex min-w-0 items-center gap-2">
                           {retailerLogos[o.retailer] && (
                             // eslint-disable-next-line @next/next/no-img-element
-                            <img
-                              src={retailerLogos[o.retailer]}
-                              alt={o.retailer}
-                              className="h-4 w-12 object-contain"
-                            />
+                            <img src={retailerLogos[o.retailer]} alt={o.retailer} className="h-4 w-12 object-contain" />
                           )}
                           <div>
                             <div className="truncate text-sm font-medium">{o.retailer}</div>
                             <div className="mt-0.5 truncate text-xs text-gray-500">
                               {o.condition ? o.condition.replace(/_/g, " ") : "—"}
-                              {o.createdAt && (
-                                <> · listed {timeAgo(new Date(o.createdAt).getTime())}</>
-                              )}
+                              {o.createdAt && <> · listed {timeAgo(new Date(o.createdAt).getTime())}</>}
                             </div>
                           </div>
                         </div>
                         <div className="flex items-center gap-3">
                           <span className="text-sm font-semibold">{formatPrice(o.price, o.currency)}</span>
-                          <a
-                            href={o.url}
-                            target="_blank"
-                            rel="noopener noreferrer"
-                            className="inline-flex items-center rounded-md bg-blue-600 px-3 py-1.5 text-sm font-medium text-white hover:bg-blue-700"
-                          >
+                          <a href={o.url} target="_blank" rel="noopener noreferrer" className="inline-flex items-center rounded-md bg-blue-600 px-3 py-1.5 text-sm font-medium text-white hover:bg-blue-700">
                             View
                           </a>
                         </div>
@@ -462,35 +441,66 @@ export default function PuttersPage() {
             ))}
           </section>
 
-          {/* Pagination controls */}
+          {/* Pagination */}
           <div className="mt-8 flex items-center justify-between">
-            <button
-              disabled={!canPrev}
-              onClick={() => setPage((p) => Math.max(1, p - 1))}
-              className={`rounded-md border px-3 py-2 text-sm ${canPrev ? "hover:bg-gray-100" : "opacity-50 cursor-not-allowed"}`}
-            >
+            <button disabled={!canPrev} onClick={() => setPage((p) => Math.max(1, p - 1))} className={`rounded-md border px-3 py-2 text-sm ${canPrev ? "hover:bg-gray-100" : "opacity-50 cursor-not-allowed"}`}>
               ← Prev
             </button>
-
-            <div className="text-sm text-gray-600">
-              Page <span className="font-medium">{page}</span> · {perPage} per page
-            </div>
-
-            <button
-              disabled={!canNext}
-              onClick={() => setPage((p) => p + 1)}
-              className={`rounded-md border px-3 py-2 text-sm ${canNext ? "hover:bg-gray-100" : "opacity-50 cursor-not-allowed"}`}
-            >
+            <div className="text-sm text-gray-600">Page <span className="font-medium">{page}</span> · {perPage} per page</div>
+            <button disabled={!canNext} onClick={() => setPage((p) => p + 1)} className={`rounded-md border px-3 py-2 text-sm ${canNext ? "hover:bg-gray-100" : "opacity-50 cursor-not-allowed"}`}>
               Next →
             </button>
           </div>
         </>
       )}
 
-      {!loading && !err && sortedGroups.length === 0 && (
-        <div className="mt-10 text-center text-sm text-gray-500">
-          No results. Try refining your keywords or widening filters.
-        </div>
+      {/* Flat list view */}
+      {!loading && !err && !groupMode && (
+        <>
+          <section className="mt-6 grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
+            {offers.map((o) => (
+              <article key={o.productId + o.url} className="overflow-hidden rounded-xl border border-gray-200 bg-white shadow-sm">
+                <div className="relative aspect-[4/3] w-full bg-gray-100">
+                  {o.image ? (
+                    // eslint-disable-next-line @next/next/no-img-element
+                    <img src={o.image} alt={o.title} className="h-full w-full object-contain" loading="lazy" />
+                  ) : (
+                    <div className="flex h-full w-full items-center justify-center text-xs text-gray-400">No image</div>
+                  )}
+                </div>
+                <div className="p-4">
+                  <h3 className="line-clamp-2 text-sm font-semibold">{o.title}</h3>
+                  <p className="mt-1 text-xs text-gray-500">
+                    {o.condition ? o.condition.replace(/_/g, " ") : "—"}
+                    {o.createdAt && <> · listed {timeAgo(new Date(o.createdAt).getTime())}</>}
+                  </p>
+                  <div className="mt-3 flex items-center justify-between">
+                    <span className="text-base font-semibold">{formatPrice(o.price, o.currency)}</span>
+                    <a href={o.url} target="_blank" rel="noopener noreferrer" className="inline-flex items-center rounded-md bg-blue-600 px-3 py-1.5 text-sm font-medium text-white hover:bg-blue-700">
+                      View
+                    </a>
+                  </div>
+                </div>
+              </article>
+            ))}
+          </section>
+
+          {/* Pagination */}
+          <div className="mt-8 flex items-center justify-between">
+            <button disabled={!canPrev} onClick={() => setPage((p) => Math.max(1, p - 1))} className={`rounded-md border px-3 py-2 text-sm ${canPrev ? "hover:bg-gray-100" : "opacity-50 cursor-not-allowed"}`}>
+              ← Prev
+            </button>
+            <div className="text-sm text-gray-600">Page <span className="font-medium">{page}</span> · {perPage} per page</div>
+            <button disabled={!canNext} onClick={() => setPage((p) => p + 1)} className={`rounded-md border px-3 py-2 text-sm ${canNext ? "hover:bg-gray-100" : "opacity-50 cursor-not-allowed"}`}>
+              Next →
+            </button>
+          </div>
+        </>
+      )}
+
+      {/* Empty state */}
+      {!loading && !err && ((groupMode && (groups?.length ?? 0) === 0) || (!groupMode && (offers?.length ?? 0) === 0)) && (
+        <div className="mt-10 text-center text-sm text-gray-500">No results. Try refining your keywords or widening filters.</div>
       )}
     </main>
   );
