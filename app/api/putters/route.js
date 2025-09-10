@@ -6,14 +6,12 @@ export const dynamic = "force-dynamic"; // no caching
 function tagAffiliate(url) {
   try {
     const u = new URL(url);
-    // Do NOT destroy existing params; just set/overwrite EPN params:
     const camp = process.env.EPN_CAMPAIGN_ID;
-    if (!camp) return url; // if missing, return raw url
+    if (!camp) return url;
 
     const tool = process.env.EPN_TOOL_ID || "10001";
-    const custom = process.env.EPN_CUSTOM_ID || ""; // optional
+    const custom = process.env.EPN_CUSTOM_ID || "";
 
-    // canonical EPN params for ebay.com
     u.searchParams.set("mkcid", "1");
     u.searchParams.set("mkrid", "711-53200-19255-0");
     u.searchParams.set("siteid", "0");
@@ -28,7 +26,55 @@ function tagAffiliate(url) {
   }
 }
 
-/* ---------------- Utilities ---------------- */
+/* ---------------- Token cache for Browse API ---------------- */
+let tokenCache = { token: null, expiresAt: 0 };
+
+async function getAppToken() {
+  const now = Date.now();
+  if (tokenCache.token && now < tokenCache.expiresAt - 60_000) {
+    return tokenCache.token;
+  }
+
+  const clientId = process.env.EBAY_CLIENT_ID;
+  const clientSecret = process.env.EBAY_CLIENT_SECRET;
+  if (!clientId || !clientSecret) {
+    const e = new Error("EBAY_CLIENT_ID/EBAY_CLIENT_SECRET missing");
+    e.details = "Set EBAY_CLIENT_ID and EBAY_CLIENT_SECRET in your environment.";
+    throw e;
+  }
+
+  const creds = Buffer.from(`${clientId}:${clientSecret}`).toString("base64");
+  const body = new URLSearchParams();
+  body.set("grant_type", "client_credentials");
+  // minimal scope for Browse
+  body.set("scope", "https://api.ebay.com/oauth/api_scope");
+
+  const res = await fetch("https://api.ebay.com/identity/v1/oauth2/token", {
+    method: "POST",
+    headers: {
+      Authorization: `Basic ${creds}`,
+      "Content-Type": "application/x-www-form-urlencoded",
+    },
+    body: body.toString(),
+    cache: "no-store",
+  });
+
+  if (!res.ok) {
+    const text = await res.text();
+    const e = new Error(`oauth_error ${res.status}`);
+    e.details = text;
+    throw e;
+  }
+
+  const json = await res.json();
+  tokenCache = {
+    token: json.access_token,
+    expiresAt: now + (json.expires_in || 7200) * 1000,
+  };
+  return tokenCache.token;
+}
+
+/* ---------------- Utilities (matching, grouping, etc.) ---------------- */
 const BRAND_WORDS = [
   "scotty","cameron","taylormade","tm","ping","odyssey","lab","golf","putter","putters"
 ];
@@ -48,16 +94,13 @@ const SOFT_SYNONYMS = {
 };
 
 function norm(s) { return (s || "").toLowerCase(); }
-
-function tokenize(q) {
-  return norm(q).split(/\s+/).filter(Boolean);
-}
+function tokenize(q) { return norm(q).split(/\s+/).filter(Boolean); }
 
 function priceNumberFromAny(x) {
   if (x == null) return null;
   if (typeof x === "number") return isFinite(x) ? x : null;
   if (typeof x === "object") {
-    const n = Number(x.value ?? x.__value__ ?? x.amount);
+    const n = Number(x.value ?? x.amount ?? x.__value__);
     return isFinite(n) ? n : null;
   }
   const m = String(x).match(/[\d,.]+/);
@@ -72,7 +115,7 @@ function tokenMatchesTitle(token, title) {
 
   if (ttl.includes(t)) return true;
 
-  // 34/35 inches normalization: "35", 35", 35in, 35 in
+  // inches: "35", 35", 35in, 35 in
   const inch = t.match(/^(\d{2})(?:"|in| in)?$/);
   if (inch) {
     const n = inch[1];
@@ -81,7 +124,6 @@ function tokenMatchesTitle(token, title) {
     }
   }
 
-  // soft tokens are optional but may match via synonyms
   if (SOFT_TOKENS.has(t)) {
     const syns = SOFT_SYNONYMS[t] || [t];
     return syns.some((phrase) => ttl.includes(norm(phrase)));
@@ -90,13 +132,12 @@ function tokenMatchesTitle(token, title) {
   return false;
 }
 
-/** Require all "core" tokens; allow soft tokens to be optional; also ≥70% of all tokens must hit. */
+/** Require all core tokens; soft tokens optional; ≥70% of all tokens must match. */
 function titleMatchesQuery(title, tokens) {
   if (!tokens.length) return true;
   const core = tokens.filter((w) => !SOFT_TOKENS.has(norm(w)));
   const coreOk = core.every((w) => tokenMatchesTitle(w, title));
   if (!coreOk) return false;
-
   const hits = tokens.filter((w) => tokenMatchesTitle(w, title)).length;
   return hits / tokens.length >= 0.7;
 }
@@ -109,75 +150,88 @@ function modelKey(title) {
   return toks.slice(0, 4).join(" ");
 }
 
-/* ---------------- eBay Finding API (no OAuth) ---------------- */
-async function findingSearch({ q, pageNumber = 1, entriesPerPage = 100, sort = "" }) {
-  const appId = process.env.EBAY_APP_ID;
-  if (!appId) {
-    const e = new Error("EBAY_APP_ID is missing.");
-    e.details = "Set EBAY_APP_ID in your env (Vercel → Settings → Environment Variables).";
-    throw e;
-  }
+/* ---------------- Browse API search ---------------- */
+async function browseSearch({ q, limit = 100, offset = 0, sort = "", filters = "" }) {
+  const token = await getAppToken();
+  const MARKET = process.env.EBAY_MARKETPLACE || "EBAY_US";
 
-  const u = new URL("https://svcs.ebay.com/services/search/FindingService/v1");
-  u.searchParams.set("OPERATION-NAME", "findItemsByKeywords");
-  u.searchParams.set("SERVICE-VERSION", "1.13.0");
-  u.searchParams.set("SECURITY-APPNAME", appId);
-  u.searchParams.set("RESPONSE-DATA-FORMAT", "JSON");
-  u.searchParams.set("REST-PAYLOAD", "true");
-  u.searchParams.set("keywords", q);
-  u.searchParams.set("paginationInput.entriesPerPage", String(entriesPerPage));
-  u.searchParams.set("paginationInput.pageNumber", String(pageNumber));
-
+  const url = new URL("https://api.ebay.com/buy/browse/v1/item_summary/search");
+  url.searchParams.set("q", q);
+  url.searchParams.set("limit", String(limit));
+  url.searchParams.set("offset", String(offset));
   if (sort === "newlylisted") {
-    u.searchParams.set("sortOrder", "StartTimeNewest");
+    // Browse uses "newlyListed" (camelCase)
+    url.searchParams.set("sort", "newlyListed");
+  }
+  if (filters) {
+    url.searchParams.set("filter", filters);
   }
 
-  const res = await fetch(u.toString(), { next: { revalidate: 0 } });
+  const res = await fetch(url.toString(), {
+    headers: {
+      Authorization: `Bearer ${token}`,
+      "X-EBAY-C-MARKETPLACE-ID": MARKET,
+      "Content-Type": "application/json",
+    },
+    cache: "no-store",
+  });
+
   if (!res.ok) {
     const text = await res.text();
-    const e = new Error(`finding_api_error ${res.status}`);
+    const e = new Error(`browse_api_error ${res.status}`);
     e.details = text;
     throw e;
   }
 
   const data = await res.json();
-  const root = data?.findItemsByKeywordsResponse?.[0];
-  const ack = root?.ack?.[0];
-  if (ack !== "Success") {
-    const e = new Error("finding_api_not_success");
-    e.details = JSON.stringify(root?.errorMessage ?? root);
-    throw e;
-  }
-  const items = root?.searchResult?.[0]?.item ?? [];
+  const items = Array.isArray(data?.itemSummaries) ? data.itemSummaries : [];
 
   return items.map((it) => {
-    const title = it.title?.[0] ?? "";
-    const price = it.sellingStatus?.[0]?.currentPrice?.[0];
-    const img =
-      it.galleryPlusPictureURL?.[0] ||
-      it.galleryURL?.[0] ||
-      null;
-    const url = it.viewItemURL?.[0] || "";
-    const condition =
-      it.condition?.[0]?.conditionDisplayName?.[0] ||
-      it.condition?.[0]?.conditionId?.[0] ||
-      null;
-    const buyingOptions = it.listingInfo?.[0]?.listingType?.[0] || "";
-    const created = it.listingInfo?.[0]?.startTime?.[0] || null;
-
+    const price = it.price;
+    const buyingOptions = Array.isArray(it.buyingOptions) ? it.buyingOptions.join(",") : (it.buyingOptions || "");
     return {
-      itemId: it.itemId?.[0] || url,
-      title,
+      itemId: it.itemId || it.itemHref || it.itemWebUrl,
+      title: it.title || "",
       price: priceNumberFromAny(price),
-      currency: (price && (price.currencyId || price["@currencyId"])) || "USD",
-      condition,
-      image: img,
-      url,
+      currency: price?.currency || "USD",
+      condition: it.condition || null,
+      image: it.image?.imageUrl || null,
+      url: it.itemWebUrl || "",
       retailer: "eBay",
-      createdAt: created,
-      buyingOption: String(buyingOptions).toUpperCase(),
+      createdAt: it.itemCreationDate || null, // may be null in summaries; sort param handles recency upstream
+      buyingOption: String(buyingOptions || "").toUpperCase(),
     };
   });
+}
+
+/* Build Browse filter string from query params */
+function buildBrowseFilters({ onlyComplete, minPrice, maxPrice, conditions, buyingOptions }) {
+  const parts = [];
+
+  // price:[min..max]
+  if (minPrice || maxPrice) {
+    const min = minPrice ? Number(minPrice) : "";
+    const max = maxPrice ? Number(maxPrice) : "";
+    if (min !== "" || max !== "") {
+      parts.push(`price:[${min === "" ? "" : min}..${max === "" ? "" : max}]`);
+    }
+  }
+
+  // conditions:{NEW|USED|...}
+  if (conditions?.length) {
+    const vals = conditions.join("|");
+    parts.push(`conditions:{${vals}}`);
+  }
+
+  // buyingOptions:{FIXED_PRICE|AUCTION|BEST_OFFER}
+  if (buyingOptions?.length) {
+    const vals = buyingOptions.join("|");
+    parts.push(`buyingOptions:{${vals}}`);
+  }
+
+  // Note: onlyComplete we still enforce after fetch (image+price),
+  // since Browse can sometimes miss an image in summaries.
+  return parts.join(",");
 }
 
 /* ---------------- Route handler ---------------- */
@@ -185,7 +239,7 @@ export async function GET(req) {
   try {
     const { searchParams } = new URL(req.url);
     const q = (searchParams.get("q") || "").trim();
-    const group = searchParams.get("group") !== "false"; // default: grouped
+    const group = searchParams.get("group") !== "false"; // default grouped
     const onlyComplete = searchParams.get("onlyComplete") === "true";
     const minPrice = searchParams.get("minPrice") || "";
     const maxPrice = searchParams.get("maxPrice") || "";
@@ -209,14 +263,26 @@ export async function GET(req) {
       });
     }
 
-    // --- Fetch upstream pages
-    const ENTRIES = 100;
-    const MAX_PAGES = broaden ? 3 : 1;
+    // --- Build filters for Browse
+    const filterStr = buildBrowseFilters({ onlyComplete, minPrice, maxPrice, conditions, buyingOptions });
+
+    // --- Fetch items (one or a couple of pages upstream), then filter locally with soft tokens
+    const LIMIT = 100;
+    const PAGES = broaden ? 3 : 1;
+
     let raw = [];
-    for (let p = 1; p <= MAX_PAGES; p++) {
-      const batch = await findingSearch({ q, pageNumber: p, entriesPerPage: ENTRIES, sort });
+    for (let i = 0; i < PAGES; i++) {
+      const offset = i * LIMIT;
+      const batch = await browseSearch({
+        q,
+        limit: LIMIT,
+        offset,
+        sort,       // "newlylisted" → handled inside as "newlyListed"
+        filters: filterStr,
+      });
       raw = raw.concat(batch);
     }
+
     // de-dupe
     const seen = new Set();
     raw = raw.filter((x) => {
@@ -226,41 +292,26 @@ export async function GET(req) {
       return true;
     });
 
-    // --- Improved matching (core tokens required, soft optional, ≥70% total hits)
+    // improved title matching
     const tokens = tokenize(q);
     let items = raw.filter((item) => titleMatchesQuery(item.title || "", tokens));
 
-    // --- Post filters
+    // enforce onlyComplete AFTER matching (price+image)
     if (onlyComplete) {
       items = items.filter((x) => !!x.image);
       items = items.filter((x) => x.price != null);
     }
-    if (minPrice || maxPrice) {
-      const min = minPrice ? Number(minPrice) : -Infinity;
-      const max = maxPrice ? Number(maxPrice) : Infinity;
-      items = items.filter((x) => x.price != null && x.price >= min && x.price <= max);
-    }
-    if (conditions.length) {
-      const cset = new Set(conditions);
-      items = items.filter((x) => cset.has(String(x.condition || "").toUpperCase()));
-    }
-    if (buyingOptions.length) {
-      const bset = new Set(buyingOptions);
-      items = items.filter((x) => {
-        const bo = String(x.buyingOption || "").toUpperCase();
-        return [...bset].some((opt) => bo.includes(opt));
-      });
-    }
 
-    // --- EPN server-side tagging
+    // server-side EPN tagging
     items = items.map((x) => ({ ...x, url: tagAffiliate(x.url || "") }));
 
     const fetchedCount = raw.length;
     const keptCount = items.length;
 
     if (!group) {
-      // Recently listed: trust upstream order (StartTimeNewest); otherwise sort by price asc
+      // If "recent", upstream already applied recency; otherwise default to price asc
       if (sort === "newlylisted") {
+        // keep order; optional nudge by createdAt when present
         items.sort((a, b) => (new Date(b.createdAt) - new Date(a.createdAt)));
       } else {
         items.sort((a, b) => (a.price ?? Infinity) - (b.price ?? Infinity));
@@ -269,14 +320,15 @@ export async function GET(req) {
       const start = (page - 1) * perPage;
       const pageItems = items.slice(start, start + perPage);
       return NextResponse.json({
-        groups: [], offers: pageItems,
+        groups: [],
+        offers: pageItems,
         hasNext: start + perPage < items.length,
         hasPrev: page > 1,
         fetchedCount, keptCount,
       });
     }
 
-    // Grouping
+    // Group similar
     const buckets = new Map();
     for (const it of items) {
       const key = modelKey(it.title || "") || norm(it.title || "");
