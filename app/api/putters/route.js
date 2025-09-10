@@ -1,4 +1,3 @@
-// app/api/putters/route.js
 import { NextResponse } from "next/server";
 
 // ===== eBay App creds (set in Vercel env) =====
@@ -201,7 +200,7 @@ export async function GET(req) {
     const token = await getAppToken();
     const { searchParams } = new URL(req.url);
 
-    const q = (searchParams.get("q") || "golf putter").trim();
+    const q = (searchParams.get("q") || "").trim(); // empty means: return nothing
     const onlyComplete = (searchParams.get("onlyComplete") || "").toLowerCase() === "true";
     const groupMode = (searchParams.get("group") ?? "true").toLowerCase() !== "false"; // default: true
 
@@ -217,6 +216,16 @@ export async function GET(req) {
     const page = Math.max(1, parseInt(searchParams.get("page") || "1", 10));
     const perPageRaw = parseInt(searchParams.get("perPage") || "72", 10);
     const perPage = Math.min(Math.max(1, perPageRaw || 72), 100);
+
+    // If no query, return empty payload (prevents pre-populated results)
+    if (!q) {
+      return NextResponse.json(
+        groupMode
+          ? { mode: "group", groups: [], page, perPage, hasNext: false, hasPrev: false, fetchedCount: 0, keptCount: 0, ts: Date.now() }
+          : { mode: "flat", offers: [], page, perPage, hasNext: false, hasPrev: false, fetchedCount: 0, keptCount: 0, ts: Date.now() },
+        { status: 200, headers }
+      );
+    }
 
     const EBAY_SORTS = new Set(["newlylisted"]); // allow-listed external sorts
 

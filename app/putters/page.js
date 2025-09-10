@@ -27,8 +27,8 @@ const BUYING_OPTIONS = [
 const SORT_OPTIONS = [
   { label: "Best Price: Low → High", value: "best_price_asc" },
   { label: "Best Price: High → Low", value: "best_price_desc" },
-  { label: "Recently listed", value: "recent" },
-  { label: "Most Offers", value: "count_desc" },
+  { label: "Recently listed", value: "recent" }, // server asks eBay for newly listed
+  { label: "Most Offers (groups)", value: "count_desc" },
   { label: "A → Z (Model)", value: "model_asc" },
 ];
 
@@ -62,22 +62,22 @@ function timeAgo(ts) {
 
 export default function PuttersPage() {
   // filters
-  const [q, setQ] = useState("");
+  const [q, setQ] = useState("");               // no default -> empty state
   const [onlyComplete, setOnlyComplete] = useState(true);
   const [minPrice, setMinPrice] = useState("");
   const [maxPrice, setMaxPrice] = useState("");
   const [selectedConds, setSelectedConds] = useState([]);
   const [selectedBuying, setSelectedBuying] = useState([]);
   const [sortBy, setSortBy] = useState("best_price_asc");
-  const [groupMode, setGroupMode] = useState(true); // NEW: toggle
+  const [groupMode, setGroupMode] = useState(false); // default FLAT for precise per-page
 
   // pagination
   const [page, setPage] = useState(1);
-  const [perPage, setPerPage] = useState(72);
+  const [perPage, setPerPage] = useState(24);
 
   // data
   const [groups, setGroups] = useState([]);
-  const [offers, setOffers] = useState([]); // NEW: flat list
+  const [offers, setOffers] = useState([]); // flat list
   const [loading, setLoading] = useState(false);
   const [err, setErr] = useState("");
   const [hasNext, setHasNext] = useState(false);
@@ -94,10 +94,10 @@ export default function PuttersPage() {
     if (maxPrice) params.set("maxPrice", String(maxPrice));
     if (selectedConds.length) params.set("conditions", selectedConds.join(","));
     if (selectedBuying.length) params.set("buyingOptions", selectedBuying.join(","));
-    if (sortBy === "recent") params.set("sort", "newlylisted");
+    if (sortBy === "recent") params.set("sort", "newlylisted"); // server forwards to eBay
     params.set("page", String(page));
     params.set("perPage", String(perPage));
-    params.set("group", groupMode ? "true" : "false"); // NEW
+    params.set("group", groupMode ? "true" : "false");
     return `/api/putters?${params.toString()}`;
   }, [q, onlyComplete, minPrice, maxPrice, selectedConds, selectedBuying, sortBy, page, perPage, groupMode]);
 
@@ -106,8 +106,19 @@ export default function PuttersPage() {
     setPage(1);
   }, [q, onlyComplete, minPrice, maxPrice, selectedConds, selectedBuying, sortBy, perPage, groupMode]);
 
-  // Fetch
+  // Fetch — only when there’s a query
   useEffect(() => {
+    if (!q.trim()) {
+      setGroups([]);
+      setOffers([]);
+      setHasNext(false);
+      setHasPrev(false);
+      setFetchedCount(null);
+      setKeptCount(null);
+      setErr("");
+      return;
+    }
+
     let ignore = false;
     const t = setTimeout(async () => {
       setLoading(true);
@@ -117,7 +128,17 @@ export default function PuttersPage() {
         const data = await res.json();
         if (!ignore) {
           setGroups(Array.isArray(data.groups) ? data.groups : []);
-          setOffers(Array.isArray(data.offers) ? data.offers : []);
+          let pageOffers = Array.isArray(data.offers) ? data.offers : [];
+          // Client-side sorting for flat list
+          if (!groupMode && pageOffers.length) {
+            if (sortBy === "best_price_asc") {
+              pageOffers = [...pageOffers].sort((a, b) => (a.price ?? Infinity) - (b.price ?? Infinity));
+            } else if (sortBy === "best_price_desc") {
+              pageOffers = [...pageOffers].sort((a, b) => (b.price ?? -Infinity) - (a.price ?? -Infinity));
+            }
+          }
+          setOffers(pageOffers);
+
           setHasNext(Boolean(data.hasNext));
           setHasPrev(Boolean(data.hasPrev));
           setFetchedCount(typeof data.fetchedCount === "number" ? data.fetchedCount : null);
@@ -128,17 +149,17 @@ export default function PuttersPage() {
       } finally {
         if (!ignore) setLoading(false);
       }
-    }, 250);
+    }, 200);
     return () => {
       ignore = true;
       clearTimeout(t);
     };
-  }, [apiUrl]);
+  }, [apiUrl, groupMode, sortBy, q]);
 
-  // Sort (grouped view only; flat view uses upstream order)
+  // Sort for grouped cards (best price / A→Z / offer count)
   const sortedGroups = useMemo(() => {
     const arr = [...groups];
-    if (sortBy === "recent") return arr; // Browse already sorts
+    if (sortBy === "recent") return arr; // server already asked eBay for newly listed
     if (sortBy === "best_price_asc") {
       arr.sort((a, b) => (a.bestPrice ?? Infinity) - (b.bestPrice ?? Infinity));
     } else if (sortBy === "best_price_desc") {
@@ -151,15 +172,6 @@ export default function PuttersPage() {
     return arr;
   }, [groups, sortBy]);
 
-  // Offer ordering inside each group card
-  const orderOffers = (offers) => {
-    const list = [...offers];
-    if (sortBy === "best_price_desc") list.sort((a, b) => (b.price ?? -Infinity) - (a.price ?? -Infinity));
-    else list.sort((a, b) => (a.price ?? Infinity) - (b.price ?? Infinity));
-    return list.slice(0, 5);
-    // (show top 5 offers per model card)
-  };
-
   const clearAll = () => {
     setQ("");
     setOnlyComplete(true);
@@ -168,8 +180,8 @@ export default function PuttersPage() {
     setSelectedConds([]);
     setSelectedBuying([]);
     setSortBy("best_price_asc");
-    setPerPage(72);
-    setGroupMode(true);
+    setPerPage(24);
+    setGroupMode(false);
     setPage(1);
   };
 
@@ -180,7 +192,7 @@ export default function PuttersPage() {
     <main className="mx-auto max-w-6xl px-4 py-8">
       <h1 className="text-3xl font-semibold tracking-tight">Compare Putter Prices</h1>
       <p className="mt-1 text-sm text-gray-500">
-        Toggle <span className="font-medium">Group similar listings</span> to switch between model cards and a flat list.
+        Use keywords like <em>“scotty cameron newport”</em> or <em>“ping anser”</em>. Choose flat list (exact listing counts) or grouped model cards.
       </p>
 
       {/* Brand quick filters */}
@@ -205,7 +217,7 @@ export default function PuttersPage() {
             type="text"
             value={q}
             onChange={(e) => setQ(e.target.value)}
-            placeholder="e.g. scotty cameron newport"
+            placeholder="Type a model… e.g. scotty cameron newport"
             className="w-full rounded-md border border-gray-300 px-3 py-2 outline-none focus:ring-2 focus:ring-blue-500"
           />
         </div>
@@ -247,7 +259,7 @@ export default function PuttersPage() {
               checked={groupMode}
               onChange={(e) => setGroupMode(e.target.checked)}
             />
-            Group similar listings
+            Group similar listings (model cards)
           </label>
         </div>
       </section>
@@ -344,8 +356,15 @@ export default function PuttersPage() {
         </div>
       </section>
 
+      {/* Empty state when no query */}
+      {!q.trim() && (
+        <div className="mt-8 rounded-md border border-gray-200 bg-white p-6 text-center text-sm text-gray-600">
+          Start by typing a putter model or choose a brand shortcut above.
+        </div>
+      )}
+
       {/* Counts summary */}
-      {!loading && !err && (
+      {q.trim() && !loading && !err && (
         <div className="mt-2 text-sm text-gray-600">
           {typeof keptCount === "number" && typeof fetchedCount === "number" ? (
             <>
@@ -369,19 +388,19 @@ export default function PuttersPage() {
       )}
 
       {/* Loading / Error */}
-      {loading && (
+      {q.trim() && loading && (
         <div className="mt-6 rounded-md border border-gray-200 bg-white p-4 shadow-sm">
           <p className="text-sm text-gray-600">Loading results…</p>
         </div>
       )}
-      {err && (
+      {q.trim() && err && (
         <div className="mt-6 rounded-md border border-red-200 bg-red-50 p-4">
           <p className="text-sm text-red-700">{err}</p>
         </div>
       )}
 
       {/* Grouped view */}
-      {!loading && !err && groupMode && (
+      {q.trim() && !loading && !err && groupMode && (
         <>
           <section className="mt-6 grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-2">
             {sortedGroups.map((g) => (
@@ -410,9 +429,10 @@ export default function PuttersPage() {
                   </p>
 
                   <ul className="mt-4 space-y-2">
-                    {([...g.offers]
+                    {[...g.offers]
                       .sort((a,b)=> (sortBy==="best_price_desc" ? (b.price ?? -Infinity)-(a.price ?? -Infinity) : (a.price ?? Infinity)-(b.price ?? Infinity)))
-                      .slice(0,5)).map((o) => (
+                      .slice(0,5)
+                      .map((o) => (
                       <li key={o.productId + o.url} className="flex items-center justify-between gap-3 rounded border border-gray-100 p-2">
                         <div className="flex min-w-0 items-center gap-2">
                           {retailerLogos[o.retailer] && (
@@ -455,7 +475,7 @@ export default function PuttersPage() {
       )}
 
       {/* Flat list view */}
-      {!loading && !err && !groupMode && (
+      {q.trim() && !loading && !err && !groupMode && (
         <>
           <section className="mt-6 grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
             {offers.map((o) => (
@@ -496,11 +516,6 @@ export default function PuttersPage() {
             </button>
           </div>
         </>
-      )}
-
-      {/* Empty state */}
-      {!loading && !err && ((groupMode && (groups?.length ?? 0) === 0) || (!groupMode && (offers?.length ?? 0) === 0)) && (
-        <div className="mt-10 text-center text-sm text-gray-500">No results. Try refining your keywords or widening filters.</div>
       )}
     </main>
   );
