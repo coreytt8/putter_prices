@@ -8,8 +8,11 @@ import { NextResponse } from "next/server";
  * Required (set in Vercel Project Settings → Environment Variables):
  * - EBAY_CLIENT_ID
  * - EBAY_CLIENT_SECRET
+ *
+ * Strongly recommended:
+ * - EBAY_SCOPE = https://api.ebay.com/oauth/api_scope
+ *
  * Optional:
- * - EBAY_SCOPE (defaults to 'https://api.ebay.com/oauth/api_scope/buy.browse.readonly')
  * - EPN_CAMPID (your eBay Partner Network campaign id)
  * - EPN_TOOLID (often '10079')
  * - EPN_MKCID, EPN_MKRID, EPN_MKEVT (defaults provided)
@@ -79,7 +82,8 @@ async function getAccessToken() {
 
   const clientId = process.env.EBAY_CLIENT_ID;
   const clientSecret = process.env.EBAY_CLIENT_SECRET;
-  const scope = process.env.EBAY_SCOPE || "https://api.ebay.com/oauth/api_scope/buy.browse.readonly";
+  // ✅ Use the general app scope for Browse API (client-credentials)
+  const scope = process.env.EBAY_SCOPE || "https://api.ebay.com/oauth/api_scope";
 
   if (!clientId || !clientSecret) {
     throw new Error("Missing EBAY_CLIENT_ID or EBAY_CLIENT_SECRET env vars.");
@@ -103,6 +107,14 @@ async function getAccessToken() {
 
   if (!resp.ok) {
     const text = await resp.text();
+    // Improve signal if the scope is wrong
+    if (text.includes("invalid_scope")) {
+      throw new Error(
+        `OAuth error ${resp.status}: invalid_scope. ` +
+        `Set EBAY_SCOPE to "https://api.ebay.com/oauth/api_scope" in your environment. ` +
+        `Response: ${text.slice(0, 300)}`
+      );
+    }
     throw new Error(`OAuth error ${resp.status}: ${text.slice(0, 300)}`);
   }
 
