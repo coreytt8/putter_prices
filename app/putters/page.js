@@ -28,7 +28,7 @@ const BUYING_OPTIONS = [
 const SORT_OPTIONS = [
   { label: "Best Price: Low → High", value: "best_price_asc" },
   { label: "Best Price: High → Low", value: "best_price_desc" },
-  { label: "Recently listed", value: "recent" }, // maps to sort=newlylisted
+  { label: "Recently listed", value: "recent" },
   { label: "Most Offers", value: "count_desc" },
   { label: "A → Z (Model)", value: "model_asc" },
 ];
@@ -61,6 +61,65 @@ function timeAgo(ts) {
   return days === 1 ? "1 day ago" : `${days} days ago`;
 }
 
+/** Build a lightweight client-side analytics snapshot from groups[].offers[] */
+function buildSnapshotFromGroups(groups) {
+  // flatten a reasonable number of offers (avoid huge arrays on big queries)
+  const offers = [];
+  for (const g of groups || []) {
+    if (Array.isArray(g.offers)) {
+      // take up to 20 offers per group to limit work
+      for (let i = 0; i < g.offers.length && i < 20; i++) {
+        offers.push(g.offers[i]);
+      }
+    }
+  }
+
+  const prices = offers
+    .map(o => (typeof o?.price === "number" ? o.price : null))
+    .filter((n) => typeof n === "number");
+
+  // conditions (normalize to UPPER_SNAKE)
+  const condCounts = {};
+  for (const o of offers) {
+    const key = (o?.condition || "UNKNOWN").toString().trim().toUpperCase().replace(/\s+/g, "_");
+    condCounts[key] = (condCounts[key] || 0) + 1;
+  }
+  const conditions = Object.entries(condCounts)
+    .sort((a,b) => b[1]-a[1])
+    .map(([key, count]) => ({ key, count }));
+
+  // price summary
+  let min = null, max = null, avg = null;
+  if (prices.length) {
+    min = Math.min(...prices);
+    max = Math.max(...prices);
+    avg = Math.round((prices.reduce((a,b)=>a+b,0) / prices.length) * 100) / 100;
+  }
+
+  // histogram (8 buckets across [min, max], safe-guard for edge cases)
+  let histogram = [], buckets = [];
+  if (prices.length >= 2 && min !== null && max !== null && max > min) {
+    const BIN_COUNT = 8;
+    const step = (max - min) / BIN_COUNT;
+    buckets = Array.from({ length: BIN_COUNT }, (_, i) => Math.floor(min + step * (i + 1)));
+    histogram = Array(BIN_COUNT).fill(0);
+    for (const p of prices) {
+      let idx = Math.floor((p - min) / step);
+      if (idx >= BIN_COUNT) idx = BIN_COUNT - 1;
+      if (idx < 0) idx = 0;
+      histogram[idx] += 1;
+    }
+  }
+
+  return {
+    price: { min, max, avg, histogram, buckets },
+    conditions,
+    // Not available client-side from current payload:
+    buyingOptions: [], // needs explicit field from API to compute
+    brandsTop: [],     // would require brand signals in payload
+  };
+}
+
 export default function PuttersPage() {
   const [q, setQ] = useState("");
   const [onlyComplete, setOnlyComplete] = useState(true);
@@ -87,7 +146,7 @@ export default function PuttersPage() {
 
   const [expanded, setExpanded] = useState({});
 
-  // NEW: keep the full API response so we can render live analytics
+  // keep full response for future analytics (if backend starts returning it)
   const [apiData, setApiData] = useState(null);
 
   const apiUrl = useMemo(() => {
@@ -103,10 +162,8 @@ export default function PuttersPage() {
     params.set("page", String(page));
     params.set("perPage", String(FIXED_PER_PAGE));
     params.set("group", groupMode ? "true" : "false");
-
-    // NEW: enable multi-page sampling (backend will use if supported)
+    // hint for newer backend (ignored by current one)
     params.set("samplePages", "3");
-
     return `/api/putters?${params.toString()}`;
   }, [q, onlyComplete, minPrice, maxPrice, conds, buying, sortBy, page, groupMode, broaden]);
 
@@ -129,7 +186,6 @@ export default function PuttersPage() {
         const res = await fetch(apiUrl, { cache: "no-store" });
         const data = await res.json();
         if (!ignore) {
-          // Keep your existing state updates
           setGroups(Array.isArray(data.groups) ? data.groups : []);
           let pageOffers = Array.isArray(data.offers) ? data.offers : [];
           if (!groupMode && pageOffers.length) {
@@ -146,8 +202,6 @@ export default function PuttersPage() {
           setHasPrev(Boolean(data.hasPrev));
           setFetchedCount(typeof data.fetchedCount === "number" ? data.fetchedCount : null);
           setKeptCount(typeof data.keptCount === "number" ? data.keptCount : null);
-
-          // NEW: store the whole response for analytics rendering
           setApiData(data);
         }
       } catch {
@@ -170,7 +224,6 @@ export default function PuttersPage() {
     } else if (sortBy === "model_asc") {
       arr.sort((a,b) => (a.model || "").localeCompare(b.model || ""));
     }
-    // if "recent", backend already ordered by newest start time
     return arr;
   }, [groups, sortBy]);
 
@@ -192,6 +245,9 @@ export default function PuttersPage() {
 
   const canPrev = hasPrev && page > 1 && !loading;
   const canNext = hasNext && !loading;
+
+  // Build a fallback snapshot from the data we already have (client-side)
+  const fallbackSnapshot = useMemo(() => buildSnapshotFromGroups(groups), [groups]);
 
   return (
     <main className="mx-auto max-w-6xl px-4 py-8">
@@ -412,9 +468,11 @@ export default function PuttersPage() {
         </div>
       )}
 
-      {/* LIVE analytics snapshot (renders only if backend returns analytics) */}
+      {/* Analytics snapshot:
+          - If backend provides analytics, use it.
+          - Otherwise show client-side fallback from the current page's groups. */}
       <MarketSnapshot
-        snapshot={apiData?.analytics?.snapshot}
+        snapshot={apiData?.analytics?.snapshot || fallbackSnapshot}
         meta={apiData?.meta}
         query={q}
       />
@@ -444,7 +502,7 @@ export default function PuttersPage() {
         <>
           <section className="mt-6 grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-2">
             {sortedGroups.map((g) => {
-              const isOpen = !!expanded[g.model];
+              const [isOpen, setIsOpen] = [!!expanded[g.model], () => {}];
               const ordered =
                 sortBy === "best_price_desc"
                   ? [...g.offers].sort((a,b) => (b.price ?? -Infinity) - (a.price ?? -Infinity))
@@ -494,14 +552,15 @@ export default function PuttersPage() {
                       </div>
                     </div>
 
+                    {/* Expand/collapse was already wired; restoring handler */}
                     <button
-                      onClick={() => toggleExpand(g.model)}
+                      onClick={() => setExpanded((prev) => ({ ...prev, [g.model]: !prev[g.model] }))}
                       className="mt-4 w-full rounded-md border border-gray-300 px-3 py-2 text-sm hover:bg-gray-50"
                     >
                       {isOpen ? "Hide offers" : `View offers (${g.count})`}
                     </button>
 
-                    {isOpen && (
+                    {expanded[g.model] && (
                       <ul className="mt-3 space-y-2">
                         {ordered.slice(0, 10).map((o) => (
                           <li key={o.productId + o.url} className="flex items-center justify-between gap-3 rounded border border-gray-100 p-2">
