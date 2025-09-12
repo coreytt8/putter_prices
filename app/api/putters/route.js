@@ -9,12 +9,12 @@ import { NextResponse } from "next/server";
  * - EBAY_CLIENT_ID
  * - EBAY_CLIENT_SECRET
  * Optional:
- * - EBAY_SCOPE (defaults to 'https://api.ebay.com/oauth/api_scope')
+ * - EBAY_SCOPE (defaults to 'https://api.ebay.com/oauth/api_scope/buy.browse.readonly')
  * - EPN_CAMPID (your eBay Partner Network campaign id)
  * - EPN_TOOLID (often '10079')
  * - EPN_MKCID, EPN_MKRID, EPN_MKEVT (defaults provided)
- * - EPN_CUSTOMID_PREFIX (string to namespace your customid)
- * - API_CACHE_SECONDS (e.g., '90' to enable short-lived server cache)
+ * - EPN_CUSTOMID_PREFIX (string to namespace your customid, default 'putteriq')
+ * - API_CACHE_SECONDS (e.g., '90' to enable short-lived in-memory cache)
  */
 
 const EBAY_OAUTH_URL = "https://api.ebay.com/identity/v1/oauth2/token";
@@ -62,11 +62,7 @@ function pick(obj, keys) {
   return o;
 }
 function sleep(ms) { return new Promise(res => setTimeout(res, ms)); }
-
-function buildCacheKey(url) {
-  return url; // request URL already encodes all filters
-}
-
+function buildCacheKey(url) { return url; }
 function getCacheSeconds() {
   const s = parseInt(process.env.API_CACHE_SECONDS || "", 10);
   return Number.isFinite(s) && s > 0 ? s : 0;
@@ -83,7 +79,7 @@ async function getAccessToken() {
 
   const clientId = process.env.EBAY_CLIENT_ID;
   const clientSecret = process.env.EBAY_CLIENT_SECRET;
-  const scope = process.env.EBAY_SCOPE || "https://api.ebay.com/oauth/api_scope";
+  const scope = process.env.EBAY_SCOPE || "https://api.ebay.com/oauth/api_scope/buy.browse.readonly";
 
   if (!clientId || !clientSecret) {
     throw new Error("Missing EBAY_CLIENT_ID or EBAY_CLIENT_SECRET env vars.");
@@ -228,23 +224,17 @@ function modelKey(title, brandGuess) {
  * ============================
  */
 function normalizeItem(item) {
-  // eBay Browse item_summary fields:
-  // https://developer.ebay.com/api-docs/buy/browse/resources/item_summary/methods/search
   const price = item.price?.value ? Number(item.price.value) : null;
   const currency = item.price?.currency || null;
 
-  // Prefer image from item.image.imageUrl or thumbnailImages[0].imageUrl
   const image =
     item.image?.imageUrl ||
     (Array.isArray(item.thumbnailImages) && item.thumbnailImages[0]?.imageUrl) ||
     null;
 
   const url = item.itemWebUrl || item.itemHref || null;
-
-  // best available condition text
   const condition = item.condition || item.conditionId || null;
 
-  // Derive brand guess
   const brandGuess = (() => {
     const t = (item.title || "").toLowerCase();
     for (const b of BRANDS) if (t.includes(b)) return b;
@@ -298,7 +288,7 @@ function parseQueryParams(searchParams) {
  * eBay Browse Search
  * ============================
  */
-function buildEbayQuery({ q, condition, buying, minPrice, maxPrice, page, perPage, broaden, onlyComplete }) {
+function buildEbayQuery({ q, condition, buying, minPrice, maxPrice, page, perPage, broaden, onlyComplete, sort = "bestprice" }) {
   // eBay q string — we can inject simple filters as keywords (e.g., -"head only")
   let query = q;
   if (!query) query = "golf putter";
@@ -325,9 +315,9 @@ function buildEbayQuery({ q, condition, buying, minPrice, maxPrice, page, perPag
   }
   if (filters.length) url.searchParams.set("filter", filters.join(","));
 
-  // Sort — eBay Browse supports price, newlyListed, etc.
-  // We'll map our UI sort keys to eBay sorts where possible
-  switch ((String(broaden ? "newly" : sort)).toLowerCase()) {
+  // Sort — map our UI sort keys to eBay sorts where possible
+  const effectiveSort = String(broaden ? "newly" : sort).toLowerCase();
+  switch (effectiveSort) {
     case "priceasc":
       url.searchParams.set("sort", "price");
       break;
@@ -338,7 +328,7 @@ function buildEbayQuery({ q, condition, buying, minPrice, maxPrice, page, perPag
       url.searchParams.set("sort", "newlyListed");
       break;
     default:
-      // Let backend post-process "best price" by grouping later
+      // "bestprice" (or unknown): let backend do grouping/sorting later
       break;
   }
 
@@ -383,6 +373,7 @@ export async function GET(req) {
       headers: {
         "Authorization": `Bearer ${token}`,
         "Content-Type": "application/json",
+        "X-EBAY-C-MARKETPLACE-ID": "EBAY_US", // explicit marketplace avoids regional quirks
       },
       cache: "no-store",
     });
@@ -450,7 +441,7 @@ export async function GET(req) {
         source: "ebay-browse",
       },
       cards,
-      // If you still need flat items for a "list" view, you can include them:
+      // Optionally expose flat list:
       // items: norm.map(it => ({ ...it, url: tagAffiliate(it.url, { customid: "list" }) })),
     };
 
