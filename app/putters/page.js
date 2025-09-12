@@ -1,6 +1,8 @@
+// app/putters/page.js
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
+import MarketSnapshot from "@/components/MarketSnapshot";
 
 const BRANDS = [
   { label: "Scotty Cameron", q: "scotty cameron putter" },
@@ -85,6 +87,9 @@ export default function PuttersPage() {
 
   const [expanded, setExpanded] = useState({});
 
+  // NEW: keep the full API response so we can render live analytics
+  const [apiData, setApiData] = useState(null);
+
   const apiUrl = useMemo(() => {
     const params = new URLSearchParams();
     if (q.trim()) params.set("q", q.trim());
@@ -98,6 +103,10 @@ export default function PuttersPage() {
     params.set("page", String(page));
     params.set("perPage", String(FIXED_PER_PAGE));
     params.set("group", groupMode ? "true" : "false");
+
+    // NEW: enable multi-page sampling (backend will use if supported)
+    params.set("samplePages", "3");
+
     return `/api/putters?${params.toString()}`;
   }, [q, onlyComplete, minPrice, maxPrice, conds, buying, sortBy, page, groupMode, broaden]);
 
@@ -110,6 +119,7 @@ export default function PuttersPage() {
       setGroups([]); setOffers([]);
       setHasNext(false); setHasPrev(false);
       setFetchedCount(null); setKeptCount(null);
+      setApiData(null);
       setErr(""); return;
     }
     let ignore = false;
@@ -119,6 +129,7 @@ export default function PuttersPage() {
         const res = await fetch(apiUrl, { cache: "no-store" });
         const data = await res.json();
         if (!ignore) {
+          // Keep your existing state updates
           setGroups(Array.isArray(data.groups) ? data.groups : []);
           let pageOffers = Array.isArray(data.offers) ? data.offers : [];
           if (!groupMode && pageOffers.length) {
@@ -135,6 +146,9 @@ export default function PuttersPage() {
           setHasPrev(Boolean(data.hasPrev));
           setFetchedCount(typeof data.fetchedCount === "number" ? data.fetchedCount : null);
           setKeptCount(typeof data.keptCount === "number" ? data.keptCount : null);
+
+          // NEW: store the whole response for analytics rendering
+          setApiData(data);
         }
       } catch {
         if (!ignore) setErr("Failed to load results. Please try again.");
@@ -397,6 +411,13 @@ export default function PuttersPage() {
           ) : null}
         </div>
       )}
+
+      {/* LIVE analytics snapshot (renders only if backend returns analytics) */}
+      <MarketSnapshot
+        snapshot={apiData?.analytics?.snapshot}
+        meta={apiData?.meta}
+        query={q}
+      />
 
       {q.trim() && loading && (
         <div className="mt-6 grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-2">
