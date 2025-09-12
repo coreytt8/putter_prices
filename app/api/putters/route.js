@@ -107,7 +107,6 @@ async function getAccessToken() {
 
   if (!resp.ok) {
     const text = await resp.text();
-    // Improve signal if the scope is wrong
     if (text.includes("invalid_scope")) {
       throw new Error(
         `OAuth error ${resp.status}: invalid_scope. ` +
@@ -234,17 +233,22 @@ function modelKey(title, brandGuess) {
 /* ============================
  * Normalization
  * ============================
+ * 🔧 Updated to consider currentBidPrice and not require image.
  */
 function normalizeItem(item) {
-  const price = item.price?.value ? Number(item.price.value) : null;
-  const currency = item.price?.currency || null;
+  // Some auctions only provide currentBidPrice, not price.
+  const numeric = (obj) => (obj && Number.isFinite(+obj.value) ? +obj.value : null);
+  const priceVal = numeric(item.price) ?? numeric(item.currentBidPrice) ?? null;
+  const currency = item.price?.currency || item.currentBidPrice?.currency || null;
 
   const image =
     item.image?.imageUrl ||
     (Array.isArray(item.thumbnailImages) && item.thumbnailImages[0]?.imageUrl) ||
     null;
 
-  const url = item.itemWebUrl || item.itemHref || null;
+  // Prefer affiliate-ready or normal URL
+  const url = item.itemAffiliateWebUrl || item.itemWebUrl || item.itemHref || null;
+
   const condition = item.condition || item.conditionId || null;
 
   const brandGuess = (() => {
@@ -256,7 +260,7 @@ function normalizeItem(item) {
   return {
     id: item.itemId || item.itemHref || cryptoRandomId(),
     title: item.title || "",
-    price,
+    price: priceVal,
     currency,
     image,
     url,
@@ -266,7 +270,9 @@ function normalizeItem(item) {
     buyingOptions: item.buyingOptions || [],
     itemLocation: item.itemLocation || null,
     listingMarketplaceId: item.marketplaceId || null,
-    raw: pick(item, ["itemId", "title", "price", "image", "thumbnailImages", "itemWebUrl", "itemHref", "condition", "buyingOptions"]),
+    raw: pick(item, [
+      "itemId","title","price","currentBidPrice","image","thumbnailImages","itemWebUrl","itemAffiliateWebUrl","itemHref","condition","buyingOptions"
+    ]),
   };
 }
 
@@ -393,10 +399,18 @@ export async function GET(req) {
     const data = await res.json();
     const items = Array.isArray(data.itemSummaries) ? data.itemSummaries : [];
 
-    // Normalize, filter out unusable rows (no price or image)
-    const norm = items
-      .map(normalizeItem)
-      .filter(x => Number.isFinite(x.price) && x.image && x.url);
+    // ---- Debug counters to help diagnose filtering ----
+    let droppedNoPrice = 0;
+    let droppedNoUrl = 0;
+
+    // Normalize; require price and url; allow missing image
+    const norm = items.map(normalizeItem).filter(x => {
+      const hasPrice = Number.isFinite(x.price);
+      const hasUrl = !!x.url;
+      if (!hasPrice) droppedNoPrice++;
+      if (!hasUrl) droppedNoUrl++;
+      return hasPrice && hasUrl;
+    });
 
     // Group by modelKey
     const buckets = new Map();
@@ -422,7 +436,7 @@ export async function GET(req) {
         bestPrice: best.price,
         currency: best.currency || "USD",
         count: arr.length,
-        image: best.image,
+        image: best.image, // may be null; let UI handle placeholder
         bestUrl,
         sampleSellers: arr.slice(0, 3).map(s => s.seller).filter(Boolean),
       });
@@ -443,7 +457,7 @@ export async function GET(req) {
     const payload = {
       ok: true,
       meta: {
-        total: data.total || norm.length,
+        total: data.total ?? 0,
         returned: norm.length,
         cards: cards.length,
         page: params.page,
@@ -451,6 +465,11 @@ export async function GET(req) {
         broaden: params.broaden,
         sort: params.sort,
         source: "ebay-browse",
+        debug: {
+          rawCount: items.length,
+          droppedNoPrice,
+          droppedNoUrl,
+        },
       },
       cards,
       // Optionally expose flat list:
