@@ -16,7 +16,6 @@ export default function MarketSnapshot({ snapshot, meta, query }) {
   const hasHistogram = Array.isArray(price.histogram) && price.histogram.length > 0;
   const sampleSize = hasHistogram ? price.histogram.reduce((a, b) => a + (b || 0), 0) : null;
 
-  // Build labels for the histogram buckets (e.g., "$0–$99", "$100–$199", ...)
   const bucketLabels = (() => {
     if (!hasHistogram) return [];
     const buckets = price.buckets || [];
@@ -31,7 +30,6 @@ export default function MarketSnapshot({ snapshot, meta, query }) {
 
   const maxBar = hasHistogram ? Math.max(...price.histogram) || 1 : 1;
 
-  // Condition totals (top 6 to keep it tidy)
   const topConditions = [...conditions]
     .sort((a, b) => (b.count || 0) - (a.count || 0))
     .slice(0, 6);
@@ -98,7 +96,7 @@ export default function MarketSnapshot({ snapshot, meta, query }) {
             )}
           </div>
 
-          {/* Conditions + (optional) Buying options */}
+          {/* Conditions + Optional sections */}
           <div className="flex flex-col gap-6">
             <div>
               <h3 className="mb-2 text-sm font-medium text-gray-700">Condition mix</h3>
@@ -134,7 +132,6 @@ export default function MarketSnapshot({ snapshot, meta, query }) {
               )}
             </div>
 
-            {/* Optional future sections: only render if backend supplies data */}
             {!!buyingOptions.length && (
               <div>
                 <h3 className="mb-2 text-sm font-medium text-gray-700">Buying options</h3>
@@ -171,7 +168,6 @@ export default function MarketSnapshot({ snapshot, meta, query }) {
           </div>
         </div>
 
-        {/* Footer note */}
         <div className="rounded-b-2xl border-t border-gray-100 bg-gray-50 px-5 py-3 text-xs text-gray-500">
           Snapshot reflects the current page’s fetched data. Adjust filters or broaden search to see more.
         </div>

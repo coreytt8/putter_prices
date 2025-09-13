@@ -1,8 +1,8 @@
-// app/putters/page.js
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
 import MarketSnapshot from "@/components/MarketSnapshot";
+import CompareBar from "@/components/CompareBar";
 
 const BRANDS = [
   { label: "Scotty Cameron", q: "scotty cameron putter" },
@@ -28,7 +28,7 @@ const BUYING_OPTIONS = [
 const SORT_OPTIONS = [
   { label: "Best Price: Low → High", value: "best_price_asc" },
   { label: "Best Price: High → Low", value: "best_price_desc" },
-  { label: "Recently listed", value: "recent" },
+  { label: "Recently listed", value: "recent" }, // maps to sort=newlylisted
   { label: "Most Offers", value: "count_desc" },
   { label: "A → Z (Model)", value: "model_asc" },
 ];
@@ -47,7 +47,6 @@ function formatPrice(value, currency = "USD") {
     return `$${value.toFixed(2)}`;
   }
 }
-
 function timeAgo(ts) {
   if (!ts) return "";
   const mins = Math.floor((Date.now() - ts) / 60000);
@@ -63,22 +62,18 @@ function timeAgo(ts) {
 
 /** Build a lightweight client-side analytics snapshot from groups[].offers[] */
 function buildSnapshotFromGroups(groups) {
-  // flatten a reasonable number of offers (avoid huge arrays on big queries)
   const offers = [];
   for (const g of groups || []) {
     if (Array.isArray(g.offers)) {
-      // take up to 20 offers per group to limit work
       for (let i = 0; i < g.offers.length && i < 20; i++) {
         offers.push(g.offers[i]);
       }
     }
   }
-
   const prices = offers
     .map(o => (typeof o?.price === "number" ? o.price : null))
     .filter((n) => typeof n === "number");
 
-  // conditions (normalize to UPPER_SNAKE)
   const condCounts = {};
   for (const o of offers) {
     const key = (o?.condition || "UNKNOWN").toString().trim().toUpperCase().replace(/\s+/g, "_");
@@ -88,7 +83,6 @@ function buildSnapshotFromGroups(groups) {
     .sort((a,b) => b[1]-a[1])
     .map(([key, count]) => ({ key, count }));
 
-  // price summary
   let min = null, max = null, avg = null;
   if (prices.length) {
     min = Math.min(...prices);
@@ -96,7 +90,6 @@ function buildSnapshotFromGroups(groups) {
     avg = Math.round((prices.reduce((a,b)=>a+b,0) / prices.length) * 100) / 100;
   }
 
-  // histogram (8 buckets across [min, max], safe-guard for edge cases)
   let histogram = [], buckets = [];
   if (prices.length >= 2 && min !== null && max !== null && max > min) {
     const BIN_COUNT = 8;
@@ -114,9 +107,8 @@ function buildSnapshotFromGroups(groups) {
   return {
     price: { min, max, avg, histogram, buckets },
     conditions,
-    // Not available client-side from current payload:
-    buyingOptions: [], // needs explicit field from API to compute
-    brandsTop: [],     // would require brand signals in payload
+    buyingOptions: [],
+    brandsTop: [],
   };
 }
 
@@ -145,9 +137,17 @@ export default function PuttersPage() {
   const [keptCount, setKeptCount] = useState(null);
 
   const [expanded, setExpanded] = useState({});
-
-  // keep full response for future analytics (if backend starts returning it)
   const [apiData, setApiData] = useState(null);
+
+  // NEW: compare selection (up to 4)
+  const [selected, setSelected] = useState([]);
+  const toggleSelect = (group) =>
+    setSelected((prev) => {
+      const exists = prev.find((g) => g.model === group.model);
+      if (exists) return prev.filter((g) => g.model !== group.model);
+      const next = [...prev, group];
+      return next.slice(-4);
+    });
 
   const apiUrl = useMemo(() => {
     const params = new URLSearchParams();
@@ -162,8 +162,7 @@ export default function PuttersPage() {
     params.set("page", String(page));
     params.set("perPage", String(FIXED_PER_PAGE));
     params.set("group", groupMode ? "true" : "false");
-    // hint for newer backend (ignored by current one)
-    params.set("samplePages", "3");
+    params.set("samplePages", "3"); // hint for newer backend
     return `/api/putters?${params.toString()}`;
   }, [q, onlyComplete, minPrice, maxPrice, conds, buying, sortBy, page, groupMode, broaden]);
 
@@ -233,20 +232,18 @@ export default function PuttersPage() {
     setExpanded(next);
   }, [sortedGroups.map((g) => g.model).join("|")]);
 
-  const toggleExpand = (model) => setExpanded((prev) => ({ ...prev, [model]: !prev[model] }));
-
   const clearAll = () => {
     setQ(""); setOnlyComplete(true);
     setMinPrice(""); setMaxPrice("");
     setConds([]); setBuying([]);
     setSortBy("best_price_asc");
     setPage(1); setGroupMode(true); setBroaden(false);
+    setSelected([]);
   };
 
   const canPrev = hasPrev && page > 1 && !loading;
   const canNext = hasNext && !loading;
 
-  // Build a fallback snapshot from the data we already have (client-side)
   const fallbackSnapshot = useMemo(() => buildSnapshotFromGroups(groups), [groups]);
 
   return (
@@ -468,9 +465,7 @@ export default function PuttersPage() {
         </div>
       )}
 
-      {/* Analytics snapshot:
-          - If backend provides analytics, use it.
-          - Otherwise show client-side fallback from the current page's groups. */}
+      {/* Analytics snapshot (server-provided or client fallback) */}
       <MarketSnapshot
         snapshot={apiData?.analytics?.snapshot || fallbackSnapshot}
         meta={apiData?.meta}
@@ -497,12 +492,12 @@ export default function PuttersPage() {
         </div>
       )}
 
-      {/* GROUPED VIEW (default) */}
+      {/* GROUPED VIEW */}
       {q.trim() && !loading && !err && groupMode && (
         <>
           <section className="mt-6 grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-2">
             {sortedGroups.map((g) => {
-              const [isOpen, setIsOpen] = [!!expanded[g.model], () => {}];
+              const isOpen = !!expanded[g.model];
               const ordered =
                 sortBy === "best_price_desc"
                   ? [...g.offers].sort((a,b) => (b.price ?? -Infinity) - (a.price ?? -Infinity))
@@ -514,6 +509,10 @@ export default function PuttersPage() {
               const bestDelta = (typeof g.bestPrice === "number" && typeof med === "number" && med - g.bestPrice > 0)
                 ? { diff: med - g.bestPrice, pct: ((med - g.bestPrice)/med)*100 }
                 : null;
+
+              // Retailer range chip
+              const spread = n ? `${formatPrice(nums[0])}–${formatPrice(nums[n-1])}` : "—";
+              const isSelected = selected.find((x) => x.model === g.model);
 
               return (
                 <article key={g.model} className="overflow-hidden rounded-xl border border-gray-200 bg-white shadow-sm">
@@ -541,6 +540,9 @@ export default function PuttersPage() {
                         <div className="shrink-0 rounded-full bg-green-100 px-3 py-1 text-xs font-semibold text-green-700">
                           Best: {formatPrice(g.bestPrice, g.bestCurrency)}
                         </div>
+                        <div className="rounded-full bg-gray-100 px-3 py-1 text-[11px] text-gray-700">
+                          Range: {spread}
+                        </div>
                         {bestDelta && (
                           <div
                             className="rounded-full bg-emerald-50 px-3 py-1 text-[11px] font-medium text-emerald-700"
@@ -552,7 +554,6 @@ export default function PuttersPage() {
                       </div>
                     </div>
 
-                    {/* Expand/collapse was already wired; restoring handler */}
                     <button
                       onClick={() => setExpanded((prev) => ({ ...prev, [g.model]: !prev[g.model] }))}
                       className="mt-4 w-full rounded-md border border-gray-300 px-3 py-2 text-sm hover:bg-gray-50"
@@ -560,7 +561,17 @@ export default function PuttersPage() {
                       {isOpen ? "Hide offers" : `View offers (${g.count})`}
                     </button>
 
-                    {expanded[g.model] && (
+                    {/* Add to Compare */}
+                    <button
+                      onClick={() => toggleSelect(g)}
+                      className={`mt-2 w-full rounded-md border px-3 py-2 text-sm ${
+                        isSelected ? "border-blue-300 bg-blue-50" : "hover:bg-gray-50"
+                      }`}
+                    >
+                      {isSelected ? "Selected for Compare ✓" : "Add to Compare"}
+                    </button>
+
+                    {isOpen && (
                       <ul className="mt-3 space-y-2">
                         {ordered.slice(0, 10).map((o) => (
                           <li key={o.productId + o.url} className="flex items-center justify-between gap-3 rounded border border-gray-100 p-2">
@@ -682,6 +693,13 @@ export default function PuttersPage() {
           </div>
         </>
       )}
+
+      {/* Compare bar (pinned models) */}
+      <CompareBar
+        selectedGroups={selected}
+        onClear={() => setSelected([])}
+        onRemove={(model) => setSelected((prev) => prev.filter((g) => g.model !== model))}
+      />
     </main>
   );
 }
