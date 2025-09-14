@@ -1,19 +1,21 @@
 // app/api/_diag-ebay/route.js
 import { NextResponse } from "next/server";
 
-export const runtime = "nodejs"; // ensure Node runtime, not Edge
+export const runtime = "nodejs"; // force Node (not Edge)
 
 export async function GET() {
   const hasId = !!process.env.EBAY_CLIENT_ID;
   const hasSecret = !!process.env.EBAY_CLIENT_SECRET;
   const site = process.env.EBAY_SITE || "EBAY_US";
 
-  // try to get a token directly to surface any 401/403 text
   try {
     const id = process.env.EBAY_CLIENT_ID;
     const secret = process.env.EBAY_CLIENT_SECRET;
     if (!id || !secret) {
-      return NextResponse.json({ ok: false, step: "env", hasId, hasSecret, site, hint: "Set EBAY_CLIENT_ID/EBAY_CLIENT_SECRET" }, { status: 500 });
+      return NextResponse.json(
+        { ok: false, step: "env", hasId, hasSecret, site, hint: "Set EBAY_CLIENT_ID/EBAY_CLIENT_SECRET" },
+        { status: 500 }
+      );
     }
 
     const basic = Buffer.from(`${id}:${secret}`).toString("base64");
@@ -36,10 +38,8 @@ export async function GET() {
     }
     const { access_token } = JSON.parse(text);
 
-    // try a tiny Browse call
-    const q = "scotty cameron";
     const u = new URL("https://api.ebay.com/buy/browse/v1/item_summary/search");
-    u.searchParams.set("q", q);
+    u.searchParams.set("q", "scotty cameron");
     u.searchParams.set("limit", "1");
     u.searchParams.set("fieldgroups", "EXTENDED");
 
@@ -55,14 +55,16 @@ export async function GET() {
     });
 
     const btxt = await br.text();
-    return NextResponse.json({
-      ok: br.ok,
-      oauth_ok: true,
-      oauth_snippet: access_token ? "got_token" : "missing",
-      browse_status: br.status,
-      browse_body_snippet: btxt.slice(0, 600),
-    }, { status: br.ok ? 200 : 500 });
-
+    return NextResponse.json(
+      {
+        ok: br.ok,
+        oauth_ok: true,
+        oauth_snippet: access_token ? "got_token" : "missing",
+        browse_status: br.status,
+        browse_body_snippet: btxt.slice(0, 600),
+      },
+      { status: br.ok ? 200 : 500 }
+    );
   } catch (e) {
     return NextResponse.json({ ok: false, step: "exception", error: String(e) }, { status: 500 });
   }
