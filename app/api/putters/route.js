@@ -2,23 +2,20 @@
 import { NextResponse } from "next/server";
 
 /**
- * ENV
- * - EBAY_BROWSE_TOKEN : OAuth App token for eBay Browse API (production)
+ * ENV you need set in Vercel:
+ * - EBAY_BROWSE_TOKEN : OAuth App token for eBay Browse API
  * - EBAY_SITE         : optional, default "EBAY_US"
- *
- * If/when you adopt auto-refresh, replace the static token with getEbayAppToken() helper.
  */
-
 const EBAY_BROWSE_URL = "https://api.ebay.com/buy/browse/v1/item_summary/search";
 const EBAY_SITE = process.env.EBAY_SITE || "EBAY_US";
 const EBAY_TOKEN = process.env.EBAY_BROWSE_TOKEN;
 
-// ------------ utils ------------
+// ---------------- utils ----------------
 
-function safeNum(n) {
+const safeNum = (n) => {
   const x = Number(n);
   return Number.isFinite(x) ? x : null;
-}
+};
 
 function pickCheapestShipping(shippingOptions) {
   if (!Array.isArray(shippingOptions) || shippingOptions.length === 0) return null;
@@ -39,67 +36,109 @@ function pickCheapestShipping(shippingOptions) {
   };
 }
 
-/**
- * Parse specs from title:
- * - length (inches)
- * - family keyword
- * - headType: "BLADE" | "MALLET" (heuristic via family keywords)
- * - dexterity: "LEFT" | "RIGHT"
- * - hasHeadcover
- * - shaft: slant/flow/plumber/single bend (if mentioned)
- */
-function parseSpecsFromTitle(title = "") {
-  const t = String(title).toLowerCase();
+const norm = (s) => String(s || "").trim().toLowerCase();
 
-  // Length like 33", 34", 35 in, 34-35, 34/35
+function pickAspect(item, names = []) {
+  const lists = [
+    item?.itemSpecifics,
+    item?.localizedAspects,
+    item?.additionalProductIdentities,
+  ].filter(Boolean);
+
+  for (const list of lists) {
+    for (const ent of list) {
+      const n = norm(ent?.name);
+      if (!n) continue;
+      if (names.some(k => n === norm(k))) {
+        const v = ent?.value ?? ent?.values?.[0];
+        if (v) return String(v);
+      }
+    }
+  }
+  return null;
+}
+
+function coerceDex(val) {
+  const s = norm(val);
+  if (!s) return null;
+  if (/\bl(h|eft)\b|\bleft[-\s]?hand(ed)?\b/.test(s)) return "LEFT";
+  if (/\br(h|ight)\b|\bright[-\s]?hand(ed)?\b/.test(s)) return "RIGHT";
+  if (/^l\/h$|^l-h$|^l\s*h$/.test(s)) return "LEFT";
+  if (/^r\/h$|^r-h$|^r\s*h$/.test(s)) return "RIGHT";
+  return null;
+}
+
+function dexFromTitle(title = "") {
+  const t = ` ${norm(title)} `;
+  if (/(^|\W)l\/h(\W|$)|(^|\W)l-h(\W|$)|(^|\W)l\s*h(\W|$)|(^|\W)lh(\W|$)|\bleft[-\s]?hand(?:ed)?\b/.test(t)) {
+    return "LEFT";
+  }
+  if (/(^|\W)r\/h(\W|$)|(^|\W)r-h(\W|$)|(^|\W)r\s*h(\W|$)|(^|\W)rh(\W|$)|\bright[-\s]?hand(?:ed)?\b/.test(t)) {
+    return "RIGHT";
+  }
+  return null;
+}
+
+function headTypeFromTitle(title = "") {
+  const t = norm(title);
+  const MALLET_KEYS = ["phantom", "fastback", "squareback", "futura", "mallet"];
+  const BLADE_KEYS  = ["newport", "anser", "tei3", "blade", "studio select", "special select"];
+  if (MALLET_KEYS.some(k => t.includes(k))) return "MALLET";
+  if (BLADE_KEYS.some(k => t.includes(k))) return "BLADE";
+  return null;
+}
+
+function parseLengthFromTitle(title = "") {
+  const t = norm(title);
   let length = null;
   const m1 = t.match(/(\d{2}(?:\.\d)?)\s*(?:\"|in\b|inch(?:es)?\b)/i);
-  const m2 = t.match(/\b(32|33|34|35|36|37)\s*(?:\/|-)\s*(32|33|34|35|36|37)\b/); // 34/35 ranges
+  const m2 = t.match(/\b(32|33|34|35|36|37)\s*(?:\/|-)\s*(32|33|34|35|36|37)\b/);
   if (m1) length = Number(m1[1]);
   else if (m2) length = Math.max(Number(m2[1]), Number(m2[2]));
+  return length;
+}
 
-  // Family keywords (expand as needed)
+function parseSpecsFromItem(item) {
+  const title = item?.title || "";
+  const dex = coerceDex(pickAspect(item, ["Dexterity", "Golf Club Dexterity", "Hand", "Handedness"])) || dexFromTitle(title);
+  const aHead = pickAspect(item, ["Putter Head Type", "Head Type"]);
+  let headType = null;
+  if (aHead) {
+    const s = norm(aHead);
+    if (/mallet/.test(s)) headType = "MALLET";
+    else if (/blade|newport|anser|tei3/.test(s)) headType = "BLADE";
+  }
+  headType = headType || headTypeFromTitle(title);
+
+  const length = parseLengthFromTitle(title);
+  const hasHeadcover = /head\s*cover|\bhc\b|headcover/i.test(title);
+  const shaftMatch = /slant|flow|plumber|single bend/i.exec(title);
+  const shaft = shaftMatch ? shaftMatch[0] : null;
+
+  // family keywords to help grouping
   const FAMILIES = [
     "newport 2.5", "newport 2", "newport",
     "phantom 11.5", "phantom 11", "phantom 5.5", "phantom 5",
     "fastback", "squareback", "futura", "tei3",
     "studio select", "special select",
-    "anser", "blade", "mallet",
+    "anser",
   ];
   let family = null;
+  const tl = norm(title);
   for (const k of FAMILIES) {
-    if (t.includes(k)) { family = k; break; }
+    if (tl.includes(k)) { family = k; break; }
   }
 
-  // Head type mapping by family keywords
-  const MALLET_KEYS = ["phantom", "fastback", "squareback", "futura", "mallet"];
-  const BLADE_KEYS  = ["newport", "anser", "tei3", "blade", "studio select", "special select"];
-  let headType = null;
-  if (MALLET_KEYS.some(k => t.includes(k))) headType = "MALLET";
-  if (BLADE_KEYS.some(k => t.includes(k))) headType = headType || "BLADE";
-
-  // Dexterity detection (RH/LH and words)
-  let dexterity = null;
-  if (/\bright[-\s]?hand(ed)?\b|\brh\b/.test(t)) dexterity = "RIGHT";
-  if (/\bleft[-\s]?hand(ed)?\b|\blh\b/.test(t))  dexterity = "LEFT";
-
-  const hasHeadcover = /head\s*cover|\bhc\b|headcover/.test(t);
-  const shaftMatch = /slant|flow|plumber|single bend/.exec(t);
-  const shaft = shaftMatch ? shaftMatch[0] : null;
-
-  return { length, family, headType, dexterity, hasHeadcover, shaft };
+  return { length, family, headType, dexterity: dex, hasHeadcover, shaft };
 }
 
-function normalizeModelFromTitle(title = "") {
-  const t = title.toLowerCase()
-    .replace(/scotty\s*cameron|titleist|putter|golf|right\s*hand(ed)?|left\s*hand(ed)?/g, "")
+function normalizeModelFromTitle(title = "", fallbackFamily = null) {
+  if (fallbackFamily) return fallbackFamily;
+  const t = title
+    .toLowerCase()
+    .replace(/scotty\s*cameron|titleist|putter|golf|\b(rh|lh)\b|right\s*hand(ed)?|left\s*hand(ed)?/g, "")
     .replace(/\s+/g, " ")
     .trim();
-
-  const specs = parseSpecsFromTitle(title);
-  if (specs.family) return specs.family;
-
-  // fallback: pick first 2–4 meaningful tokens
   const tokens = t.split(" ").filter(Boolean).slice(0, 4);
   return tokens.length ? tokens.join(" ") : (title || "unknown").slice(0, 50);
 }
@@ -113,9 +152,8 @@ function enrichOffer(raw) {
   const buyingOptions = Array.isArray(raw?.buyingOptions) ? raw.buyingOptions : [];
   const bidCount = raw?.bidCount != null ? Number(raw.bidCount) : null;
 
-  const specs = parseSpecsFromTitle(raw?.title);
+  const specs = parseSpecsFromItem(raw);
 
-  // total price (item + cheapest shipping if available)
   const itemPrice = safeNum(raw?.price?.value);
   const shipCost = shipping?.cost ?? 0;
   const totalPrice = (itemPrice != null && shipCost != null) ? itemPrice + shipCost : itemPrice ?? null;
@@ -142,38 +180,33 @@ function enrichOffer(raw) {
       days: returnDays,
     },
     buying: {
-      types: buyingOptions,         // e.g. ["FIXED_PRICE","BEST_OFFER"]
-      bidCount: bidCount,           // for auctions (if available)
+      types: buyingOptions,
+      bidCount: bidCount,
     },
-    specs,                          // { length, family, headType, dexterity, hasHeadcover, shaft }
+    specs, // { length, family, headType, dexterity, ... }
   };
 }
 
-// ------------ ebay fetch ------------
+// ---------------- ebay fetch ----------------
 
 async function fetchEbayBrowse({ q, limit = 50, offset = 0, sort }) {
-  if (!EBAY_TOKEN) {
-    throw new Error("Missing EBAY_BROWSE_TOKEN");
-  }
+  if (!EBAY_TOKEN) throw new Error("Missing EBAY_BROWSE_TOKEN");
 
   const url = new URL(EBAY_BROWSE_URL);
   url.searchParams.set("q", q || "");
   url.searchParams.set("limit", String(limit));
   url.searchParams.set("offset", String(offset));
-  url.searchParams.set("fieldgroups", "EXTENDED"); // get shipping/seller/returns/etc
-  url.searchParams.set("X-EBAY-C-ENDUSERCTX", `contextualLocation=${EBAY_SITE}`);
-
-  // sort mapping: "newlylisted" -> "newlyListed"
-  if (sort === "newlylisted") {
-    url.searchParams.set("sort", "newlyListed");
-  }
+  url.searchParams.set("fieldgroups", "EXTENDED");
+  if (sort === "newlylisted") url.searchParams.set("sort", "newlyListed");
 
   const res = await fetch(url.toString(), {
     headers: {
-      "Authorization": `Bearer ${EBAY_TOKEN}`,
-      "Accept": "application/json",
+      Authorization: `Bearer ${EBAY_TOKEN}`,
+      Accept: "application/json",
       "Content-Type": "application/json",
       "X-EBAY-C-MARKETPLACE-ID": EBAY_SITE,
+      // ✅ this was previously (incorrectly) added as a query param
+      "X-EBAY-C-ENDUSERCTX": `contextualLocation=${EBAY_SITE}`,
     },
     cache: "no-store",
     next: { revalidate: 0 },
@@ -186,7 +219,7 @@ async function fetchEbayBrowse({ q, limit = 50, offset = 0, sort }) {
   return res.json();
 }
 
-// ------------ core handler ------------
+// ---------------- handler ----------------
 
 export async function GET(req) {
   const { searchParams } = new URL(req.url);
@@ -196,17 +229,15 @@ export async function GET(req) {
   const onlyComplete = searchParams.get("onlyComplete") === "true";
   const minPrice = safeNum(searchParams.get("minPrice"));
   const maxPrice = safeNum(searchParams.get("maxPrice"));
-  const conds = (searchParams.get("conditions") || "").split(",").map(s => s.trim()).filter(Boolean); // NEW, USED, etc
+  const conds = (searchParams.get("conditions") || "").split(",").map(s => s.trim()).filter(Boolean);
   const buyingOptions = (searchParams.get("buyingOptions") || "").split(",").map(s => s.trim()).filter(Boolean);
-  const sort = searchParams.get("sort") || ""; // "newlylisted"
+  const sort = searchParams.get("sort") || "";
 
   // NEW filters
-  const dex = (searchParams.get("dex") || "").toUpperCase();   // "", "LEFT", "RIGHT"
-  const head = (searchParams.get("head") || "").toUpperCase(); // "", "BLADE", "MALLET"
-  const lengthsParam = (searchParams.get("lengths") || "").trim(); // e.g. "33,34"
-  const lengthList = lengthsParam
-    ? lengthsParam.split(",").map(s => Number(s)).filter(n => Number.isFinite(n))
-    : [];
+  const dex = (searchParams.get("dex") || "").toUpperCase();     // "", "LEFT", "RIGHT"
+  const head = (searchParams.get("head") || "").toUpperCase();   // "", "BLADE", "MALLET"
+  const lengthsParam = (searchParams.get("lengths") || "").trim();
+  const lengthList = lengthsParam ? lengthsParam.split(",").map(Number).filter(Number.isFinite) : [];
 
   const page = Math.max(1, Number(searchParams.get("page") || "1"));
   const perPage = Math.max(1, Math.min(50, Number(searchParams.get("perPage") || "10")));
@@ -228,18 +259,16 @@ export async function GET(req) {
   }
 
   try {
-    // Pull multiple Browse pages to improve recall
+    // Pull multiple pages for recall
     const ebayLimit = 50;
     const fetches = [];
     for (let i = 0; i < samplePages; i++) {
-      const offset = i * ebayLimit;
-      fetches.push(fetchEbayBrowse({ q, limit: ebayLimit, offset, sort }));
+      fetches.push(fetchEbayBrowse({ q, limit: ebayLimit, offset: i * ebayLimit, sort }));
     }
-
     const results = await Promise.allSettled(fetches);
+
     const items = [];
     let totalFromEbay = 0;
-
     for (const r of results) {
       if (r.status === "fulfilled") {
         const data = r.value || {};
@@ -248,16 +277,18 @@ export async function GET(req) {
         for (const it of arr) items.push(it);
       }
     }
-
     const fetchedCount = items.length;
 
-    // Map to offers + enrichment
+    // Map → offers
     let offers = items.map((item) => {
       const extra = enrichOffer(item);
       const image =
         item?.image?.imageUrl ||
         item?.thumbnailImages?.[0]?.imageUrl ||
         null;
+
+      const family = extra?.specs?.family || null;
+      const modelKey = normalizeModelFromTitle(item?.title || "", family);
 
       return {
         productId: item?.itemId || item?.legacyItemId || item?.itemHref || item?.title,
@@ -270,21 +301,19 @@ export async function GET(req) {
         createdAt: item?.itemCreationDate || item?.itemEndDate || item?.estimatedAvailDate || null,
         image,
 
-        // NEW fields:
         totalPrice: extra.totalPrice,
         shipping: extra.shipping,
         seller: extra.seller,
         location: extra.location,
         returns: extra.returns,
         buying: extra.buying,
-        specs: extra.specs,  // { length, headType, dexterity, ... }
+        specs: extra.specs,
 
-        // For grouping convenience:
-        __model: normalizeModelFromTitle(item?.title || ""),
+        __model: modelKey,
       };
     });
 
-    // Quality filter: price & image presence
+    // Quality filter
     if (onlyComplete) {
       offers = offers.filter(o => typeof o.price === "number" && o.image);
     }
@@ -293,7 +322,7 @@ export async function GET(req) {
     if (minPrice != null) offers = offers.filter(o => typeof o.price === "number" && o.price >= minPrice);
     if (maxPrice != null) offers = offers.filter(o => typeof o.price === "number" && o.price <= maxPrice);
 
-    // Conditions
+    // Condition filter
     if (conds.length) {
       const set = new Set(conds.map(s => s.toUpperCase()));
       offers = offers.filter(o => o?.condition && set.has(String(o.condition).toUpperCase()));
@@ -308,17 +337,13 @@ export async function GET(req) {
       });
     }
 
-    // NEW: Dexterity filter
+    // Dex/head/lengths (apply ONLY if provided)
     if (dex === "LEFT" || dex === "RIGHT") {
       offers = offers.filter(o => (o?.specs?.dexterity || "").toUpperCase() === dex);
     }
-
-    // NEW: Head type filter
     if (head === "BLADE" || head === "MALLET") {
       offers = offers.filter(o => (o?.specs?.headType || "").toUpperCase() === head);
     }
-
-    // NEW: Common Lengths filter (exact match within ±0.5")
     if (lengthList.length) {
       offers = offers.filter(o => {
         const L = Number(o?.specs?.length);
@@ -327,18 +352,18 @@ export async function GET(req) {
       });
     }
 
-    // Sorting
+    // Sort
     if (sort === "newlylisted") {
       offers.sort((a, b) => {
         const ta = a.createdAt ? new Date(a.createdAt).getTime() : 0;
         const tb = b.createdAt ? new Date(b.createdAt).getTime() : 0;
-        return tb - ta; // newest first
+        return tb - ta;
       });
     }
 
     const keptCount = offers.length;
 
-    // (Optional) simple analytics snapshot for your MarketSnapshot component
+    // simple analytics
     const analytics = (() => {
       const byHead = { BLADE: 0, MALLET: 0 };
       const byDex = { LEFT: 0, RIGHT: 0 };
@@ -346,12 +371,10 @@ export async function GET(req) {
       for (const o of offers) {
         const h = (o?.specs?.headType || "").toUpperCase();
         if (h === "BLADE" || h === "MALLET") byHead[h]++;
-
         const d = (o?.specs?.dexterity || "").toUpperCase();
         if (d === "LEFT" || d === "RIGHT") byDex[d]++;
-
         const L = Number(o?.specs?.length);
-        if (L) {
+        if (Number.isFinite(L)) {
           const nearest = [33,34,35,36].reduce((p,c) => Math.abs(c - L) < Math.abs(p - L) ? c : p, 34);
           if (Math.abs(nearest - L) <= 0.5) byLen[nearest]++;
         }
@@ -361,19 +384,14 @@ export async function GET(req) {
 
     // Pagination
     if (!group) {
-      // Flat list
       const start = (page - 1) * perPage;
       const pageOffers = offers.slice(start, start + perPage);
-
-      const hasPrev = page > 1;
-      const hasNext = start + perPage < keptCount;
-
       return NextResponse.json({
         ok: true,
         offers: pageOffers,
         groups: [],
-        hasNext,
-        hasPrev,
+        hasNext: start + perPage < keptCount,
+        hasPrev: page > 1,
         fetchedCount,
         keptCount,
         meta: {
@@ -432,18 +450,15 @@ export async function GET(req) {
       groups.sort((a, b) => (a.bestPrice ?? Infinity) - (b.bestPrice ?? Infinity));
     }
 
-    // Group-level pagination
     const start = (page - 1) * perPage;
     const pageGroups = groups.slice(start, start + perPage);
-    const hasPrev = page > 1;
-    const hasNext = start + perPage < groups.length;
 
     return NextResponse.json({
       ok: true,
       groups: pageGroups,
       offers: [],
-      hasNext,
-      hasPrev,
+      hasNext: start + perPage < groups.length,
+      hasPrev: page > 1,
       fetchedCount,
       keptCount,
       meta: {
