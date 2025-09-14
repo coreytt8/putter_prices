@@ -1,17 +1,44 @@
 /* eslint-disable no-console */
-import { NextResponse } from "next/server";
 
-/**
- * ENV you need set in Vercel:
- * - EBAY_BROWSE_TOKEN : OAuth App token for eBay Browse API
- * - EBAY_SITE         : optional, default "EBAY_US"
- */
+// ===== Token fetch & cache (client-credentials) =====
+let _tok = { val: null, exp: 0 }; // epoch ms
+
+async function getEbayToken() {
+  const now = Date.now();
+  if (_tok.val && now < _tok.exp) return _tok.val;
+
+  const id = process.env.EBAY_CLIENT_ID;
+  const secret = process.env.EBAY_CLIENT_SECRET;
+  if (!id || !secret) throw new Error("Missing EBAY_CLIENT_ID/EBAY_CLIENT_SECRET");
+
+  const basic = Buffer.from(`${id}:${secret}`).toString("base64");
+  const res = await fetch("https://api.ebay.com/identity/v1/oauth2/token", {
+    method: "POST",
+    headers: {
+      Authorization: `Basic ${basic}`,
+      "Content-Type": "application/x-www-form-urlencoded",
+    },
+    body: new URLSearchParams({
+      grant_type: "client_credentials",
+      scope: "https://api.ebay.com/oauth/api_scope",
+    }),
+  });
+
+  if (!res.ok) {
+    const txt = await res.text().catch(() => "");
+    throw new Error(`eBay OAuth ${res.status}: ${txt}`);
+  }
+
+  const json = await res.json();
+  const ttl = (json.expires_in || 7200) * 1000;
+  _tok = { val: json.access_token, exp: Date.now() + ttl - 10 * 60 * 1000 }; // refresh 10m early
+  return _tok.val;
+}
+
 const EBAY_BROWSE_URL = "https://api.ebay.com/buy/browse/v1/item_summary/search";
 const EBAY_SITE = process.env.EBAY_SITE || "EBAY_US";
-const EBAY_TOKEN = process.env.EBAY_BROWSE_TOKEN;
 
-// ---------------- utils ----------------
-
+// ===== Helpers =====
 const safeNum = (n) => {
   const x = Number(n);
   return Number.isFinite(x) ? x : null;
@@ -39,17 +66,12 @@ function pickCheapestShipping(shippingOptions) {
 const norm = (s) => String(s || "").trim().toLowerCase();
 
 function pickAspect(item, names = []) {
-  const lists = [
-    item?.itemSpecifics,
-    item?.localizedAspects,
-    item?.additionalProductIdentities,
-  ].filter(Boolean);
-
+  const lists = [item?.itemSpecifics, item?.localizedAspects, item?.additionalProductIdentities].filter(Boolean);
   for (const list of lists) {
     for (const ent of list) {
       const n = norm(ent?.name);
       if (!n) continue;
-      if (names.some(k => n === norm(k))) {
+      if (names.some((k) => n === norm(k))) {
         const v = ent?.value ?? ent?.values?.[0];
         if (v) return String(v);
       }
@@ -70,21 +92,17 @@ function coerceDex(val) {
 
 function dexFromTitle(title = "") {
   const t = ` ${norm(title)} `;
-  if (/(^|\W)l\/h(\W|$)|(^|\W)l-h(\W|$)|(^|\W)l\s*h(\W|$)|(^|\W)lh(\W|$)|\bleft[-\s]?hand(?:ed)?\b/.test(t)) {
-    return "LEFT";
-  }
-  if (/(^|\W)r\/h(\W|$)|(^|\W)r-h(\W|$)|(^|\W)r\s*h(\W|$)|(^|\W)rh(\W|$)|\bright[-\s]?hand(?:ed)?\b/.test(t)) {
-    return "RIGHT";
-  }
+  if (/(^|\W)l\/h(\W|$)|(^|\W)l-h(\W|$)|(^|\W)l\s*h(\W|$)|(^|\W)lh(\W|$)|\bleft[-\s]?hand(?:ed)?\b/.test(t)) return "LEFT";
+  if (/(^|\W)r\/h(\W|$)|(^|\W)r-h(\W|$)|(^|\W)r\s*h(\W|$)|(^|\W)rh(\W|$)|\bright[-\s]?hand(?:ed)?\b/.test(t)) return "RIGHT";
   return null;
 }
 
 function headTypeFromTitle(title = "") {
   const t = norm(title);
   const MALLET_KEYS = ["phantom", "fastback", "squareback", "futura", "mallet"];
-  const BLADE_KEYS  = ["newport", "anser", "tei3", "blade", "studio select", "special select"];
-  if (MALLET_KEYS.some(k => t.includes(k))) return "MALLET";
-  if (BLADE_KEYS.some(k => t.includes(k))) return "BLADE";
+  const BLADE_KEYS = ["newport", "anser", "tei3", "blade", "studio select", "special select"];
+  if (MALLET_KEYS.some((k) => t.includes(k))) return "MALLET";
+  if (BLADE_KEYS.some((k) => t.includes(k))) return "BLADE";
   return null;
 }
 
@@ -101,6 +119,7 @@ function parseLengthFromTitle(title = "") {
 function parseSpecsFromItem(item) {
   const title = item?.title || "";
   const dex = coerceDex(pickAspect(item, ["Dexterity", "Golf Club Dexterity", "Hand", "Handedness"])) || dexFromTitle(title);
+
   const aHead = pickAspect(item, ["Putter Head Type", "Head Type"]);
   let headType = null;
   if (aHead) {
@@ -115,18 +134,19 @@ function parseSpecsFromItem(item) {
   const shaftMatch = /slant|flow|plumber|single bend/i.exec(title);
   const shaft = shaftMatch ? shaftMatch[0] : null;
 
-  // family keywords to help grouping
   const FAMILIES = [
     "newport 2.5", "newport 2", "newport",
     "phantom 11.5", "phantom 11", "phantom 5.5", "phantom 5",
     "fastback", "squareback", "futura", "tei3",
-    "studio select", "special select",
-    "anser",
+    "studio select", "special select", "anser",
   ];
   let family = null;
   const tl = norm(title);
   for (const k of FAMILIES) {
-    if (tl.includes(k)) { family = k; break; }
+    if (tl.includes(k)) {
+      family = k;
+      break;
+    }
   }
 
   return { length, family, headType, dexterity: dex, hasHeadcover, shaft };
@@ -156,41 +176,29 @@ function enrichOffer(raw) {
 
   const itemPrice = safeNum(raw?.price?.value);
   const shipCost = shipping?.cost ?? 0;
-  const totalPrice = (itemPrice != null && shipCost != null) ? itemPrice + shipCost : itemPrice ?? null;
+  const totalPrice = itemPrice != null && shipCost != null ? itemPrice + shipCost : itemPrice ?? null;
 
   return {
-    shipping: shipping ? {
-      cost: shipping.cost,
-      currency: shipping.currency || raw?.price?.currency || "USD",
-      free: Boolean(shipping.free),
-      type: shipping.type || null,
-    } : null,
+    shipping: shipping
+      ? {
+          cost: shipping.cost,
+          currency: shipping.currency || raw?.price?.currency || "USD",
+          free: Boolean(shipping.free),
+          type: shipping.type || null,
+        }
+      : null,
     totalPrice,
-    seller: {
-      feedbackPct: sellerPct,
-      feedbackScore: sellerScore,
-      username: raw?.seller?.username || null,
-    },
-    location: {
-      country: raw?.itemLocation?.country || null,
-      postalCode: raw?.itemLocation?.postalCode || null,
-    },
-    returns: {
-      accepted: returnsAccepted,
-      days: returnDays,
-    },
-    buying: {
-      types: buyingOptions,
-      bidCount: bidCount,
-    },
+    seller: { feedbackPct: sellerPct, feedbackScore: sellerScore, username: raw?.seller?.username || null },
+    location: { country: raw?.itemLocation?.country || null, postalCode: raw?.itemLocation?.postalCode || null },
+    returns: { accepted: returnsAccepted, days: returnDays },
+    buying: { types: buyingOptions, bidCount },
     specs, // { length, family, headType, dexterity, ... }
   };
 }
 
-// ---------------- ebay fetch ----------------
-
+// ===== eBay call =====
 async function fetchEbayBrowse({ q, limit = 50, offset = 0, sort }) {
-  if (!EBAY_TOKEN) throw new Error("Missing EBAY_BROWSE_TOKEN");
+  const token = await getEbayToken();
 
   const url = new URL(EBAY_BROWSE_URL);
   url.searchParams.set("q", q || "");
@@ -199,53 +207,59 @@ async function fetchEbayBrowse({ q, limit = 50, offset = 0, sort }) {
   url.searchParams.set("fieldgroups", "EXTENDED");
   if (sort === "newlylisted") url.searchParams.set("sort", "newlyListed");
 
-  const res = await fetch(url.toString(), {
-    headers: {
-      Authorization: `Bearer ${EBAY_TOKEN}`,
-      Accept: "application/json",
-      "Content-Type": "application/json",
-      "X-EBAY-C-MARKETPLACE-ID": EBAY_SITE,
-      // ✅ this was previously (incorrectly) added as a query param
-      "X-EBAY-C-ENDUSERCTX": `contextualLocation=${EBAY_SITE}`,
-    },
-    cache: "no-store",
-    next: { revalidate: 0 },
-  });
+  async function call(bearer) {
+    return fetch(url.toString(), {
+      headers: {
+        Authorization: `Bearer ${bearer}`,
+        Accept: "application/json",
+        "Content-Type": "application/json",
+        "X-EBAY-C-MARKETPLACE-ID": EBAY_SITE,
+        "X-EBAY-C-ENDUSERCTX": `contextualLocation=${EBAY_SITE}`,
+      },
+    });
+  }
 
+  let res = await call(token);
+  if (res.status === 401 || res.status === 403) {
+    // force refresh once
+    _tok = { val: null, exp: 0 };
+    const fresh = await getEbayToken();
+    res = await call(fresh);
+  }
   if (!res.ok) {
-    const text = await res.text().catch(() => "");
-    throw new Error(`eBay Browse error ${res.status}: ${text}`);
+    const txt = await res.text().catch(() => "");
+    throw new Error(`eBay Browse error ${res.status}: ${txt}`);
   }
   return res.json();
 }
 
-// ---------------- handler ----------------
+// ===== API Route (pages router) =====
+export default async function handler(req, res) {
+  if (req.method !== "GET") return res.status(405).json({ ok: false, error: "Method Not Allowed" });
 
-export async function GET(req) {
-  const { searchParams } = new URL(req.url);
+  const sp = req.query;
+  const q = (sp.q || "").toString().trim();
+  const group = (sp.group || "true") === "true";
+  const onlyComplete = sp.onlyComplete === "true";
+  const minPrice = safeNum(sp.minPrice);
+  const maxPrice = safeNum(sp.maxPrice);
+  const conds = (sp.conditions || "").toString().split(",").map((s) => s.trim()).filter(Boolean);
+  const buyingOptions = (sp.buyingOptions || "").toString().split(",").map((s) => s.trim()).filter(Boolean);
+  const sort = (sp.sort || "").toString();
 
-  const q = (searchParams.get("q") || "").trim();
-  const group = (searchParams.get("group") || "true") === "true";
-  const onlyComplete = searchParams.get("onlyComplete") === "true";
-  const minPrice = safeNum(searchParams.get("minPrice"));
-  const maxPrice = safeNum(searchParams.get("maxPrice"));
-  const conds = (searchParams.get("conditions") || "").split(",").map(s => s.trim()).filter(Boolean);
-  const buyingOptions = (searchParams.get("buyingOptions") || "").split(",").map(s => s.trim()).filter(Boolean);
-  const sort = searchParams.get("sort") || "";
-
-  // NEW filters
-  const dex = (searchParams.get("dex") || "").toUpperCase();     // "", "LEFT", "RIGHT"
-  const head = (searchParams.get("head") || "").toUpperCase();   // "", "BLADE", "MALLET"
-  const lengthsParam = (searchParams.get("lengths") || "").trim();
+  // new filters
+  const dex = (sp.dex || "").toString().toUpperCase(); // LEFT/RIGHT/""
+  const head = (sp.head || "").toString().toUpperCase(); // BLADE/MALLET/""
+  const lengthsParam = (sp.lengths || "").toString().trim();
   const lengthList = lengthsParam ? lengthsParam.split(",").map(Number).filter(Number.isFinite) : [];
 
-  const page = Math.max(1, Number(searchParams.get("page") || "1"));
-  const perPage = Math.max(1, Math.min(50, Number(searchParams.get("perPage") || "10")));
-  const broaden = searchParams.get("broaden") === "true";
-  const samplePages = Math.max(1, Math.min(5, Number(searchParams.get("samplePages") || (broaden ? 3 : 1))));
+  const page = Math.max(1, Number(sp.page || "1"));
+  const perPage = Math.max(1, Math.min(50, Number(sp.perPage || "10")));
+  const broaden = sp.broaden === "true";
+  const samplePages = Math.max(1, Math.min(5, Number(sp.samplePages || (broaden ? 3 : 1))));
 
   if (!q) {
-    return NextResponse.json({
+    return res.status(200).json({
       ok: true,
       groups: [],
       offers: [],
@@ -259,13 +273,12 @@ export async function GET(req) {
   }
 
   try {
-    // Pull multiple pages for recall
-    const ebayLimit = 50;
-    const fetches = [];
+    const limit = 50;
+    const calls = [];
     for (let i = 0; i < samplePages; i++) {
-      fetches.push(fetchEbayBrowse({ q, limit: ebayLimit, offset: i * ebayLimit, sort }));
+      calls.push(fetchEbayBrowse({ q, limit, offset: i * limit, sort }));
     }
-    const results = await Promise.allSettled(fetches);
+    const results = await Promise.allSettled(calls);
 
     const items = [];
     let totalFromEbay = 0;
@@ -274,21 +287,16 @@ export async function GET(req) {
         const data = r.value || {};
         totalFromEbay = Math.max(totalFromEbay, Number(data?.total || 0));
         const arr = Array.isArray(data?.itemSummaries) ? data.itemSummaries : [];
-        for (const it of arr) items.push(it);
+        items.push(...arr);
       }
     }
+
     const fetchedCount = items.length;
 
-    // Map → offers
     let offers = items.map((item) => {
       const extra = enrichOffer(item);
-      const image =
-        item?.image?.imageUrl ||
-        item?.thumbnailImages?.[0]?.imageUrl ||
-        null;
-
-      const family = extra?.specs?.family || null;
-      const modelKey = normalizeModelFromTitle(item?.title || "", family);
+      const image = item?.image?.imageUrl || item?.thumbnailImages?.[0]?.imageUrl || null;
+      const modelKey = normalizeModelFromTitle(item?.title || "", extra?.specs?.family || null);
 
       return {
         productId: item?.itemId || item?.legacyItemId || item?.itemHref || item?.title,
@@ -313,46 +321,38 @@ export async function GET(req) {
       };
     });
 
-    // Quality filter
     if (onlyComplete) {
-      offers = offers.filter(o => typeof o.price === "number" && o.image);
+      offers = offers.filter((o) => typeof o.price === "number" && o.image);
     }
+    if (minPrice != null) offers = offers.filter((o) => typeof o.price === "number" && o.price >= minPrice);
+    if (maxPrice != null) offers = offers.filter((o) => typeof o.price === "number" && o.price <= maxPrice);
 
-    // Price range
-    if (minPrice != null) offers = offers.filter(o => typeof o.price === "number" && o.price >= minPrice);
-    if (maxPrice != null) offers = offers.filter(o => typeof o.price === "number" && o.price <= maxPrice);
-
-    // Condition filter
     if (conds.length) {
-      const set = new Set(conds.map(s => s.toUpperCase()));
-      offers = offers.filter(o => o?.condition && set.has(String(o.condition).toUpperCase()));
+      const set = new Set(conds.map((s) => s.toUpperCase()));
+      offers = offers.filter((o) => o?.condition && set.has(String(o.condition).toUpperCase()));
     }
-
-    // Buying options
     if (buyingOptions.length) {
-      const set = new Set(buyingOptions.map(s => s.toUpperCase()));
-      offers = offers.filter(o => {
+      const set = new Set(buyingOptions.map((s) => s.toUpperCase()));
+      offers = offers.filter((o) => {
         const types = Array.isArray(o?.buying?.types) ? o.buying.types : [];
-        return types.some(t => set.has(String(t).toUpperCase()));
+        return types.some((t) => set.has(String(t).toUpperCase()));
       });
     }
 
-    // Dex/head/lengths (apply ONLY if provided)
     if (dex === "LEFT" || dex === "RIGHT") {
-      offers = offers.filter(o => (o?.specs?.dexterity || "").toUpperCase() === dex);
+      offers = offers.filter((o) => (o?.specs?.dexterity || "").toUpperCase() === dex);
     }
     if (head === "BLADE" || head === "MALLET") {
-      offers = offers.filter(o => (o?.specs?.headType || "").toUpperCase() === head);
+      offers = offers.filter((o) => (o?.specs?.headType || "").toUpperCase() === head);
     }
     if (lengthList.length) {
-      offers = offers.filter(o => {
+      offers = offers.filter((o) => {
         const L = Number(o?.specs?.length);
         if (!Number.isFinite(L)) return false;
-        return lengthList.some(sel => Math.abs(L - sel) <= 0.5);
+        return lengthList.some((sel) => Math.abs(L - sel) <= 0.5);
       });
     }
 
-    // Sort
     if (sort === "newlylisted") {
       offers.sort((a, b) => {
         const ta = a.createdAt ? new Date(a.createdAt).getTime() : 0;
@@ -363,7 +363,6 @@ export async function GET(req) {
 
     const keptCount = offers.length;
 
-    // simple analytics
     const analytics = (() => {
       const byHead = { BLADE: 0, MALLET: 0 };
       const byDex = { LEFT: 0, RIGHT: 0 };
@@ -375,18 +374,17 @@ export async function GET(req) {
         if (d === "LEFT" || d === "RIGHT") byDex[d]++;
         const L = Number(o?.specs?.length);
         if (Number.isFinite(L)) {
-          const nearest = [33,34,35,36].reduce((p,c) => Math.abs(c - L) < Math.abs(p - L) ? c : p, 34);
+          const nearest = [33, 34, 35, 36].reduce((p, c) => (Math.abs(c - L) < Math.abs(p - L) ? c : p), 34);
           if (Math.abs(nearest - L) <= 0.5) byLen[nearest]++;
         }
       }
       return { snapshot: { byHead, byDex, byLen } };
     })();
 
-    // Pagination
     if (!group) {
       const start = (page - 1) * perPage;
       const pageOffers = offers.slice(start, start + perPage);
-      return NextResponse.json({
+      return res.status(200).json({
         ok: true,
         offers: pageOffers,
         groups: [],
@@ -395,7 +393,7 @@ export async function GET(req) {
         fetchedCount,
         keptCount,
         meta: {
-          total: totalFromEbay || keptCount,
+          total: keptCount,
           returned: pageOffers.length,
           cards: pageOffers.length,
           page,
@@ -442,8 +440,12 @@ export async function GET(req) {
 
     if (sort === "newlylisted") {
       groups.sort((a, b) => {
-        const ta = a.offers.length ? Math.max(...a.offers.map(o => o.createdAt ? new Date(o.createdAt).getTime() : 0)) : 0;
-        const tb = b.offers.length ? Math.max(...b.offers.map(o => o.createdAt ? new Date(o.createdAt).getTime() : 0)) : 0;
+        const ta = a.offers.length
+          ? Math.max(...a.offers.map((o) => (o.createdAt ? new Date(o.createdAt).getTime() : 0)))
+          : 0;
+        const tb = b.offers.length
+          ? Math.max(...b.offers.map((o) => (o.createdAt ? new Date(o.createdAt).getTime() : 0)))
+          : 0;
         return tb - ta;
       });
     } else {
@@ -453,7 +455,7 @@ export async function GET(req) {
     const start = (page - 1) * perPage;
     const pageGroups = groups.slice(start, start + perPage);
 
-    return NextResponse.json({
+    return res.status(200).json({
       ok: true,
       groups: pageGroups,
       offers: [],
@@ -462,7 +464,7 @@ export async function GET(req) {
       fetchedCount,
       keptCount,
       meta: {
-        total: totalFromEbay || keptCount,
+        total: groups.length,
         returned: pageGroups.length,
         cards: pageGroups.length,
         page,
@@ -473,12 +475,8 @@ export async function GET(req) {
       },
       analytics,
     });
-
   } catch (err) {
     console.error(err);
-    return NextResponse.json(
-      { ok: false, error: String(err?.message || err) },
-      { status: 500 }
-    );
+    return res.status(500).json({ ok: false, error: String(err?.message || err) });
   }
 }
