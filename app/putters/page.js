@@ -2,7 +2,6 @@
 
 import { useEffect, useMemo, useState } from "react";
 import MarketSnapshot from "@/components/MarketSnapshot";
-import CompareBar from "@/components/CompareBar";
 
 const BRANDS = [
   { label: "Scotty Cameron", q: "scotty cameron putter" },
@@ -47,6 +46,7 @@ function formatPrice(value, currency = "USD") {
     return `$${value.toFixed(2)}`;
   }
 }
+
 function timeAgo(ts) {
   if (!ts) return "";
   const mins = Math.floor((Date.now() - ts) / 60000);
@@ -58,58 +58,6 @@ function timeAgo(ts) {
   if (hrs < 24) return `${hrs} hours ago`;
   const days = Math.floor(hrs / 24);
   return days === 1 ? "1 day ago" : `${days} days ago`;
-}
-
-/** Build a lightweight client-side analytics snapshot from groups[].offers[] */
-function buildSnapshotFromGroups(groups) {
-  const offers = [];
-  for (const g of groups || []) {
-    if (Array.isArray(g.offers)) {
-      for (let i = 0; i < g.offers.length && i < 20; i++) {
-        offers.push(g.offers[i]);
-      }
-    }
-  }
-  const prices = offers
-    .map(o => (typeof o?.price === "number" ? o.price : null))
-    .filter((n) => typeof n === "number");
-
-  const condCounts = {};
-  for (const o of offers) {
-    const key = (o?.condition || "UNKNOWN").toString().trim().toUpperCase().replace(/\s+/g, "_");
-    condCounts[key] = (condCounts[key] || 0) + 1;
-  }
-  const conditions = Object.entries(condCounts)
-    .sort((a,b) => b[1]-a[1])
-    .map(([key, count]) => ({ key, count }));
-
-  let min = null, max = null, avg = null;
-  if (prices.length) {
-    min = Math.min(...prices);
-    max = Math.max(...prices);
-    avg = Math.round((prices.reduce((a,b)=>a+b,0) / prices.length) * 100) / 100;
-  }
-
-  let histogram = [], buckets = [];
-  if (prices.length >= 2 && min !== null && max !== null && max > min) {
-    const BIN_COUNT = 8;
-    const step = (max - min) / BIN_COUNT;
-    buckets = Array.from({ length: BIN_COUNT }, (_, i) => Math.floor(min + step * (i + 1)));
-    histogram = Array(BIN_COUNT).fill(0);
-    for (const p of prices) {
-      let idx = Math.floor((p - min) / step);
-      if (idx >= BIN_COUNT) idx = BIN_COUNT - 1;
-      if (idx < 0) idx = 0;
-      histogram[idx] += 1;
-    }
-  }
-
-  return {
-    price: { min, max, avg, histogram, buckets },
-    conditions,
-    buyingOptions: [],
-    brandsTop: [],
-  };
 }
 
 export default function PuttersPage() {
@@ -127,6 +75,11 @@ export default function PuttersPage() {
 
   const [page, setPage] = useState(1);
 
+  // NEW filters
+  const [dex, setDex] = useState("");            // "", "LEFT", "RIGHT"
+  const [head, setHead] = useState("");          // "", "BLADE", "MALLET"
+  const [lengths, setLengths] = useState([]);    // [] or [33,34,35,36]
+
   const [groups, setGroups] = useState([]);
   const [offers, setOffers] = useState([]);
   const [loading, setLoading] = useState(false);
@@ -137,17 +90,7 @@ export default function PuttersPage() {
   const [keptCount, setKeptCount] = useState(null);
 
   const [expanded, setExpanded] = useState({});
-  const [apiData, setApiData] = useState(null);
-
-  // NEW: compare selection (up to 4)
-  const [selected, setSelected] = useState([]);
-  const toggleSelect = (group) =>
-    setSelected((prev) => {
-      const exists = prev.find((g) => g.model === group.model);
-      if (exists) return prev.filter((g) => g.model !== group.model);
-      const next = [...prev, group];
-      return next.slice(-4);
-    });
+  const [apiData, setApiData] = useState(null); // for live snapshot
 
   const apiUrl = useMemo(() => {
     const params = new URLSearchParams();
@@ -159,16 +102,25 @@ export default function PuttersPage() {
     if (buying.length) params.set("buyingOptions", buying.join(","));
     if (sortBy === "recent") params.set("sort", "newlylisted");
     if (broaden) params.set("broaden", "true");
+
+    // NEW: filters
+    if (dex) params.set("dex", dex);
+    if (head) params.set("head", head);
+    if (lengths.length) params.set("lengths", lengths.join(","));
+
     params.set("page", String(page));
     params.set("perPage", String(FIXED_PER_PAGE));
     params.set("group", groupMode ? "true" : "false");
-    params.set("samplePages", "3"); // hint for newer backend
+
+    // NEW: multi-page sampling hint (backend respects if supported)
+    params.set("samplePages", "3");
+
     return `/api/putters?${params.toString()}`;
-  }, [q, onlyComplete, minPrice, maxPrice, conds, buying, sortBy, page, groupMode, broaden]);
+  }, [q, onlyComplete, minPrice, maxPrice, conds, buying, sortBy, page, groupMode, broaden, dex, head, lengths]);
 
   useEffect(() => {
     setPage(1);
-  }, [q, onlyComplete, minPrice, maxPrice, conds, buying, sortBy, groupMode, broaden]);
+  }, [q, onlyComplete, minPrice, maxPrice, conds, buying, sortBy, groupMode, broaden, dex, head, lengths]);
 
   useEffect(() => {
     if (!q.trim()) {
@@ -223,6 +175,7 @@ export default function PuttersPage() {
     } else if (sortBy === "model_asc") {
       arr.sort((a,b) => (a.model || "").localeCompare(b.model || ""));
     }
+    // if "recent", backend already ordered by newest start time
     return arr;
   }, [groups, sortBy]);
 
@@ -232,19 +185,48 @@ export default function PuttersPage() {
     setExpanded(next);
   }, [sortedGroups.map((g) => g.model).join("|")]);
 
+  const toggleExpand = (model) => setExpanded((prev) => ({ ...prev, [model]: !prev[model] }));
+
   const clearAll = () => {
     setQ(""); setOnlyComplete(true);
     setMinPrice(""); setMaxPrice("");
     setConds([]); setBuying([]);
+    setDex(""); setHead(""); setLengths([]);
     setSortBy("best_price_asc");
     setPage(1); setGroupMode(true); setBroaden(false);
-    setSelected([]);
   };
 
   const canPrev = hasPrev && page > 1 && !loading;
   const canNext = hasNext && !loading;
 
-  const fallbackSnapshot = useMemo(() => buildSnapshotFromGroups(groups), [groups]);
+  // helper for group badges
+  function summarizeDexHead(g) {
+    const dexCounts = { LEFT: 0, RIGHT: 0 };
+    const headCounts = { BLADE: 0, MALLET: 0 };
+    const lenCounts = { 33: 0, 34: 0, 35: 0, 36: 0 };
+    for (const o of g.offers || []) {
+      const d = (o?.specs?.dexterity || "").toUpperCase();
+      const h = (o?.specs?.headType || "").toUpperCase();
+      if (d === "LEFT" || d === "RIGHT") dexCounts[d] += 1;
+      if (h === "BLADE" || h === "MALLET") headCounts[h] += 1;
+
+      const L = Number(o?.specs?.length);
+      if (Number.isFinite(L)) {
+        const nearest = [33,34,35,36].reduce((p,c) => Math.abs(c - L) < Math.abs(p - L) ? c : p, 34);
+        if (Math.abs(nearest - L) <= 0.5) lenCounts[nearest]++;
+      }
+    }
+    const domDex = dexCounts.LEFT === 0 && dexCounts.RIGHT === 0
+      ? null
+      : (dexCounts.LEFT >= dexCounts.RIGHT ? "LEFT" : "RIGHT");
+    const domHead = headCounts.BLADE === 0 && headCounts.MALLET === 0
+      ? null
+      : (headCounts.BLADE >= headCounts.MALLET ? "BLADE" : "MALLET");
+    // most common length among 33/34/35/36
+    const domLen = Object.entries(lenCounts).sort((a,b)=>b[1]-a[1])[0];
+    const domLenVal = domLen && domLen[1] > 0 ? Number(domLen[0]) : null;
+    return { domDex, domHead, domLen: domLenVal };
+  }
 
   return (
     <main className="mx-auto max-w-6xl px-4 py-8">
@@ -396,11 +378,108 @@ export default function PuttersPage() {
           </div>
         </div>
 
+        {/* NEW: Dexterity */}
         <div className="rounded-lg border border-gray-200 p-4">
+          <h3 className="mb-3 text-xs font-semibold uppercase tracking-wide text-gray-600">
+            Dexterity
+          </h3>
+          <div className="flex flex-col gap-2 text-sm">
+            <label className="flex items-center gap-2">
+              <input
+                type="radio"
+                name="dex"
+                checked={dex === ""}
+                onChange={() => setDex("")}
+              />
+              Any
+            </label>
+            <label className="flex items-center gap-2">
+              <input
+                type="radio"
+                name="dex"
+                checked={dex === "RIGHT"}
+                onChange={() => setDex("RIGHT")}
+              />
+              Right-handed
+            </label>
+            <label className="flex items-center gap-2">
+              <input
+                type="radio"
+                name="dex"
+                checked={dex === "LEFT"}
+                onChange={() => setDex("LEFT")}
+              />
+              Left-handed
+            </label>
+          </div>
+        </div>
+
+        {/* NEW: Head Type */}
+        <div className="rounded-lg border border-gray-200 p-4">
+          <h3 className="mb-3 text-xs font-semibold uppercase tracking-wide text-gray-600">
+            Head Type
+          </h3>
+          <div className="flex flex-col gap-2 text-sm">
+            <label className="flex items-center gap-2">
+              <input
+                type="radio"
+                name="head"
+                checked={head === ""}
+                onChange={() => setHead("")}
+              />
+              Any
+            </label>
+            <label className="flex items-center gap-2">
+              <input
+                type="radio"
+                name="head"
+                checked={head === "BLADE"}
+                onChange={() => setHead("BLADE")}
+              />
+              Blade
+            </label>
+            <label className="flex items-center gap-2">
+              <input
+                type="radio"
+                name="head"
+                checked={head === "MALLET"}
+                onChange={() => setHead("MALLET")}
+              />
+              Mallet
+            </label>
+          </div>
+        </div>
+
+        {/* NEW: Common Lengths */}
+        <div className="rounded-lg border border-gray-200 p-4 md:col-span-2">
+          <h3 className="mb-3 text-xs font-semibold uppercase tracking-wide text-gray-600">
+            Length (common)
+          </h3>
+          <div className="flex flex-wrap gap-3 text-sm">
+            {[33,34,35,36].map(L => (
+              <label key={L} className="flex items-center gap-2">
+                <input
+                  type="checkbox"
+                  checked={lengths.includes(L)}
+                  onChange={() => {
+                    setLengths(prev => prev.includes(L) ? prev.filter(x => x !== L) : [...prev, L]);
+                  }}
+                />
+                {L}&quot;
+              </label>
+            ))}
+            <div className="text-xs text-gray-500 basis-full">
+              We match titles within ±0.5&quot; of the selected length(s).
+            </div>
+          </div>
+        </div>
+
+        {/* Buying Options */}
+        <div className="rounded-lg border border-gray-200 p-4 md:col-span-3">
           <h3 className="mb-3 text-xs font-semibold uppercase tracking-wide text-gray-600">
             Buying Options
           </h3>
-          <div className="flex flex-col gap-2">
+          <div className="flex flex-wrap gap-3">
             {BUYING_OPTIONS.map((b) => (
               <label key={b.value} className="flex items-center gap-2 text-sm">
                 <input
@@ -418,31 +497,28 @@ export default function PuttersPage() {
               </label>
             ))}
           </div>
-        </div>
 
-        <div className="rounded-lg border border-gray-200 p-4">
-          <h3 className="mb-3 text-xs font-semibold uppercase tracking-wide text-gray-600">
-            Advanced
-          </h3>
-          <label className="flex items-center gap-2 text-sm">
-            <input
-              type="checkbox"
-              checked={showAdvanced}
-              onChange={(e) => setShowAdvanced(e.target.checked)}
-            />
-            Show advanced options
-          </label>
-
-          {showAdvanced && (
-            <label className="mt-3 flex items-center gap-2 text-sm">
+          <div className="mt-4">
+            <label className="flex items-center gap-2 text-sm">
               <input
                 type="checkbox"
-                checked={groupMode}
-                onChange={(e) => setGroupMode(e.target.checked)}
+                checked={showAdvanced}
+                onChange={(e) => setShowAdvanced(e.target.checked)}
               />
-              Group similar listings (model cards)
+              Show advanced options
             </label>
-          )}
+
+            {showAdvanced && (
+              <label className="mt-3 flex items-center gap-2 text-sm">
+                <input
+                  type="checkbox"
+                  checked={groupMode}
+                  onChange={(e) => setGroupMode(e.target.checked)}
+                />
+                Group similar listings (model cards)
+              </label>
+            )}
+          </div>
         </div>
       </section>
 
@@ -465,9 +541,9 @@ export default function PuttersPage() {
         </div>
       )}
 
-      {/* Analytics snapshot (server-provided or client fallback) */}
+      {/* LIVE analytics snapshot (renders only if backend returns analytics) */}
       <MarketSnapshot
-        snapshot={apiData?.analytics?.snapshot || fallbackSnapshot}
+        snapshot={apiData?.analytics?.snapshot}
         meta={apiData?.meta}
         query={q}
       />
@@ -492,7 +568,7 @@ export default function PuttersPage() {
         </div>
       )}
 
-      {/* GROUPED VIEW */}
+      {/* GROUPED VIEW (default) */}
       {q.trim() && !loading && !err && groupMode && (
         <>
           <section className="mt-6 grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-2">
@@ -510,9 +586,7 @@ export default function PuttersPage() {
                 ? { diff: med - g.bestPrice, pct: ((med - g.bestPrice)/med)*100 }
                 : null;
 
-              // Retailer range chip
-              const spread = n ? `${formatPrice(nums[0])}–${formatPrice(nums[n-1])}` : "—";
-              const isSelected = selected.find((x) => x.model === g.model);
+              const { domDex, domHead, domLen } = summarizeDexHead(g);
 
               return (
                 <article key={g.model} className="overflow-hidden rounded-xl border border-gray-200 bg-white shadow-sm">
@@ -529,19 +603,33 @@ export default function PuttersPage() {
 
                   <div className="p-4">
                     <div className="flex items-start justify-between gap-3">
-                      <div>
+                      <div className="min-w-0">
                         <h3 className="text-lg font-semibold leading-tight">{g.model}</h3>
                         <p className="mt-1 text-xs text-gray-500">
                           {g.count} offer{g.count === 1 ? "" : "s"} · {g.retailers.join(", ")}
                         </p>
+                        <div className="mt-2 flex flex-wrap gap-2">
+                          {domDex && (
+                            <span className="rounded-full bg-slate-100 px-2 py-0.5 text-[11px] font-medium text-slate-700">
+                              {domDex === "LEFT" ? "Left-hand" : "Right-hand"}
+                            </span>
+                          )}
+                          {domHead && (
+                            <span className="rounded-full bg-indigo-100 px-2 py-0.5 text-[11px] font-medium text-indigo-700">
+                              {domHead === "MALLET" ? "Mallet" : "Blade"}
+                            </span>
+                          )}
+                          {Number.isFinite(domLen) && (
+                            <span className="rounded-full bg-amber-100 px-2 py-0.5 text-[11px] font-medium text-amber-800">
+                              ~{domLen}&quot;
+                            </span>
+                          )}
+                        </div>
                       </div>
 
                       <div className="flex flex-col items-end gap-1">
                         <div className="shrink-0 rounded-full bg-green-100 px-3 py-1 text-xs font-semibold text-green-700">
                           Best: {formatPrice(g.bestPrice, g.bestCurrency)}
-                        </div>
-                        <div className="rounded-full bg-gray-100 px-3 py-1 text-[11px] text-gray-700">
-                          Range: {spread}
                         </div>
                         {bestDelta && (
                           <div
@@ -555,20 +643,10 @@ export default function PuttersPage() {
                     </div>
 
                     <button
-                      onClick={() => setExpanded((prev) => ({ ...prev, [g.model]: !prev[g.model] }))}
+                      onClick={() => toggleExpand(g.model)}
                       className="mt-4 w-full rounded-md border border-gray-300 px-3 py-2 text-sm hover:bg-gray-50"
                     >
                       {isOpen ? "Hide offers" : `View offers (${g.count})`}
-                    </button>
-
-                    {/* Add to Compare */}
-                    <button
-                      onClick={() => toggleSelect(g)}
-                      className={`mt-2 w-full rounded-md border px-3 py-2 text-sm ${
-                        isSelected ? "border-blue-300 bg-blue-50" : "hover:bg-gray-50"
-                      }`}
-                    >
-                      {isSelected ? "Selected for Compare ✓" : "Add to Compare"}
                     </button>
 
                     {isOpen && (
@@ -583,7 +661,12 @@ export default function PuttersPage() {
                               <div className="min-w-0">
                                 <div className="truncate text-sm font-medium">{o.retailer}</div>
                                 <div className="mt-0.5 truncate text-xs text-gray-500">
-                                  {o.condition ? o.condition.replace(/_/g, " ") : "—"}
+                                  {(o.specs?.dexterity || "").toUpperCase() === "LEFT" ? "LH" :
+                                   (o.specs?.dexterity || "").toUpperCase() === "RIGHT" ? "RH" : "—"}
+                                  {" · "}
+                                  {(o.specs?.headType || "").toUpperCase() || "—"}
+                                  {" · "}
+                                  {Number.isFinite(Number(o?.specs?.length)) ? `${o.specs.length}"` : "—"}
                                   {o.createdAt && (<> · listed {timeAgo(new Date(o.createdAt).getTime())}</>)}
                                 </div>
                               </div>
@@ -652,7 +735,7 @@ export default function PuttersPage() {
                 <div className="p-4">
                   <h3 className="line-clamp-2 text-sm font-semibold">{o.title}</h3>
                   <p className="mt-1 text-xs text-gray-500">
-                    {o.condition ? o.condition.replace(/_/g, " ") : "—"}
+                    {(o.specs?.dexterity || "").toUpperCase() || "—"} · {(o.specs?.headType || "").toUpperCase() || "—"} · {Number.isFinite(Number(o?.specs?.length)) ? `${o.specs.length}"` : "—"}
                     {o.createdAt && (<> · listed {timeAgo(new Date(o.createdAt).getTime())}</>)}
                   </p>
                   <div className="mt-3 flex items-center justify-between">
@@ -693,13 +776,6 @@ export default function PuttersPage() {
           </div>
         </>
       )}
-
-      {/* Compare bar (pinned models) */}
-      <CompareBar
-        selectedGroups={selected}
-        onClear={() => setSelected([])}
-        onRemove={(model) => setSelected((prev) => prev.filter((g) => g.model !== model))}
-      />
     </main>
   );
 }

@@ -1,387 +1,468 @@
+/* eslint-disable no-console */
 import { NextResponse } from "next/server";
 
-export const dynamic = "force-dynamic"; // no caching
+/**
+ * ENV
+ * - EBAY_BROWSE_TOKEN : OAuth App token for eBay Browse API (production)
+ * - EBAY_SITE         : optional, default "EBAY_US"
+ *
+ * If/when you adopt auto-refresh, replace the static token with getEbayAppToken() helper.
+ */
 
-/* ---------------- Server-side affiliate tagging (no rover) ---------------- */
-function tagAffiliate(url) {
-  try {
-    const u = new URL(url);
-    const camp = process.env.EPN_CAMPAIGN_ID;
-    if (!camp) return url;
+const EBAY_BROWSE_URL = "https://api.ebay.com/buy/browse/v1/item_summary/search";
+const EBAY_SITE = process.env.EBAY_SITE || "EBAY_US";
+const EBAY_TOKEN = process.env.EBAY_BROWSE_TOKEN;
 
-    const tool = process.env.EPN_TOOL_ID || "10001";
-    const custom = process.env.EPN_CUSTOM_ID || "";
+// ------------ utils ------------
 
-    u.searchParams.set("mkcid", "1");
-    u.searchParams.set("mkrid", "711-53200-19255-0");
-    u.searchParams.set("siteid", "0");
-    u.searchParams.set("campid", camp);
-    u.searchParams.set("customid", custom);
-    u.searchParams.set("toolid", tool);
-    u.searchParams.set("mkevt", "1");
-
-    return u.toString();
-  } catch {
-    return url;
-  }
+function safeNum(n) {
+  const x = Number(n);
+  return Number.isFinite(x) ? x : null;
 }
 
-/* ---------------- Token cache for Browse API ---------------- */
-let tokenCache = { token: null, expiresAt: 0 };
-
-async function getAppToken() {
-  const now = Date.now();
-  if (tokenCache.token && now < tokenCache.expiresAt - 60_000) {
-    return tokenCache.token;
-  }
-
-  const clientId = process.env.EBAY_CLIENT_ID;
-  const clientSecret = process.env.EBAY_CLIENT_SECRET;
-  if (!clientId || !clientSecret) {
-    const e = new Error("EBAY_CLIENT_ID/EBAY_CLIENT_SECRET missing");
-    e.details = "Set EBAY_CLIENT_ID and EBAY_CLIENT_SECRET in your environment.";
-    throw e;
-  }
-
-  const creds = Buffer.from(`${clientId}:${clientSecret}`).toString("base64");
-  const body = new URLSearchParams();
-  body.set("grant_type", "client_credentials");
-  // minimal scope for Browse
-  body.set("scope", "https://api.ebay.com/oauth/api_scope");
-
-  const res = await fetch("https://api.ebay.com/identity/v1/oauth2/token", {
-    method: "POST",
-    headers: {
-      Authorization: `Basic ${creds}`,
-      "Content-Type": "application/x-www-form-urlencoded",
-    },
-    body: body.toString(),
-    cache: "no-store",
+function pickCheapestShipping(shippingOptions) {
+  if (!Array.isArray(shippingOptions) || shippingOptions.length === 0) return null;
+  const sorted = [...shippingOptions].sort((a, b) => {
+    const av = safeNum(a?.shippingCost?.value);
+    const bv = safeNum(b?.shippingCost?.value);
+    if (av === null && bv === null) return 0;
+    if (av === null) return 1;
+    if (bv === null) return -1;
+    return av - bv;
   });
-
-  if (!res.ok) {
-    const text = await res.text();
-    const e = new Error(`oauth_error ${res.status}`);
-    e.details = text;
-    throw e;
-  }
-
-  const json = await res.json();
-  tokenCache = {
-    token: json.access_token,
-    expiresAt: now + (json.expires_in || 7200) * 1000,
+  const cheapest = sorted[0];
+  return {
+    cost: safeNum(cheapest?.shippingCost?.value),
+    currency: cheapest?.shippingCost?.currency || "USD",
+    free: safeNum(cheapest?.shippingCost?.value) === 0,
+    type: cheapest?.type || null,
   };
-  return tokenCache.token;
 }
 
-/* ---------------- Utilities (matching, grouping, etc.) ---------------- */
-const BRAND_WORDS = [
-  "scotty","cameron","taylormade","tm","ping","odyssey","lab","golf","putter","putters"
-];
+/**
+ * Parse specs from title:
+ * - length (inches)
+ * - family keyword
+ * - headType: "BLADE" | "MALLET" (heuristic via family keywords)
+ * - dexterity: "LEFT" | "RIGHT"
+ * - hasHeadcover
+ * - shaft: slant/flow/plumber/single bend (if mentioned)
+ */
+function parseSpecsFromTitle(title = "") {
+  const t = String(title).toLowerCase();
 
-const SOFT_TOKENS = new Set([
-  "mint","new","brand","brandnew","unused","never","neverused","like","likenew",
-  "nib","nwt","open","box","openbox","excellent","great","condition","gc","ln","lnib"
-]);
+  // Length like 33", 34", 35 in, 34-35, 34/35
+  let length = null;
+  const m1 = t.match(/(\d{2}(?:\.\d)?)\s*(?:\"|in\b|inch(?:es)?\b)/i);
+  const m2 = t.match(/\b(32|33|34|35|36|37)\s*(?:\/|-)\s*(32|33|34|35|36|37)\b/); // 34/35 ranges
+  if (m1) length = Number(m1[1]);
+  else if (m2) length = Math.max(Number(m2[1]), Number(m2[2]));
 
-const SOFT_SYNONYMS = {
-  mint: ["mint", "like new", "ln", "excellent condition", "near mint"],
-  new: ["new", "brand new", "nib", "new in box", "nwt", "unused", "never used", "open box"],
-  unused: ["unused", "never used"],
-  like: ["like new", "ln"],
-  ln: ["like new", "ln"],
-  nib: ["nib", "new in box"],
-};
-
-function norm(s) { return (s || "").toLowerCase(); }
-function tokenize(q) { return norm(q).split(/\s+/).filter(Boolean); }
-
-function priceNumberFromAny(x) {
-  if (x == null) return null;
-  if (typeof x === "number") return isFinite(x) ? x : null;
-  if (typeof x === "object") {
-    const n = Number(x.value ?? x.amount ?? x.__value__);
-    return isFinite(n) ? n : null;
-  }
-  const m = String(x).match(/[\d,.]+/);
-  if (!m) return null;
-  const n = Number(m[0].replace(/,/g, ""));
-  return isFinite(n) ? n : null;
-}
-
-function tokenMatchesTitle(token, title) {
-  const t = norm(token);
-  const ttl = norm(title);
-
-  if (ttl.includes(t)) return true;
-
-  // inches: "35", 35", 35in, 35 in
-  const inch = t.match(/^(\d{2})(?:"|in| in)?$/);
-  if (inch) {
-    const n = inch[1];
-    if (ttl.includes(`${n}"`) || ttl.includes(`${n}in`) || ttl.includes(`${n} in`) || ttl.includes(` ${n} `)) {
-      return true;
-    }
+  // Family keywords (expand as needed)
+  const FAMILIES = [
+    "newport 2.5", "newport 2", "newport",
+    "phantom 11.5", "phantom 11", "phantom 5.5", "phantom 5",
+    "fastback", "squareback", "futura", "tei3",
+    "studio select", "special select",
+    "anser", "blade", "mallet",
+  ];
+  let family = null;
+  for (const k of FAMILIES) {
+    if (t.includes(k)) { family = k; break; }
   }
 
-  if (SOFT_TOKENS.has(t)) {
-    const syns = SOFT_SYNONYMS[t] || [t];
-    return syns.some((phrase) => ttl.includes(norm(phrase)));
+  // Head type mapping by family keywords
+  const MALLET_KEYS = ["phantom", "fastback", "squareback", "futura", "mallet"];
+  const BLADE_KEYS  = ["newport", "anser", "tei3", "blade", "studio select", "special select"];
+  let headType = null;
+  if (MALLET_KEYS.some(k => t.includes(k))) headType = "MALLET";
+  if (BLADE_KEYS.some(k => t.includes(k))) headType = headType || "BLADE";
+
+  // Dexterity detection (RH/LH and words)
+  let dexterity = null;
+  if (/\bright[-\s]?hand(ed)?\b|\brh\b/.test(t)) dexterity = "RIGHT";
+  if (/\bleft[-\s]?hand(ed)?\b|\blh\b/.test(t))  dexterity = "LEFT";
+
+  const hasHeadcover = /head\s*cover|\bhc\b|headcover/.test(t);
+  const shaftMatch = /slant|flow|plumber|single bend/.exec(t);
+  const shaft = shaftMatch ? shaftMatch[0] : null;
+
+  return { length, family, headType, dexterity, hasHeadcover, shaft };
+}
+
+function normalizeModelFromTitle(title = "") {
+  const t = title.toLowerCase()
+    .replace(/scotty\s*cameron|titleist|putter|golf|right\s*hand(ed)?|left\s*hand(ed)?/g, "")
+    .replace(/\s+/g, " ")
+    .trim();
+
+  const specs = parseSpecsFromTitle(title);
+  if (specs.family) return specs.family;
+
+  // fallback: pick first 2–4 meaningful tokens
+  const tokens = t.split(" ").filter(Boolean).slice(0, 4);
+  return tokens.length ? tokens.join(" ") : (title || "unknown").slice(0, 50);
+}
+
+function enrichOffer(raw) {
+  const shipping = pickCheapestShipping(raw?.shippingOptions);
+  const sellerPct = raw?.seller?.feedbackPercentage ? Number(raw.seller.feedbackPercentage) : null;
+  const sellerScore = raw?.seller?.feedbackScore ? Number(raw.seller.feedbackScore) : null;
+  const returnsAccepted = Boolean(raw?.returnTerms?.returnsAccepted);
+  const returnDays = raw?.returnTerms?.returnPeriod?.value ? Number(raw.returnTerms.returnPeriod.value) : null;
+  const buyingOptions = Array.isArray(raw?.buyingOptions) ? raw.buyingOptions : [];
+  const bidCount = raw?.bidCount != null ? Number(raw.bidCount) : null;
+
+  const specs = parseSpecsFromTitle(raw?.title);
+
+  // total price (item + cheapest shipping if available)
+  const itemPrice = safeNum(raw?.price?.value);
+  const shipCost = shipping?.cost ?? 0;
+  const totalPrice = (itemPrice != null && shipCost != null) ? itemPrice + shipCost : itemPrice ?? null;
+
+  return {
+    shipping: shipping ? {
+      cost: shipping.cost,
+      currency: shipping.currency || raw?.price?.currency || "USD",
+      free: Boolean(shipping.free),
+      type: shipping.type || null,
+    } : null,
+    totalPrice,
+    seller: {
+      feedbackPct: sellerPct,
+      feedbackScore: sellerScore,
+      username: raw?.seller?.username || null,
+    },
+    location: {
+      country: raw?.itemLocation?.country || null,
+      postalCode: raw?.itemLocation?.postalCode || null,
+    },
+    returns: {
+      accepted: returnsAccepted,
+      days: returnDays,
+    },
+    buying: {
+      types: buyingOptions,         // e.g. ["FIXED_PRICE","BEST_OFFER"]
+      bidCount: bidCount,           // for auctions (if available)
+    },
+    specs,                          // { length, family, headType, dexterity, hasHeadcover, shaft }
+  };
+}
+
+// ------------ ebay fetch ------------
+
+async function fetchEbayBrowse({ q, limit = 50, offset = 0, sort }) {
+  if (!EBAY_TOKEN) {
+    throw new Error("Missing EBAY_BROWSE_TOKEN");
   }
 
-  return false;
-}
-
-/** Require all core tokens; soft tokens optional; ≥70% of all tokens must match. */
-function titleMatchesQuery(title, tokens) {
-  if (!tokens.length) return true;
-  const core = tokens.filter((w) => !SOFT_TOKENS.has(norm(w)));
-  const coreOk = core.every((w) => tokenMatchesTitle(w, title));
-  if (!coreOk) return false;
-  const hits = tokens.filter((w) => tokenMatchesTitle(w, title)).length;
-  return hits / tokens.length >= 0.7;
-}
-
-function modelKey(title) {
-  const toks = norm(title)
-    .replace(/[^\w\s]/g, " ")
-    .split(/\s+/)
-    .filter((t) => t && !BRAND_WORDS.includes(t));
-  return toks.slice(0, 4).join(" ");
-}
-
-/* ---------------- Browse API search ---------------- */
-async function browseSearch({ q, limit = 100, offset = 0, sort = "", filters = "" }) {
-  const token = await getAppToken();
-  const MARKET = process.env.EBAY_MARKETPLACE || "EBAY_US";
-
-  const url = new URL("https://api.ebay.com/buy/browse/v1/item_summary/search");
-  url.searchParams.set("q", q);
+  const url = new URL(EBAY_BROWSE_URL);
+  url.searchParams.set("q", q || "");
   url.searchParams.set("limit", String(limit));
   url.searchParams.set("offset", String(offset));
+  url.searchParams.set("fieldgroups", "EXTENDED"); // get shipping/seller/returns/etc
+  url.searchParams.set("X-EBAY-C-ENDUSERCTX", `contextualLocation=${EBAY_SITE}`);
+
+  // sort mapping: "newlylisted" -> "newlyListed"
   if (sort === "newlylisted") {
-    // Browse uses "newlyListed" (camelCase)
     url.searchParams.set("sort", "newlyListed");
-  }
-  if (filters) {
-    url.searchParams.set("filter", filters);
   }
 
   const res = await fetch(url.toString(), {
     headers: {
-      Authorization: `Bearer ${token}`,
-      "X-EBAY-C-MARKETPLACE-ID": MARKET,
+      "Authorization": `Bearer ${EBAY_TOKEN}`,
+      "Accept": "application/json",
       "Content-Type": "application/json",
+      "X-EBAY-C-MARKETPLACE-ID": EBAY_SITE,
     },
     cache: "no-store",
+    next: { revalidate: 0 },
   });
 
   if (!res.ok) {
-    const text = await res.text();
-    const e = new Error(`browse_api_error ${res.status}`);
-    e.details = text;
-    throw e;
+    const text = await res.text().catch(() => "");
+    throw new Error(`eBay Browse error ${res.status}: ${text}`);
   }
-
-  const data = await res.json();
-  const items = Array.isArray(data?.itemSummaries) ? data.itemSummaries : [];
-
-  return items.map((it) => {
-    const price = it.price;
-    const buyingOptions = Array.isArray(it.buyingOptions) ? it.buyingOptions.join(",") : (it.buyingOptions || "");
-    return {
-      itemId: it.itemId || it.itemHref || it.itemWebUrl,
-      title: it.title || "",
-      price: priceNumberFromAny(price),
-      currency: price?.currency || "USD",
-      condition: it.condition || null,
-      image: it.image?.imageUrl || null,
-      url: it.itemWebUrl || "",
-      retailer: "eBay",
-      createdAt: it.itemCreationDate || null, // may be null in summaries; sort param handles recency upstream
-      buyingOption: String(buyingOptions || "").toUpperCase(),
-    };
-  });
+  return res.json();
 }
 
-/* Build Browse filter string from query params */
-function buildBrowseFilters({ onlyComplete, minPrice, maxPrice, conditions, buyingOptions }) {
-  const parts = [];
+// ------------ core handler ------------
 
-  // price:[min..max]
-  if (minPrice || maxPrice) {
-    const min = minPrice ? Number(minPrice) : "";
-    const max = maxPrice ? Number(maxPrice) : "";
-    if (min !== "" || max !== "") {
-      parts.push(`price:[${min === "" ? "" : min}..${max === "" ? "" : max}]`);
-    }
-  }
-
-  // conditions:{NEW|USED|...}
-  if (conditions?.length) {
-    const vals = conditions.join("|");
-    parts.push(`conditions:{${vals}}`);
-  }
-
-  // buyingOptions:{FIXED_PRICE|AUCTION|BEST_OFFER}
-  if (buyingOptions?.length) {
-    const vals = buyingOptions.join("|");
-    parts.push(`buyingOptions:{${vals}}`);
-  }
-
-  // Note: onlyComplete we still enforce after fetch (image+price),
-  // since Browse can sometimes miss an image in summaries.
-  return parts.join(",");
-}
-
-/* ---------------- Route handler ---------------- */
 export async function GET(req) {
-  try {
-    const { searchParams } = new URL(req.url);
-    const q = (searchParams.get("q") || "").trim();
-    const group = searchParams.get("group") !== "false"; // default grouped
-    const onlyComplete = searchParams.get("onlyComplete") === "true";
-    const minPrice = searchParams.get("minPrice") || "";
-    const maxPrice = searchParams.get("maxPrice") || "";
-    const sort = searchParams.get("sort") || ""; // "newlylisted" or ""
-    const broaden = searchParams.get("broaden") === "true";
+  const { searchParams } = new URL(req.url);
 
-    const page = Math.max(1, parseInt(searchParams.get("page") || "1", 10));
-    const perPage = Math.max(1, parseInt(searchParams.get("perPage") || "10", 10));
+  const q = (searchParams.get("q") || "").trim();
+  const group = (searchParams.get("group") || "true") === "true";
+  const onlyComplete = searchParams.get("onlyComplete") === "true";
+  const minPrice = safeNum(searchParams.get("minPrice"));
+  const maxPrice = safeNum(searchParams.get("maxPrice"));
+  const conds = (searchParams.get("conditions") || "").split(",").map(s => s.trim()).filter(Boolean); // NEW, USED, etc
+  const buyingOptions = (searchParams.get("buyingOptions") || "").split(",").map(s => s.trim()).filter(Boolean);
+  const sort = searchParams.get("sort") || ""; // "newlylisted"
 
-    const conditions = (searchParams.get("conditions") || "")
-      .split(",").map((s) => s.trim()).filter(Boolean).map((s) => s.toUpperCase());
+  // NEW filters
+  const dex = (searchParams.get("dex") || "").toUpperCase();   // "", "LEFT", "RIGHT"
+  const head = (searchParams.get("head") || "").toUpperCase(); // "", "BLADE", "MALLET"
+  const lengthsParam = (searchParams.get("lengths") || "").trim(); // e.g. "33,34"
+  const lengthList = lengthsParam
+    ? lengthsParam.split(",").map(s => Number(s)).filter(n => Number.isFinite(n))
+    : [];
 
-    const buyingOptions = (searchParams.get("buyingOptions") || "")
-      .split(",").map((s) => s.trim()).filter(Boolean).map((s) => s.toUpperCase());
+  const page = Math.max(1, Number(searchParams.get("page") || "1"));
+  const perPage = Math.max(1, Math.min(50, Number(searchParams.get("perPage") || "10")));
+  const broaden = searchParams.get("broaden") === "true";
+  const samplePages = Math.max(1, Math.min(5, Number(searchParams.get("samplePages") || (broaden ? 3 : 1))));
 
-    if (!q) {
-      return NextResponse.json({
-        groups: [], offers: [],
-        hasNext: false, hasPrev: false,
-        fetchedCount: 0, keptCount: 0,
-      });
-    }
-
-    // --- Build filters for Browse
-    const filterStr = buildBrowseFilters({ onlyComplete, minPrice, maxPrice, conditions, buyingOptions });
-
-    // --- Fetch items (one or a couple of pages upstream), then filter locally with soft tokens
-    const LIMIT = 100;
-    const PAGES = broaden ? 3 : 1;
-
-    let raw = [];
-    for (let i = 0; i < PAGES; i++) {
-      const offset = i * LIMIT;
-      const batch = await browseSearch({
-        q,
-        limit: LIMIT,
-        offset,
-        sort,       // "newlylisted" → handled inside as "newlyListed"
-        filters: filterStr,
-      });
-      raw = raw.concat(batch);
-    }
-
-    // de-dupe
-    const seen = new Set();
-    raw = raw.filter((x) => {
-      const k = x.itemId || x.url;
-      if (!k || seen.has(k)) return false;
-      seen.add(k);
-      return true;
+  if (!q) {
+    return NextResponse.json({
+      ok: true,
+      groups: [],
+      offers: [],
+      hasNext: false,
+      hasPrev: false,
+      fetchedCount: 0,
+      keptCount: 0,
+      meta: { total: 0, returned: 0, cards: 0, page, perPage, broaden, sort, source: "ebay-browse" },
+      analytics: { snapshot: null },
     });
+  }
 
-    // improved title matching
-    const tokens = tokenize(q);
-    let items = raw.filter((item) => titleMatchesQuery(item.title || "", tokens));
-
-    // enforce onlyComplete AFTER matching (price+image)
-    if (onlyComplete) {
-      items = items.filter((x) => !!x.image);
-      items = items.filter((x) => x.price != null);
+  try {
+    // Pull multiple Browse pages to improve recall
+    const ebayLimit = 50;
+    const fetches = [];
+    for (let i = 0; i < samplePages; i++) {
+      const offset = i * ebayLimit;
+      fetches.push(fetchEbayBrowse({ q, limit: ebayLimit, offset, sort }));
     }
 
-    // server-side EPN tagging
-    items = items.map((x) => ({ ...x, url: tagAffiliate(x.url || "") }));
+    const results = await Promise.allSettled(fetches);
+    const items = [];
+    let totalFromEbay = 0;
 
-    const fetchedCount = raw.length;
-    const keptCount = items.length;
-
-    if (!group) {
-      // If "recent", upstream already applied recency; otherwise default to price asc
-      if (sort === "newlylisted") {
-        // keep order; optional nudge by createdAt when present
-        items.sort((a, b) => (new Date(b.createdAt) - new Date(a.createdAt)));
-      } else {
-        items.sort((a, b) => (a.price ?? Infinity) - (b.price ?? Infinity));
+    for (const r of results) {
+      if (r.status === "fulfilled") {
+        const data = r.value || {};
+        totalFromEbay = Math.max(totalFromEbay, Number(data?.total || 0));
+        const arr = Array.isArray(data?.itemSummaries) ? data.itemSummaries : [];
+        for (const it of arr) items.push(it);
       }
-
-      const start = (page - 1) * perPage;
-      const pageItems = items.slice(start, start + perPage);
-      return NextResponse.json({
-        groups: [],
-        offers: pageItems,
-        hasNext: start + perPage < items.length,
-        hasPrev: page > 1,
-        fetchedCount, keptCount,
-      });
     }
 
-    // Group similar
-    const buckets = new Map();
-    for (const it of items) {
-      const key = modelKey(it.title || "") || norm(it.title || "");
-      if (!buckets.has(key)) buckets.set(key, []);
-      buckets.get(key).push(it);
-    }
+    const fetchedCount = items.length;
 
-    let groups = [...buckets.entries()].map(([key, arr]) => {
-      const priced = arr.filter((a) => a.price != null);
-      const best = priced.sort((a, b) => (a.price ?? Infinity) - (b.price ?? Infinity))[0] || arr[0];
+    // Map to offers + enrichment
+    let offers = items.map((item) => {
+      const extra = enrichOffer(item);
+      const image =
+        item?.image?.imageUrl ||
+        item?.thumbnailImages?.[0]?.imageUrl ||
+        null;
+
       return {
-        model: key || (arr[0]?.title ?? "Unknown model"),
-        image: best?.image || arr[0]?.image || null,
-        bestPrice: best?.price ?? null,
-        bestCurrency: best?.currency || "USD",
-        count: arr.length,
-        retailers: [...new Set(arr.map((x) => x.retailer || "eBay"))].slice(0, 4),
-        offers: arr.map((x) => ({
-          productId: x.itemId || x.url,
-          url: x.url,
-          title: x.title,
-          retailer: x.retailer || "eBay",
-          price: x.price ?? null,
-          currency: x.currency || "USD",
-          condition: x.condition || null,
-          createdAt: x.createdAt || null,
-          image: x.image || null,
-        })),
+        productId: item?.itemId || item?.legacyItemId || item?.itemHref || item?.title,
+        url: item?.itemWebUrl || item?.itemHref,
+        title: item?.title,
+        retailer: "eBay",
+        price: safeNum(item?.price?.value),
+        currency: item?.price?.currency || "USD",
+        condition: item?.condition || null,
+        createdAt: item?.itemCreationDate || item?.itemEndDate || item?.estimatedAvailDate || null,
+        image,
+
+        // NEW fields:
+        totalPrice: extra.totalPrice,
+        shipping: extra.shipping,
+        seller: extra.seller,
+        location: extra.location,
+        returns: extra.returns,
+        buying: extra.buying,
+        specs: extra.specs,  // { length, headType, dexterity, ... }
+
+        // For grouping convenience:
+        __model: normalizeModelFromTitle(item?.title || ""),
       };
     });
 
-    if (sort === "newlylisted") {
-      groups.sort((a, b) => {
-        const aMax = Math.max(...a.offers.map((o) => new Date(o.createdAt || 0).getTime() || 0));
-        const bMax = Math.max(...b.offers.map((o) => new Date(o.createdAt || 0).getTime() || 0));
-        return bMax - aMax;
+    // Quality filter: price & image presence
+    if (onlyComplete) {
+      offers = offers.filter(o => typeof o.price === "number" && o.image);
+    }
+
+    // Price range
+    if (minPrice != null) offers = offers.filter(o => typeof o.price === "number" && o.price >= minPrice);
+    if (maxPrice != null) offers = offers.filter(o => typeof o.price === "number" && o.price <= maxPrice);
+
+    // Conditions
+    if (conds.length) {
+      const set = new Set(conds.map(s => s.toUpperCase()));
+      offers = offers.filter(o => o?.condition && set.has(String(o.condition).toUpperCase()));
+    }
+
+    // Buying options
+    if (buyingOptions.length) {
+      const set = new Set(buyingOptions.map(s => s.toUpperCase()));
+      offers = offers.filter(o => {
+        const types = Array.isArray(o?.buying?.types) ? o.buying.types : [];
+        return types.some(t => set.has(String(t).toUpperCase()));
       });
     }
 
+    // NEW: Dexterity filter
+    if (dex === "LEFT" || dex === "RIGHT") {
+      offers = offers.filter(o => (o?.specs?.dexterity || "").toUpperCase() === dex);
+    }
+
+    // NEW: Head type filter
+    if (head === "BLADE" || head === "MALLET") {
+      offers = offers.filter(o => (o?.specs?.headType || "").toUpperCase() === head);
+    }
+
+    // NEW: Common Lengths filter (exact match within ±0.5")
+    if (lengthList.length) {
+      offers = offers.filter(o => {
+        const L = Number(o?.specs?.length);
+        if (!Number.isFinite(L)) return false;
+        return lengthList.some(sel => Math.abs(L - sel) <= 0.5);
+      });
+    }
+
+    // Sorting
+    if (sort === "newlylisted") {
+      offers.sort((a, b) => {
+        const ta = a.createdAt ? new Date(a.createdAt).getTime() : 0;
+        const tb = b.createdAt ? new Date(b.createdAt).getTime() : 0;
+        return tb - ta; // newest first
+      });
+    }
+
+    const keptCount = offers.length;
+
+    // (Optional) simple analytics snapshot for your MarketSnapshot component
+    const analytics = (() => {
+      const byHead = { BLADE: 0, MALLET: 0 };
+      const byDex = { LEFT: 0, RIGHT: 0 };
+      const byLen = { 33: 0, 34: 0, 35: 0, 36: 0 };
+      for (const o of offers) {
+        const h = (o?.specs?.headType || "").toUpperCase();
+        if (h === "BLADE" || h === "MALLET") byHead[h]++;
+
+        const d = (o?.specs?.dexterity || "").toUpperCase();
+        if (d === "LEFT" || d === "RIGHT") byDex[d]++;
+
+        const L = Number(o?.specs?.length);
+        if (L) {
+          const nearest = [33,34,35,36].reduce((p,c) => Math.abs(c - L) < Math.abs(p - L) ? c : p, 34);
+          if (Math.abs(nearest - L) <= 0.5) byLen[nearest]++;
+        }
+      }
+      return { snapshot: { byHead, byDex, byLen } };
+    })();
+
+    // Pagination
+    if (!group) {
+      // Flat list
+      const start = (page - 1) * perPage;
+      const pageOffers = offers.slice(start, start + perPage);
+
+      const hasPrev = page > 1;
+      const hasNext = start + perPage < keptCount;
+
+      return NextResponse.json({
+        ok: true,
+        offers: pageOffers,
+        groups: [],
+        hasNext,
+        hasPrev,
+        fetchedCount,
+        keptCount,
+        meta: {
+          total: totalFromEbay || keptCount,
+          returned: pageOffers.length,
+          cards: pageOffers.length,
+          page,
+          perPage,
+          broaden,
+          sort: sort || "default",
+          source: "ebay-browse",
+        },
+        analytics,
+      });
+    }
+
+    // Grouped view
+    const groupsMap = new Map();
+    for (const o of offers) {
+      const key = o.__model || "unknown";
+      if (!groupsMap.has(key)) {
+        groupsMap.set(key, {
+          model: key,
+          image: o.image || null,
+          bestPrice: o.price ?? null,
+          bestCurrency: o.currency || "USD",
+          count: 0,
+          retailers: new Set(),
+          offers: [],
+        });
+      }
+      const g = groupsMap.get(key);
+      g.count += 1;
+      g.retailers.add(o.retailer || "eBay");
+      g.offers.push(o);
+      if (typeof o.price === "number" && (g.bestPrice == null || o.price < g.bestPrice)) {
+        g.bestPrice = o.price;
+        g.bestCurrency = o.currency || g.bestCurrency || "USD";
+        if (o.image) g.image = o.image;
+      }
+    }
+
+    let groups = Array.from(groupsMap.values()).map((g) => ({
+      ...g,
+      retailers: Array.from(g.retailers),
+      offers: g.offers.sort((a, b) => (a.price ?? Infinity) - (b.price ?? Infinity)),
+    }));
+
+    if (sort === "newlylisted") {
+      groups.sort((a, b) => {
+        const ta = a.offers.length ? Math.max(...a.offers.map(o => o.createdAt ? new Date(o.createdAt).getTime() : 0)) : 0;
+        const tb = b.offers.length ? Math.max(...b.offers.map(o => o.createdAt ? new Date(o.createdAt).getTime() : 0)) : 0;
+        return tb - ta;
+      });
+    } else {
+      groups.sort((a, b) => (a.bestPrice ?? Infinity) - (b.bestPrice ?? Infinity));
+    }
+
+    // Group-level pagination
     const start = (page - 1) * perPage;
     const pageGroups = groups.slice(start, start + perPage);
+    const hasPrev = page > 1;
+    const hasNext = start + perPage < groups.length;
 
     return NextResponse.json({
+      ok: true,
       groups: pageGroups,
       offers: [],
-      hasNext: start + perPage < groups.length,
-      hasPrev: page > 1,
-      fetchedCount, keptCount,
+      hasNext,
+      hasPrev,
+      fetchedCount,
+      keptCount,
+      meta: {
+        total: totalFromEbay || keptCount,
+        returned: pageGroups.length,
+        cards: pageGroups.length,
+        page,
+        perPage,
+        broaden,
+        sort: sort || "bestprice",
+        source: "ebay-browse",
+      },
+      analytics,
     });
+
   } catch (err) {
-    console.error("api/putters error:", err?.message, err?.details || "");
+    console.error(err);
     return NextResponse.json(
-      { error: "http_error", status: 500, details: err?.details || err?.message || "Unknown error", results: [] },
+      { ok: false, error: String(err?.message || err) },
       { status: 500 }
     );
   }
