@@ -1,7 +1,90 @@
 /* eslint-disable no-console */
 
-// ===== Token fetch & cache (client-credentials) =====
-let _tok = { val: null, exp: 0 }; // epoch ms
+/**
+ * ENV required on Vercel (and .env.local for local dev):
+ *
+ * EBAY_CLIENT_ID
+ * EBAY_CLIENT_SECRET
+ * EBAY_SITE=EBAY_US
+ *
+ * Optional (EPN affiliate params; campid is the important one):
+ * EPN_CAMPID=YOUR_CAMPAIGN_ID
+ * EPN_CUSTOMID=putteriq
+ * EPN_TOOLID=10001
+ * EPN_MKCID=1
+ * EPN_MKRID=711-53200-19255-0
+ * EPN_SITEID=0
+ * EPN_MKEVT=1
+ */
+
+const EBAY_BROWSE_URL = "https://api.ebay.com/buy/browse/v1/item_summary/search";
+const EBAY_SITE = process.env.EBAY_SITE || "EBAY_US";
+
+// -------------------- EPN affiliate decorator --------------------
+const EPN = {
+  campid: process.env.EPN_CAMPID || "",
+  customid: process.env.EPN_CUSTOMID || "",
+  toolid: process.env.EPN_TOOLID || "10001",
+  mkcid: process.env.EPN_MKCID || "1",
+  mkrid: process.env.EPN_MKRID || "711-53200-19255-0",
+  siteid: process.env.EPN_SITEID || "0",
+  mkevt: process.env.EPN_MKEVT || "1",
+};
+
+const EBAY_HOST_ALLOW = new Set([
+  "www.ebay.com",
+  "ebay.com",
+  "www.ebay.co.uk",
+  "www.ebay.ca",
+  "www.ebay.com.au",
+  "www.ebay.de",
+  "www.ebay.fr",
+  "www.ebay.it",
+  "www.ebay.es",
+  "www.ebay.ie",
+  "www.ebay.nl",
+  "www.ebay.com.hk",
+  "www.ebay.com.sg",
+  "www.ebay.com.my",
+  "www.ebay.at",
+  "www.ebay.ch",
+  "www.ebay.be",
+  "www.ebay.pl",
+]);
+
+function decorateEbayUrl(raw, overrides = {}) {
+  if (!raw) return raw;
+  try {
+    const u = new URL(raw);
+    if (!EBAY_HOST_ALLOW.has(u.hostname)) return raw;
+
+    const campid = overrides.campid ?? EPN.campid;
+    if (!campid) return raw; // leave untouched if no campaign id configured
+
+    const params = {
+      mkcid: overrides.mkcid ?? EPN.mkcid,
+      mkrid: overrides.mkrid ?? EPN.mkrid,
+      siteid: overrides.siteid ?? EPN.siteid,
+      campid,
+      customid: overrides.customid ?? EPN.customid,
+      toolid: overrides.toolid ?? EPN.toolid,
+      mkevt: overrides.mkevt ?? EPN.mkevt,
+    };
+
+    Object.entries(params).forEach(([k, v]) => {
+      if (v !== undefined && v !== null && String(v).length) {
+        u.searchParams.set(k, String(v));
+      }
+    });
+
+    return u.toString();
+  } catch {
+    return raw;
+  }
+}
+
+// -------------------- Token (client-credentials) --------------------
+let _tok = { val: null, exp: 0 };
 
 async function getEbayToken() {
   const now = Date.now();
@@ -31,14 +114,11 @@ async function getEbayToken() {
 
   const json = await res.json();
   const ttl = (json.expires_in || 7200) * 1000;
-  _tok = { val: json.access_token, exp: Date.now() + ttl - 10 * 60 * 1000 }; // refresh 10m early
+  _tok = { val: json.access_token, exp: Date.now() + ttl - 10 * 60 * 1000 };
   return _tok.val;
 }
 
-const EBAY_BROWSE_URL = "https://api.ebay.com/buy/browse/v1/item_summary/search";
-const EBAY_SITE = process.env.EBAY_SITE || "EBAY_US";
-
-// ===== Helpers =====
+// -------------------- Helpers --------------------
 const safeNum = (n) => {
   const x = Number(n);
   return Number.isFinite(x) ? x : null;
@@ -143,10 +223,7 @@ function parseSpecsFromItem(item) {
   let family = null;
   const tl = norm(title);
   for (const k of FAMILIES) {
-    if (tl.includes(k)) {
-      family = k;
-      break;
-    }
+    if (tl.includes(k)) { family = k; break; }
   }
 
   return { length, family, headType, dexterity: dex, hasHeadcover, shaft };
@@ -163,41 +240,8 @@ function normalizeModelFromTitle(title = "", fallbackFamily = null) {
   return tokens.length ? tokens.join(" ") : (title || "unknown").slice(0, 50);
 }
 
-function enrichOffer(raw) {
-  const shipping = pickCheapestShipping(raw?.shippingOptions);
-  const sellerPct = raw?.seller?.feedbackPercentage ? Number(raw.seller.feedbackPercentage) : null;
-  const sellerScore = raw?.seller?.feedbackScore ? Number(raw.seller.feedbackScore) : null;
-  const returnsAccepted = Boolean(raw?.returnTerms?.returnsAccepted);
-  const returnDays = raw?.returnTerms?.returnPeriod?.value ? Number(raw.returnTerms.returnPeriod.value) : null;
-  const buyingOptions = Array.isArray(raw?.buyingOptions) ? raw.buyingOptions : [];
-  const bidCount = raw?.bidCount != null ? Number(raw.bidCount) : null;
-
-  const specs = parseSpecsFromItem(raw);
-
-  const itemPrice = safeNum(raw?.price?.value);
-  const shipCost = shipping?.cost ?? 0;
-  const totalPrice = itemPrice != null && shipCost != null ? itemPrice + shipCost : itemPrice ?? null;
-
-  return {
-    shipping: shipping
-      ? {
-          cost: shipping.cost,
-          currency: shipping.currency || raw?.price?.currency || "USD",
-          free: Boolean(shipping.free),
-          type: shipping.type || null,
-        }
-      : null,
-    totalPrice,
-    seller: { feedbackPct: sellerPct, feedbackScore: sellerScore, username: raw?.seller?.username || null },
-    location: { country: raw?.itemLocation?.country || null, postalCode: raw?.itemLocation?.postalCode || null },
-    returns: { accepted: returnsAccepted, days: returnDays },
-    buying: { types: buyingOptions, bidCount },
-    specs, // { length, family, headType, dexterity, ... }
-  };
-}
-
-// ===== eBay call =====
-async function fetchEbayBrowse({ q, limit = 50, offset = 0, sort }) {
+// -------------------- eBay fetch --------------------
+async function fetchEbayBrowse({ q, limit = 50, offset = 0, sort, forceCategory }) {
   const token = await getEbayToken();
 
   const url = new URL(EBAY_BROWSE_URL);
@@ -206,6 +250,11 @@ async function fetchEbayBrowse({ q, limit = 50, offset = 0, sort }) {
   url.searchParams.set("offset", String(offset));
   url.searchParams.set("fieldgroups", "EXTENDED");
   if (sort === "newlylisted") url.searchParams.set("sort", "newlyListed");
+
+  // Optional: focus on Golf Clubs category (115280) to reduce noise
+  if (forceCategory) {
+    url.searchParams.set("category_ids", "115280");
+  }
 
   async function call(bearer) {
     return fetch(url.toString(), {
@@ -221,7 +270,7 @@ async function fetchEbayBrowse({ q, limit = 50, offset = 0, sort }) {
 
   let res = await call(token);
   if (res.status === 401 || res.status === 403) {
-    // force refresh once
+    // refresh once
     _tok = { val: null, exp: 0 };
     const fresh = await getEbayToken();
     res = await call(fresh);
@@ -233,7 +282,7 @@ async function fetchEbayBrowse({ q, limit = 50, offset = 0, sort }) {
   return res.json();
 }
 
-// ===== API Route (pages router) =====
+// -------------------- API Route (pages router) --------------------
 export default async function handler(req, res) {
   if (req.method !== "GET") return res.status(405).json({ ok: false, error: "Method Not Allowed" });
 
@@ -247,7 +296,6 @@ export default async function handler(req, res) {
   const buyingOptions = (sp.buyingOptions || "").toString().split(",").map((s) => s.trim()).filter(Boolean);
   const sort = (sp.sort || "").toString();
 
-  // new filters
   const dex = (sp.dex || "").toString().toUpperCase(); // LEFT/RIGHT/""
   const head = (sp.head || "").toString().toUpperCase(); // BLADE/MALLET/""
   const lengthsParam = (sp.lengths || "").toString().trim();
@@ -256,7 +304,13 @@ export default async function handler(req, res) {
   const page = Math.max(1, Number(sp.page || "1"));
   const perPage = Math.max(1, Math.min(50, Number(sp.perPage || "10")));
   const broaden = sp.broaden === "true";
-  const samplePages = Math.max(1, Math.min(5, Number(sp.samplePages || (broaden ? 3 : 1))));
+  const forceCategory = sp.forceCategory === "true";
+
+  // smarter default sampling: broaden ? 3 : 2 (can override with samplePages)
+  const samplePages = Math.max(
+    1,
+    Math.min(5, Number(sp.samplePages || (broaden ? 3 : 2)))
+  );
 
   if (!q) {
     return res.status(200).json({
@@ -274,15 +328,17 @@ export default async function handler(req, res) {
 
   try {
     const limit = 50;
+
+    // Primary queries
     const calls = [];
     for (let i = 0; i < samplePages; i++) {
-      calls.push(fetchEbayBrowse({ q, limit, offset: i * limit, sort }));
+      calls.push(fetchEbayBrowse({ q, limit, offset: i * limit, sort, forceCategory }));
     }
-    const results = await Promise.allSettled(calls);
+    let responses = await Promise.allSettled(calls);
 
-    const items = [];
+    let items = [];
     let totalFromEbay = 0;
-    for (const r of results) {
+    for (const r of responses) {
       if (r.status === "fulfilled") {
         const data = r.value || {};
         totalFromEbay = Math.max(totalFromEbay, Number(data?.total || 0));
@@ -291,39 +347,91 @@ export default async function handler(req, res) {
       }
     }
 
+    // Fallback: if recall is low, also try "<q> putter"
+    if (items.length < 10 && !/\bputter\b/i.test(q)) {
+      const fq = `${q} putter`;
+      const extra = await fetchEbayBrowse({ q: fq, limit, offset: 0, sort, forceCategory });
+      const arr = Array.isArray(extra?.itemSummaries) ? extra.itemSummaries : [];
+      items.push(...arr);
+      totalFromEbay = Math.max(totalFromEbay, Number(extra?.total || 0));
+    }
+
     const fetchedCount = items.length;
 
+    // Map → offers
     let offers = items.map((item) => {
-      const extra = enrichOffer(item);
       const image = item?.image?.imageUrl || item?.thumbnailImages?.[0]?.imageUrl || null;
-      const modelKey = normalizeModelFromTitle(item?.title || "", extra?.specs?.family || null);
+
+      // specs & enrichment
+      const shipping = pickCheapestShipping(item?.shippingOptions);
+      const sellerPct = item?.seller?.feedbackPercentage ? Number(item.seller.feedbackPercentage) : null;
+      const sellerScore = item?.seller?.feedbackScore ? Number(item.seller.feedbackScore) : null;
+      const returnsAccepted = Boolean(item?.returnTerms?.returnsAccepted);
+      const returnDays = item?.returnTerms?.returnPeriod?.value ? Number(item.returnTerms.returnPeriod.value) : null;
+      const buying = {
+        types: Array.isArray(item?.buyingOptions) ? item.buyingOptions : [],
+        bidCount: item?.bidCount != null ? Number(item.bidCount) : null,
+      };
+
+      const specs = parseSpecsFromItem(item);
+      const family = specs?.family || null;
+
+      const itemPrice = safeNum(item?.price?.value);
+      const shipCost = shipping?.cost ?? 0;
+      const totalPrice = itemPrice != null && shipCost != null ? itemPrice + shipCost : itemPrice ?? null;
+
+      const rawUrl = item?.itemWebUrl || item?.itemHref;
+      const url = decorateEbayUrl(rawUrl);
+
+      const modelKey = normalizeModelFromTitle(item?.title || "", family);
 
       return {
         productId: item?.itemId || item?.legacyItemId || item?.itemHref || item?.title,
-        url: item?.itemWebUrl || item?.itemHref,
+        url,
         title: item?.title,
         retailer: "eBay",
-        price: safeNum(item?.price?.value),
+        price: itemPrice,
         currency: item?.price?.currency || "USD",
         condition: item?.condition || null,
         createdAt: item?.itemCreationDate || item?.itemEndDate || item?.estimatedAvailDate || null,
         image,
 
-        totalPrice: extra.totalPrice,
-        shipping: extra.shipping,
-        seller: extra.seller,
-        location: extra.location,
-        returns: extra.returns,
-        buying: extra.buying,
-        specs: extra.specs,
+        totalPrice,
+        shipping: shipping
+          ? {
+              cost: shipping.cost,
+              currency: shipping.currency || item?.price?.currency || "USD",
+              free: Boolean(shipping.free),
+              type: shipping.type || null,
+            }
+          : null,
+        seller: { feedbackPct: sellerPct, feedbackScore: sellerScore, username: item?.seller?.username || null },
+        location: { country: item?.itemLocation?.country || null, postalCode: item?.itemLocation?.postalCode || null },
+        returns: { accepted: returnsAccepted, days: returnDays },
+        buying,
+        specs, // { length, family, headType, dexterity, hasHeadcover, shaft }
 
         __model: modelKey,
       };
     });
 
+    // Track drops for debugging
+    let droppedNoPrice = 0;
+    let droppedNoImage = 0;
+
     if (onlyComplete) {
-      offers = offers.filter((o) => typeof o.price === "number" && o.image);
+      const before = offers.length;
+      offers = offers.filter((o) => {
+        const ok = typeof o.price === "number" && o.image;
+        if (!ok) {
+          if (typeof o.price !== "number") droppedNoPrice++;
+          if (!o.image) droppedNoImage++;
+        }
+        return ok;
+      });
+      // Note: we still count debug drops even if not onlyComplete, because helpful.
     }
+
     if (minPrice != null) offers = offers.filter((o) => typeof o.price === "number" && o.price >= minPrice);
     if (maxPrice != null) offers = offers.filter((o) => typeof o.price === "number" && o.price <= maxPrice);
 
@@ -331,6 +439,7 @@ export default async function handler(req, res) {
       const set = new Set(conds.map((s) => s.toUpperCase()));
       offers = offers.filter((o) => o?.condition && set.has(String(o.condition).toUpperCase()));
     }
+
     if (buyingOptions.length) {
       const set = new Set(buyingOptions.map((s) => s.toUpperCase()));
       offers = offers.filter((o) => {
@@ -363,6 +472,7 @@ export default async function handler(req, res) {
 
     const keptCount = offers.length;
 
+    // lightweight analytics for the snapshot
     const analytics = (() => {
       const byHead = { BLADE: 0, MALLET: 0 };
       const byDex = { LEFT: 0, RIGHT: 0 };
@@ -401,6 +511,7 @@ export default async function handler(req, res) {
           broaden,
           sort: sort || "default",
           source: "ebay-browse",
+          debug: { droppedNoPrice, droppedNoImage },
         },
         analytics,
       });
@@ -472,6 +583,7 @@ export default async function handler(req, res) {
         broaden,
         sort: sort || "bestprice",
         source: "ebay-browse",
+        debug: { droppedNoPrice, droppedNoImage },
       },
       analytics,
     });
