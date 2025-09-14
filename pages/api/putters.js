@@ -1,13 +1,12 @@
 /* eslint-disable no-console */
 
 /**
- * ENV required on Vercel (and .env.local for local dev):
- *
+ * Required ENV (Vercel + .env.local):
  * EBAY_CLIENT_ID
  * EBAY_CLIENT_SECRET
  * EBAY_SITE=EBAY_US
  *
- * Optional (EPN affiliate params; campid is the important one):
+ * Optional EPN affiliate params (campid is the important one):
  * EPN_CAMPID=YOUR_CAMPAIGN_ID
  * EPN_CUSTOMID=putteriq
  * EPN_TOOLID=10001
@@ -20,7 +19,7 @@
 const EBAY_BROWSE_URL = "https://api.ebay.com/buy/browse/v1/item_summary/search";
 const EBAY_SITE = process.env.EBAY_SITE || "EBAY_US";
 
-// -------------------- EPN affiliate decorator --------------------
+// -------------------- EPN affiliate decorator (patched) --------------------
 const EPN = {
   campid: process.env.EPN_CAMPID || "",
   customid: process.env.EPN_CUSTOMID || "",
@@ -31,35 +30,25 @@ const EPN = {
   mkevt: process.env.EPN_MKEVT || "1",
 };
 
-const EBAY_HOST_ALLOW = new Set([
-  "www.ebay.com",
-  "ebay.com",
-  "www.ebay.co.uk",
-  "www.ebay.ca",
-  "www.ebay.com.au",
-  "www.ebay.de",
-  "www.ebay.fr",
-  "www.ebay.it",
-  "www.ebay.es",
-  "www.ebay.ie",
-  "www.ebay.nl",
-  "www.ebay.com.hk",
-  "www.ebay.com.sg",
-  "www.ebay.com.my",
-  "www.ebay.at",
-  "www.ebay.ch",
-  "www.ebay.be",
-  "www.ebay.pl",
-]);
+// Accept any ebay.* host (www, m., cgi., etc.). Do NOT decorate rover.ebay.* (already affiliate hop).
+function isEbayHost(hostname) {
+  if (!hostname) return false;
+  const h = hostname.toLowerCase();
+  if (h.includes("rover.ebay.")) return false;
+  return h.includes(".ebay.");
+}
 
 function decorateEbayUrl(raw, overrides = {}) {
   if (!raw) return raw;
   try {
     const u = new URL(raw);
-    if (!EBAY_HOST_ALLOW.has(u.hostname)) return raw;
 
+    // Only decorate ebay.* links (not external retailers)
+    if (!isEbayHost(u.hostname)) return raw;
+
+    // Need your campaign id configured
     const campid = overrides.campid ?? EPN.campid;
-    if (!campid) return raw; // leave untouched if no campaign id configured
+    if (!campid) return raw;
 
     const params = {
       mkcid: overrides.mkcid ?? EPN.mkcid,
@@ -71,11 +60,12 @@ function decorateEbayUrl(raw, overrides = {}) {
       mkevt: overrides.mkevt ?? EPN.mkevt,
     };
 
-    Object.entries(params).forEach(([k, v]) => {
+    // Set/overwrite cleanly (works whether or not they already exist)
+    for (const [k, v] of Object.entries(params)) {
       if (v !== undefined && v !== null && String(v).length) {
         u.searchParams.set(k, String(v));
       }
-    });
+    }
 
     return u.toString();
   } catch {
@@ -250,11 +240,7 @@ async function fetchEbayBrowse({ q, limit = 50, offset = 0, sort, forceCategory 
   url.searchParams.set("offset", String(offset));
   url.searchParams.set("fieldgroups", "EXTENDED");
   if (sort === "newlylisted") url.searchParams.set("sort", "newlyListed");
-
-  // Optional: focus on Golf Clubs category (115280) to reduce noise
-  if (forceCategory) {
-    url.searchParams.set("category_ids", "115280");
-  }
+  if (forceCategory) url.searchParams.set("category_ids", "115280"); // Golf Clubs
 
   async function call(bearer) {
     return fetch(url.toString(), {
@@ -270,7 +256,6 @@ async function fetchEbayBrowse({ q, limit = 50, offset = 0, sort, forceCategory 
 
   let res = await call(token);
   if (res.status === 401 || res.status === 403) {
-    // refresh once
     _tok = { val: null, exp: 0 };
     const fresh = await getEbayToken();
     res = await call(fresh);
@@ -305,12 +290,7 @@ export default async function handler(req, res) {
   const perPage = Math.max(1, Math.min(50, Number(sp.perPage || "10")));
   const broaden = sp.broaden === "true";
   const forceCategory = sp.forceCategory === "true";
-
-  // smarter default sampling: broaden ? 3 : 2 (can override with samplePages)
-  const samplePages = Math.max(
-    1,
-    Math.min(5, Number(sp.samplePages || (broaden ? 3 : 2)))
-  );
+  const samplePages = Math.max(1, Math.min(5, Number(sp.samplePages || (broaden ? 3 : 2))));
 
   if (!q) {
     return res.status(200).json({
@@ -420,7 +400,6 @@ export default async function handler(req, res) {
     let droppedNoImage = 0;
 
     if (onlyComplete) {
-      const before = offers.length;
       offers = offers.filter((o) => {
         const ok = typeof o.price === "number" && o.image;
         if (!ok) {
@@ -429,7 +408,6 @@ export default async function handler(req, res) {
         }
         return ok;
       });
-      // Note: we still count debug drops even if not onlyComplete, because helpful.
     }
 
     if (minPrice != null) offers = offers.filter((o) => typeof o.price === "number" && o.price >= minPrice);
