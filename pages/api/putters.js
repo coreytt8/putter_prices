@@ -6,7 +6,7 @@
  * EBAY_CLIENT_SECRET
  * EBAY_SITE=EBAY_US
  *
- * Affiliate ENV (campid is essential):
+ * Optional EPN affiliate params (campid is the important one):
  * EPN_CAMPID=YOUR_CAMPAIGN_ID
  * EPN_CUSTOMID=putteriq
  * EPN_TOOLID=10001
@@ -14,13 +14,12 @@
  * EPN_MKRID=711-53200-19255-0
  * EPN_SITEID=0
  * EPN_MKEVT=1
- * EPN_USE_ROVER=true   // ← set to true for rock-solid mobile/app tracking
  */
 
 const EBAY_BROWSE_URL = "https://api.ebay.com/buy/browse/v1/item_summary/search";
 const EBAY_SITE = process.env.EBAY_SITE || "EBAY_US";
 
-// -------------------- EPN affiliate decorator (mobile/app safe) --------------------
+// -------------------- EPN affiliate decorator (patched) --------------------
 const EPN = {
   campid: process.env.EPN_CAMPID || "",
   customid: process.env.EPN_CUSTOMID || "",
@@ -29,52 +28,27 @@ const EPN = {
   mkrid: process.env.EPN_MKRID || "711-53200-19255-0",
   siteid: process.env.EPN_SITEID || "0",
   mkevt: process.env.EPN_MKEVT || "1",
-  useRover: String(process.env.EPN_USE_ROVER || "").toLowerCase() === "true",
 };
 
-// accept any ebay.* host (www, m., cgi., etc.). Don't re-wrap rover links.
+// Accept any ebay.* host (www, m., cgi., etc.). Do NOT decorate rover.ebay.* (already affiliate hop).
 function isEbayHost(hostname) {
   if (!hostname) return false;
   const h = hostname.toLowerCase();
-  return h.includes(".ebay.") && !h.includes("rover.ebay.");
-}
-
-// Build a Rover link that redirects to the final eBay URL.
-// This format is robust across desktop + mobile + app deep links.
-function buildRoverUrl(targetUrl) {
-  const base = new URL("https://rover.ebay.com/rover/1/");
-  // Path template: /rover/1/{mkrid}/1
-  base.pathname = `/rover/1/${EPN.mkrid}/1`;
-  // Standard rover params
-  base.searchParams.set("campid", EPN.campid);
-  base.searchParams.set("customid", EPN.customid || "");
-  base.searchParams.set("toolid", EPN.toolid);
-  base.searchParams.set("mkevt", EPN.mkevt);
-  base.searchParams.set("mkcid", EPN.mkcid);
-  base.searchParams.set("siteid", EPN.siteid);
-  // mpre = final destination (url-encoded)
-  base.searchParams.set("mpre", targetUrl);
-  return base.toString();
+  if (h.includes("rover.ebay.")) return false;
+  return h.includes(".ebay.");
 }
 
 function decorateEbayUrl(raw, overrides = {}) {
   if (!raw) return raw;
-  const campid = overrides.campid ?? EPN.campid;
-  if (!campid) return raw; // nothing to do without a campaign id
-
   try {
     const u = new URL(raw);
 
-    // If it's already a rover link, leave as-is
-    if (u.hostname.toLowerCase().includes("rover.ebay.")) return raw;
-
-    // Prefer Rover wrapper when enabled (best for mobile/app)
-    if (EPN.useRover && isEbayHost(u.hostname)) {
-      return buildRoverUrl(raw);
-    }
-
-    // Otherwise append params directly to ebay.* URL
+    // Only decorate ebay.* links (not external retailers)
     if (!isEbayHost(u.hostname)) return raw;
+
+    // Need your campaign id configured
+    const campid = overrides.campid ?? EPN.campid;
+    if (!campid) return raw;
 
     const params = {
       mkcid: overrides.mkcid ?? EPN.mkcid,
@@ -86,11 +60,13 @@ function decorateEbayUrl(raw, overrides = {}) {
       mkevt: overrides.mkevt ?? EPN.mkevt,
     };
 
+    // Set/overwrite cleanly (works whether or not they already exist)
     for (const [k, v] of Object.entries(params)) {
       if (v !== undefined && v !== null && String(v).length) {
         u.searchParams.set(k, String(v));
       }
     }
+
     return u.toString();
   } catch {
     return raw;
@@ -117,7 +93,8 @@ async function getEbayToken() {
     },
     body: new URLSearchParams({
       grant_type: "client_credentials",
-      scope: "https://api.ebay.com/oauth/api_scope",
+      // IMPORTANT: Use browse read-only scope
+      scope: "https://api.ebay.com/oauth/api_scope/buy.browse.readonly",
     }),
   });
 
@@ -128,7 +105,7 @@ async function getEbayToken() {
 
   const json = await res.json();
   const ttl = (json.expires_in || 7200) * 1000;
-  _tok = { val: json.access_token, exp: Date.now() + ttl - 10 * 60 * 1000 }; // refresh ~10m early
+  _tok = { val: json.access_token, exp: Date.now() + ttl - 10 * 60 * 1000 };
   return _tok.val;
 }
 
@@ -255,6 +232,14 @@ function normalizeModelFromTitle(title = "", fallbackFamily = null) {
 }
 
 // -------------------- eBay fetch --------------------
+function countryFromSite(site) {
+  // Very light mapping; expand if you ever target more marketplaces
+  if (site.endsWith("_US")) return "US";
+  if (site.endsWith("_GB")) return "GB";
+  if (site.endsWith("_DE")) return "DE";
+  return "US";
+}
+
 async function fetchEbayBrowse({ q, limit = 50, offset = 0, sort, forceCategory }) {
   const token = await getEbayToken();
 
@@ -264,7 +249,16 @@ async function fetchEbayBrowse({ q, limit = 50, offset = 0, sort, forceCategory 
   url.searchParams.set("offset", String(offset));
   url.searchParams.set("fieldgroups", "EXTENDED");
   if (sort === "newlylisted") url.searchParams.set("sort", "newlyListed");
-  if (forceCategory) url.searchParams.set("category_ids", "115280"); // Golf Clubs
+  if (forceCategory) url.searchParams.set("category_ids", "115280"); // Putters
+
+  const endUserCtxParts = [];
+  if (EPN.campid) {
+    endUserCtxParts.push(`affiliateCampaignId=${EPN.campid}`);
+    endUserCtxParts.push(`affiliateReferenceId=${encodeURIComponent(`putteriq-${(q || "").slice(0, 60)}`)}`);
+  }
+  // Optional: include a geo hint; improves shipping/ETA in some cases
+  const country = countryFromSite(EBAY_SITE);
+  if (country) endUserCtxParts.push(`contextualLocation=country=${country}`);
 
   async function call(bearer) {
     return fetch(url.toString(), {
@@ -273,7 +267,8 @@ async function fetchEbayBrowse({ q, limit = 50, offset = 0, sort, forceCategory 
         Accept: "application/json",
         "Content-Type": "application/json",
         "X-EBAY-C-MARKETPLACE-ID": EBAY_SITE,
-        "X-EBAY-C-ENDUSERCTX": `contextualLocation=${EBAY_SITE}`,
+        // IMPORTANT: this enables itemAffiliateWebUrl in the response
+        ...(endUserCtxParts.length ? { "X-EBAY-C-ENDUSERCTX": endUserCtxParts.join(",") } : {}),
       },
     });
   }
@@ -384,8 +379,10 @@ export default async function handler(req, res) {
       const shipCost = shipping?.cost ?? 0;
       const totalPrice = itemPrice != null && shipCost != null ? itemPrice + shipCost : itemPrice ?? null;
 
-      const rawUrl = item?.itemWebUrl || item?.itemHref;
-      const url = decorateEbayUrl(rawUrl);
+      // Prefer the fully-tracked affiliate URL from eBay; fall back to decorator if absent
+      const rawUrl =
+        item?.itemAffiliateWebUrl || item?.itemWebUrl || item?.itemHref;
+      const url = item?.itemAffiliateWebUrl ? item.itemAffiliateWebUrl : decorateEbayUrl(rawUrl);
 
       const modelKey = normalizeModelFromTitle(item?.title || "", family);
 
