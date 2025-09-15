@@ -19,7 +19,7 @@
 const EBAY_BROWSE_URL = "https://api.ebay.com/buy/browse/v1/item_summary/search";
 const EBAY_SITE = process.env.EBAY_SITE || "EBAY_US";
 
-// -------------------- EPN affiliate decorator (fallback) --------------------
+// -------------------- EPN affiliate decorator (patched) --------------------
 const EPN = {
   campid: process.env.EPN_CAMPID || "",
   customid: process.env.EPN_CUSTOMID || "",
@@ -30,6 +30,7 @@ const EPN = {
   mkevt: process.env.EPN_MKEVT || "1",
 };
 
+// Accept any ebay.* host (www, m., cgi., etc.). Do NOT decorate rover.ebay.* (already affiliate hop).
 function isEbayHost(hostname) {
   if (!hostname) return false;
   const h = hostname.toLowerCase();
@@ -41,8 +42,11 @@ function decorateEbayUrl(raw, overrides = {}) {
   if (!raw) return raw;
   try {
     const u = new URL(raw);
+
+    // Only decorate ebay.* links (not external retailers)
     if (!isEbayHost(u.hostname)) return raw;
 
+    // Need your campaign id configured
     const campid = overrides.campid ?? EPN.campid;
     if (!campid) return raw;
 
@@ -56,11 +60,13 @@ function decorateEbayUrl(raw, overrides = {}) {
       mkevt: overrides.mkevt ?? EPN.mkevt,
     };
 
+    // Set/overwrite cleanly (works whether or not they already exist)
     for (const [k, v] of Object.entries(params)) {
       if (v !== undefined && v !== null && String(v).length) {
         u.searchParams.set(k, String(v));
       }
     }
+
     return u.toString();
   } catch {
     return raw;
@@ -87,8 +93,8 @@ async function getEbayToken() {
     },
     body: new URLSearchParams({
       grant_type: "client_credentials",
-      // IMPORTANT: Browse read-only scope
-      scope: "https://api.ebay.com/oauth/api_scope/buy.browse.readonly",
+      // Using root scope here to match your previously working deployment
+      scope: "https://api.ebay.com/oauth/api_scope",
     }),
   });
 
@@ -235,12 +241,14 @@ async function fetchEbayBrowse({ q, limit = 50, offset = 0, sort, forceCategory 
   url.searchParams.set("offset", String(offset));
   url.searchParams.set("fieldgroups", "EXTENDED");
   if (sort === "newlylisted") url.searchParams.set("sort", "newlyListed");
-  if (forceCategory) url.searchParams.set("category_ids", "115280"); // Putters
+  if (forceCategory) url.searchParams.set("category_ids", "115280"); // Golf Clubs
 
-  // Minimal, known-good affiliate context (no contextualLocation until confirmed)
-  const endUserCtx = EPN.campid
-    ? `affiliateCampaignId=${EPN.campid},affiliateReferenceId=${encodeURIComponent(`putteriq-${(q || "").slice(0, 60)}`)}`
-    : "";
+  // NEW: per-query reference id + minimal affiliate header to get itemAffiliateWebUrl
+  const refId = `putteriq-${(q || "").slice(0, 60)}`;
+  const endUserCtx =
+    EPN.campid
+      ? `affiliateCampaignId=${EPN.campid},affiliateReferenceId=${encodeURIComponent(refId)}`
+      : "";
 
   async function call(bearer) {
     return fetch(url.toString(), {
@@ -264,12 +272,9 @@ async function fetchEbayBrowse({ q, limit = 50, offset = 0, sort, forceCategory 
     const txt = await res.text().catch(() => "");
     throw new Error(`eBay Browse error ${res.status}: ${txt}`);
   }
-
   const data = await res.json();
-  if (process.env.NODE_ENV !== "production" && (data.errors || !Array.isArray(data.itemSummaries))) {
-    console.warn("eBay response diagnostic:", JSON.stringify(data)?.slice(0, 2000));
-  }
-  return data;
+  // Return refId so the mapper can include it in fallback decoration
+  return { data, refId };
 }
 
 // -------------------- API Route (pages router) --------------------
@@ -323,9 +328,12 @@ export default async function handler(req, res) {
 
     let items = [];
     let totalFromEbay = 0;
+    let lastRefId = null;
     for (const r of responses) {
       if (r.status === "fulfilled") {
-        const data = r.value || {};
+        const payload = r.value || {};
+        const data = payload.data || {};
+        lastRefId = payload.refId || lastRefId;
         totalFromEbay = Math.max(totalFromEbay, Number(data?.total || 0));
         const arr = Array.isArray(data?.itemSummaries) ? data.itemSummaries : [];
         items.push(...arr);
@@ -336,15 +344,13 @@ export default async function handler(req, res) {
     if (items.length < 10 && !/\bputter\b/i.test(q)) {
       const fq = `${q} putter`;
       const extra = await fetchEbayBrowse({ q: fq, limit, offset: 0, sort, forceCategory });
-      const arr = Array.isArray(extra?.itemSummaries) ? extra.itemSummaries : [];
+      const arr = Array.isArray(extra?.data?.itemSummaries) ? extra.data.itemSummaries : [];
       items.push(...arr);
-      totalFromEbay = Math.max(totalFromEbay, Number(extra?.total || 0));
+      totalFromEbay = Math.max(totalFromEbay, Number(extra?.data?.total || 0));
+      lastRefId = extra?.refId || lastRefId;
     }
 
     const fetchedCount = items.length;
-    if (fetchedCount === 0) {
-      console.log("Browse returned 0 itemSummaries for query:", q);
-    }
 
     // Map → offers
     let offers = items.map((item) => {
@@ -368,9 +374,11 @@ export default async function handler(req, res) {
       const shipCost = shipping?.cost ?? 0;
       const totalPrice = itemPrice != null && shipCost != null ? itemPrice + shipCost : itemPrice ?? null;
 
-      // Prefer the eBay-provided affiliate URL; fall back to decorated itemWebUrl
+      // Prefer eBay's affiliate URL; fallback to decorated WebUrl + include customid=refId
       const rawUrl = item?.itemAffiliateWebUrl || item?.itemWebUrl || item?.itemHref;
-      const url = item?.itemAffiliateWebUrl ? item.itemAffiliateWebUrl : decorateEbayUrl(rawUrl);
+      const url = item?.itemAffiliateWebUrl
+        ? item.itemAffiliateWebUrl
+        : decorateEbayUrl(rawUrl, { customid: lastRefId || `putteriq-${(q || "").slice(0, 60)}` });
 
       const modelKey = normalizeModelFromTitle(item?.title || "", family);
 
@@ -390,7 +398,7 @@ export default async function handler(req, res) {
           ? {
               cost: shipping.cost,
               currency: shipping.currency || item?.price?.currency || "USD",
-              free: Boolean(shipping.free),
+              free: safeNum(shipping?.shippingCost?.value) === 0,
               type: shipping.type || null,
             }
           : null,
@@ -459,7 +467,7 @@ export default async function handler(req, res) {
 
     const keptCount = offers.length;
 
-    // lightweight analytics
+    // lightweight analytics for the snapshot
     const analytics = (() => {
       const byHead = { BLADE: 0, MALLET: 0 };
       const byDex = { LEFT: 0, RIGHT: 0 };
