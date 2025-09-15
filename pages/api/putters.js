@@ -6,7 +6,7 @@
  * EBAY_CLIENT_SECRET
  * EBAY_SITE=EBAY_US
  *
- * Optional EPN affiliate params (campid is the important one):
+ * Affiliate ENV (campid is essential):
  * EPN_CAMPID=YOUR_CAMPAIGN_ID
  * EPN_CUSTOMID=putteriq
  * EPN_TOOLID=10001
@@ -14,12 +14,13 @@
  * EPN_MKRID=711-53200-19255-0
  * EPN_SITEID=0
  * EPN_MKEVT=1
+ * EPN_USE_ROVER=true   // ← set to true for rock-solid mobile/app tracking
  */
 
 const EBAY_BROWSE_URL = "https://api.ebay.com/buy/browse/v1/item_summary/search";
 const EBAY_SITE = process.env.EBAY_SITE || "EBAY_US";
 
-// -------------------- EPN affiliate decorator (patched) --------------------
+// -------------------- EPN affiliate decorator (mobile/app safe) --------------------
 const EPN = {
   campid: process.env.EPN_CAMPID || "",
   customid: process.env.EPN_CUSTOMID || "",
@@ -28,27 +29,52 @@ const EPN = {
   mkrid: process.env.EPN_MKRID || "711-53200-19255-0",
   siteid: process.env.EPN_SITEID || "0",
   mkevt: process.env.EPN_MKEVT || "1",
+  useRover: String(process.env.EPN_USE_ROVER || "").toLowerCase() === "true",
 };
 
-// Accept any ebay.* host (www, m., cgi., etc.). Do NOT decorate rover.ebay.* (already affiliate hop).
+// accept any ebay.* host (www, m., cgi., etc.). Don't re-wrap rover links.
 function isEbayHost(hostname) {
   if (!hostname) return false;
   const h = hostname.toLowerCase();
-  if (h.includes("rover.ebay.")) return false;
-  return h.includes(".ebay.");
+  return h.includes(".ebay.") && !h.includes("rover.ebay.");
+}
+
+// Build a Rover link that redirects to the final eBay URL.
+// This format is robust across desktop + mobile + app deep links.
+function buildRoverUrl(targetUrl) {
+  const base = new URL("https://rover.ebay.com/rover/1/");
+  // Path template: /rover/1/{mkrid}/1
+  base.pathname = `/rover/1/${EPN.mkrid}/1`;
+  // Standard rover params
+  base.searchParams.set("campid", EPN.campid);
+  base.searchParams.set("customid", EPN.customid || "");
+  base.searchParams.set("toolid", EPN.toolid);
+  base.searchParams.set("mkevt", EPN.mkevt);
+  base.searchParams.set("mkcid", EPN.mkcid);
+  base.searchParams.set("siteid", EPN.siteid);
+  // mpre = final destination (url-encoded)
+  base.searchParams.set("mpre", targetUrl);
+  return base.toString();
 }
 
 function decorateEbayUrl(raw, overrides = {}) {
   if (!raw) return raw;
+  const campid = overrides.campid ?? EPN.campid;
+  if (!campid) return raw; // nothing to do without a campaign id
+
   try {
     const u = new URL(raw);
 
-    // Only decorate ebay.* links (not external retailers)
-    if (!isEbayHost(u.hostname)) return raw;
+    // If it's already a rover link, leave as-is
+    if (u.hostname.toLowerCase().includes("rover.ebay.")) return raw;
 
-    // Need your campaign id configured
-    const campid = overrides.campid ?? EPN.campid;
-    if (!campid) return raw;
+    // Prefer Rover wrapper when enabled (best for mobile/app)
+    if (EPN.useRover && isEbayHost(u.hostname)) {
+      return buildRoverUrl(raw);
+    }
+
+    // Otherwise append params directly to ebay.* URL
+    if (!isEbayHost(u.hostname)) return raw;
 
     const params = {
       mkcid: overrides.mkcid ?? EPN.mkcid,
@@ -60,13 +86,11 @@ function decorateEbayUrl(raw, overrides = {}) {
       mkevt: overrides.mkevt ?? EPN.mkevt,
     };
 
-    // Set/overwrite cleanly (works whether or not they already exist)
     for (const [k, v] of Object.entries(params)) {
       if (v !== undefined && v !== null && String(v).length) {
         u.searchParams.set(k, String(v));
       }
     }
-
     return u.toString();
   } catch {
     return raw;
@@ -104,7 +128,7 @@ async function getEbayToken() {
 
   const json = await res.json();
   const ttl = (json.expires_in || 7200) * 1000;
-  _tok = { val: json.access_token, exp: Date.now() + ttl - 10 * 60 * 1000 };
+  _tok = { val: json.access_token, exp: Date.now() + ttl - 10 * 60 * 1000 }; // refresh ~10m early
   return _tok.val;
 }
 
