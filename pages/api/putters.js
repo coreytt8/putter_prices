@@ -93,6 +93,7 @@ async function getEbayToken() {
     },
     body: new URLSearchParams({
       grant_type: "client_credentials",
+      // Using root scope here to match your previously working deployment
       scope: "https://api.ebay.com/oauth/api_scope",
     }),
   });
@@ -395,10 +396,10 @@ export default async function handler(req, res) {
         totalPrice,
         shipping: shipping
           ? {
-              cost: safeNum(shipping?.shippingCost?.value),
-              currency: shipping?.shippingCost?.currency || item?.price?.currency || "USD",
+              cost: shipping.cost,
+              currency: shipping.currency || item?.price?.currency || "USD",
               free: safeNum(shipping?.shippingCost?.value) === 0,
-              type: shipping?.type || null,
+              type: shipping.type || null,
             }
           : null,
         seller: { feedbackPct: sellerPct, feedbackScore: sellerScore, username: item?.seller?.username || null },
