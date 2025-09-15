@@ -242,6 +242,13 @@ async function fetchEbayBrowse({ q, limit = 50, offset = 0, sort, forceCategory 
   if (sort === "newlylisted") url.searchParams.set("sort", "newlyListed");
   if (forceCategory) url.searchParams.set("category_ids", "115280"); // Golf Clubs
 
+  // NEW: per-query reference id + minimal affiliate header to get itemAffiliateWebUrl
+  const refId = `putteriq-${(q || "").slice(0, 60)}`;
+  const endUserCtx =
+    EPN.campid
+      ? `affiliateCampaignId=${EPN.campid},affiliateReferenceId=${encodeURIComponent(refId)}`
+      : "";
+
   async function call(bearer) {
     return fetch(url.toString(), {
       headers: {
@@ -249,7 +256,7 @@ async function fetchEbayBrowse({ q, limit = 50, offset = 0, sort, forceCategory 
         Accept: "application/json",
         "Content-Type": "application/json",
         "X-EBAY-C-MARKETPLACE-ID": EBAY_SITE,
-        "X-EBAY-C-ENDUSERCTX": `contextualLocation=${EBAY_SITE}`,
+        ...(endUserCtx ? { "X-EBAY-C-ENDUSERCTX": endUserCtx } : {}),
       },
     });
   }
@@ -264,7 +271,9 @@ async function fetchEbayBrowse({ q, limit = 50, offset = 0, sort, forceCategory 
     const txt = await res.text().catch(() => "");
     throw new Error(`eBay Browse error ${res.status}: ${txt}`);
   }
-  return res.json();
+  const data = await res.json();
+  // Return refId so the mapper can include it in fallback decoration
+  return { data, refId };
 }
 
 // -------------------- API Route (pages router) --------------------
@@ -318,9 +327,12 @@ export default async function handler(req, res) {
 
     let items = [];
     let totalFromEbay = 0;
+    let lastRefId = null;
     for (const r of responses) {
       if (r.status === "fulfilled") {
-        const data = r.value || {};
+        const payload = r.value || {};
+        const data = payload.data || {};
+        lastRefId = payload.refId || lastRefId;
         totalFromEbay = Math.max(totalFromEbay, Number(data?.total || 0));
         const arr = Array.isArray(data?.itemSummaries) ? data.itemSummaries : [];
         items.push(...arr);
@@ -331,9 +343,10 @@ export default async function handler(req, res) {
     if (items.length < 10 && !/\bputter\b/i.test(q)) {
       const fq = `${q} putter`;
       const extra = await fetchEbayBrowse({ q: fq, limit, offset: 0, sort, forceCategory });
-      const arr = Array.isArray(extra?.itemSummaries) ? extra.itemSummaries : [];
+      const arr = Array.isArray(extra?.data?.itemSummaries) ? extra.data.itemSummaries : [];
       items.push(...arr);
-      totalFromEbay = Math.max(totalFromEbay, Number(extra?.total || 0));
+      totalFromEbay = Math.max(totalFromEbay, Number(extra?.data?.total || 0));
+      lastRefId = extra?.refId || lastRefId;
     }
 
     const fetchedCount = items.length;
@@ -360,8 +373,11 @@ export default async function handler(req, res) {
       const shipCost = shipping?.cost ?? 0;
       const totalPrice = itemPrice != null && shipCost != null ? itemPrice + shipCost : itemPrice ?? null;
 
-      const rawUrl = item?.itemWebUrl || item?.itemHref;
-      const url = decorateEbayUrl(rawUrl);
+      // Prefer eBay's affiliate URL; fallback to decorated WebUrl + include customid=refId
+      const rawUrl = item?.itemAffiliateWebUrl || item?.itemWebUrl || item?.itemHref;
+      const url = item?.itemAffiliateWebUrl
+        ? item.itemAffiliateWebUrl
+        : decorateEbayUrl(rawUrl, { customid: lastRefId || `putteriq-${(q || "").slice(0, 60)}` });
 
       const modelKey = normalizeModelFromTitle(item?.title || "", family);
 
@@ -379,10 +395,10 @@ export default async function handler(req, res) {
         totalPrice,
         shipping: shipping
           ? {
-              cost: shipping.cost,
-              currency: shipping.currency || item?.price?.currency || "USD",
-              free: Boolean(shipping.free),
-              type: shipping.type || null,
+              cost: safeNum(shipping?.shippingCost?.value),
+              currency: shipping?.shippingCost?.currency || item?.price?.currency || "USD",
+              free: safeNum(shipping?.shippingCost?.value) === 0,
+              type: shipping?.type || null,
             }
           : null,
         seller: { feedbackPct: sellerPct, feedbackScore: sellerScore, username: item?.seller?.username || null },
