@@ -17,7 +17,7 @@
  * EPN_MKEVT=1
  */
 
-import { db } from "../../lib/db"; // ✅ NEW: DB client (fire-and-forget inserts)
+import { db } from "../../lib/db"; // DB client (fire-and-forget inserts)
 
 const EBAY_BROWSE_URL = "https://api.ebay.com/buy/browse/v1/item_summary/search";
 const EBAY_SITE = process.env.EBAY_SITE || "EBAY_US";
@@ -233,6 +233,55 @@ function normalizeModelFromTitle(title = "", fallbackFamily = null) {
   return tokens.length ? tokens.join(" ") : (title || "unknown").slice(0, 50);
 }
 
+// --------- NEW: de-dupe helpers ----------
+function extractItemIdFromUrl(raw) {
+  if (!raw) return null;
+  try {
+    const u = new URL(raw);
+    const path = u.pathname || "";
+    const mPath = path.match(/\/itm\/(?:[^/]+\/)?(\d{9,})/);
+    if (mPath) return mPath[1];
+    const mItem = u.search.match(/(?:\?|&)item=(\d{9,})/i);
+    if (mItem) return mItem[1];
+    const mItm = u.search.match(/(?:\?|&)itm=(\d{9,})/i);
+    if (mItm) return mItm[1];
+    return null;
+  } catch {
+    return null;
+  }
+}
+
+function canonicalItemId(item) {
+  return (
+    item?.itemId ||
+    item?.legacyItemId ||
+    extractItemIdFromUrl(item?.itemWebUrl || item?.itemHref) ||
+    null
+  );
+}
+
+function normalizeTitleForKey(s = "") {
+  return s
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, " ")
+    .replace(/\b(scotty|cameron|titleist|putter|golf|lh|rh|left|right)\b/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+// tiny intra-model cleanup if needed
+function dedupeWithin(arr) {
+  const by = new Set();
+  const out = [];
+  for (const o of arr) {
+    const idish = /^\d{9,}$/.test(String(o.productId || "")) ? `id:${o.productId}` : `url:${o.url}`;
+    if (by.has(idish)) continue;
+    by.add(idish);
+    out.push(o);
+  }
+  return out;
+}
+
 // -------------------- eBay fetch --------------------
 async function fetchEbayBrowse({ q, limit = 50, offset = 0, sort, forceCategory }) {
   const token = await getEbayToken();
@@ -341,7 +390,7 @@ export default async function handler(req, res) {
 
     const fetchedCount = items.length;
 
-    // Map → offers
+    // Map → offers (same as before but with canonical id + keys)
     let offers = items.map((item) => {
       const image = item?.image?.imageUrl || item?.thumbnailImages?.[0]?.imageUrl || null;
 
@@ -368,9 +417,10 @@ export default async function handler(req, res) {
       const url = decorateEbayUrl(rawUrl);
 
       const modelKey = normalizeModelFromTitle(item?.title || "", family);
+      const canonId = canonicalItemId(item);
 
       return {
-        productId: item?.itemId || item?.legacyItemId || item?.itemHref || item?.title,
+        productId: canonId || item?.itemId || item?.legacyItemId || item?.itemHref || item?.title,
         url,
         title: item?.title,
         retailer: "eBay",
@@ -396,6 +446,8 @@ export default async function handler(req, res) {
         specs, // { length, family, headType, dexterity, hasHeadcover, shaft }
 
         __model: modelKey,
+        __titleKey: normalizeTitleForKey(item?.title || ""),
+        __imageKey: image || null,
       };
     });
 
@@ -430,6 +482,78 @@ export default async function handler(req, res) {
     } catch {
       // swallow insert errors completely (no user impact)
     }
+
+    // 🧹 DEDUPE: merge identical listings found across pages/variants
+    (() => {
+      const seen = new Map();
+      for (const o of offers) {
+        const key =
+          (typeof o.productId === "string" && /^\d{9,}$/.test(o.productId) ? `id:${o.productId}` : null) ||
+          `sig:${o.seller?.username || ""}|${o.__imageKey || ""}|${o.price ?? ""}|${o.__titleKey || ""}`;
+
+        const prev = seen.get(key);
+        if (!prev) {
+          seen.set(key, o);
+          continue;
+        }
+
+        // merge into prev
+        const next = { ...prev };
+
+        // price: keep cheaper (or the one that has a price)
+        if (typeof o.price === "number") {
+          if (typeof prev.price !== "number" || o.price < prev.price) {
+            next.price = o.price;
+            next.totalPrice = o.totalPrice;
+          }
+        }
+
+        // createdAt: keep earliest (older)
+        const ta = prev.createdAt ? new Date(prev.createdAt).getTime() : Infinity;
+        const tb = o.createdAt ? new Date(o.createdAt).getTime() : Infinity;
+        if (tb < ta) next.createdAt = o.createdAt;
+
+        // shipping: keep cheaper if both exist
+        const prevShip = prev?.shipping?.cost;
+        const newShip = o?.shipping?.cost;
+        if (Number.isFinite(newShip)) {
+          if (!Number.isFinite(prevShip) || newShip < prevShip) {
+            next.shipping = o.shipping;
+          }
+        }
+
+        // buying types union + earliest endTime
+        const sA = new Set(Array.isArray(prev?.buying?.types) ? prev.buying.types : []);
+        for (const t of (Array.isArray(o?.buying?.types) ? o.buying.types : [])) sA.add(t);
+        next.buying = {
+          ...prev.buying,
+          types: Array.from(sA),
+          bidCount: prev.buying?.bidCount ?? o.buying?.bidCount ?? null,
+          endTime:
+            (prev.buying?.endTime && o.buying?.endTime
+              ? (new Date(prev.buying.endTime) < new Date(o.buying.endTime) ? prev.buying.endTime : o.buying.endTime)
+              : (prev.buying?.endTime || o.buying?.endTime || null)),
+        };
+
+        // keep better specs/image if missing
+        if (!next.image && o.image) next.image = o.image;
+        next.specs = {
+          ...prev.specs,
+          ...Object.fromEntries(Object.entries(o.specs || {}).filter(([_, v]) => v != null)),
+        };
+
+        // location/returns/seller – prefer filled values
+        if (!next.location?.country && o.location?.country) next.location = o.location;
+        if (!next.returns?.accepted && o.returns?.accepted != null) next.returns = o.returns;
+        if (!next.seller?.username && o.seller?.username) next.seller = o.seller;
+
+        // prefer non-empty decorated url if somehow missing
+        if (!next.url && o.url) next.url = o.url;
+
+        seen.set(key, next);
+      }
+      offers = Array.from(seen.values());
+    })();
 
     // Track drops for debugging
     let droppedNoPrice = 0;
@@ -560,7 +684,7 @@ export default async function handler(req, res) {
     let groups = Array.from(groupsMap.values()).map((g) => ({
       ...g,
       retailers: Array.from(g.retailers),
-      offers: g.offers.sort((a, b) => (a.price ?? Infinity) - (b.price ?? Infinity)),
+      offers: dedupeWithin(g.offers).sort((a, b) => (a.price ?? Infinity) - (b.price ?? Infinity)),
     }));
 
     if (sort === "newlylisted") {
