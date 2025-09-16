@@ -778,7 +778,8 @@ export default function PuttersPage() {
 
                     {isOpen && (
                       <ul className="mt-3 space-y-2">
-                        {ordered.slice(0, 10).map((o) => (
+                        {/* CHANGED: render ALL ordered offers */}
+                        {ordered.map((o) => (
                           <li key={o.productId + o.url} className="flex items-center justify-between gap-3 rounded border border-gray-100 p-2">
                             <div className="flex min-w-0 items-center gap-2">
                               {retailerLogos[o.retailer] && (
@@ -811,9 +812,6 @@ export default function PuttersPage() {
                             </div>
                           </li>
                         ))}
-                        {g.count > 10 && (
-                          <li className="px-2 pt-1 text-xs text-gray-500">Showing top 10 offers.</li>
-                        )}
                       </ul>
                     )}
                   </div>

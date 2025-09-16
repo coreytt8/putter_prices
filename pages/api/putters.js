@@ -5,7 +5,6 @@
  * EBAY_CLIENT_ID
  * EBAY_CLIENT_SECRET
  * EBAY_SITE=EBAY_US
- * DATABASE_URL (for Neon/Postgres)
  *
  * Optional EPN affiliate params (campid is the important one):
  * EPN_CAMPID=YOUR_CAMPAIGN_ID
@@ -17,12 +16,10 @@
  * EPN_MKEVT=1
  */
 
-import { db } from "../../lib/db"; // DB client (fire-and-forget inserts)
-
 const EBAY_BROWSE_URL = "https://api.ebay.com/buy/browse/v1/item_summary/search";
 const EBAY_SITE = process.env.EBAY_SITE || "EBAY_US";
 
-// -------------------- EPN affiliate decorator (patched) --------------------
+// -------------------- EPN affiliate decorator --------------------
 const EPN = {
   campid: process.env.EPN_CAMPID || "",
   customid: process.env.EPN_CUSTOMID || "",
@@ -33,7 +30,6 @@ const EPN = {
   mkevt: process.env.EPN_MKEVT || "1",
 };
 
-// Accept any ebay.* host (www, m., cgi., etc.). Do NOT decorate rover.ebay.* (already affiliate hop).
 function isEbayHost(hostname) {
   if (!hostname) return false;
   const h = hostname.toLowerCase();
@@ -45,11 +41,8 @@ function decorateEbayUrl(raw, overrides = {}) {
   if (!raw) return raw;
   try {
     const u = new URL(raw);
-
-    // Only decorate ebay.* links (not external retailers)
     if (!isEbayHost(u.hostname)) return raw;
 
-    // Need your campaign id configured
     const campid = overrides.campid ?? EPN.campid;
     if (!campid) return raw;
 
@@ -62,21 +55,18 @@ function decorateEbayUrl(raw, overrides = {}) {
       toolid: overrides.toolid ?? EPN.toolid,
       mkevt: overrides.mkevt ?? EPN.mkevt,
     };
-
-    // Set/overwrite cleanly (works whether or not they already exist)
     for (const [k, v] of Object.entries(params)) {
       if (v !== undefined && v !== null && String(v).length) {
         u.searchParams.set(k, String(v));
       }
     }
-
     return u.toString();
   } catch {
     return raw;
   }
 }
 
-// -------------------- Token (client-credentials) --------------------
+// -------------------- Token --------------------
 let _tok = { val: null, exp: 0 };
 
 async function getEbayToken() {
@@ -117,6 +107,8 @@ const safeNum = (n) => {
   return Number.isFinite(x) ? x : null;
 };
 
+const norm = (s) => String(s || "").trim().toLowerCase();
+
 function pickCheapestShipping(shippingOptions) {
   if (!Array.isArray(shippingOptions) || shippingOptions.length === 0) return null;
   const sorted = [...shippingOptions].sort((a, b) => {
@@ -136,7 +128,47 @@ function pickCheapestShipping(shippingOptions) {
   };
 }
 
-const norm = (s) => String(s || "").trim().toLowerCase();
+/** Ensure every query is about putters (and improve recall) */
+function normalizeSearchQ(q = "") {
+  let s = String(q || "").trim();
+  if (!s) return s;
+
+  // singularize "putters" → "putter"
+  s = s.replace(/\bputters\b/gi, "putter");
+
+  // guarantee exactly one "putter"
+  if (!/\bputter\b/i.test(s)) s = `${s} putter`;
+  s = s.replace(/\b(putter)(\s+\1)+\b/gi, "putter");
+
+  return s.replace(/\s+/g, " ").trim();
+}
+
+// Recognize putter items (title, aspects, or category path)
+function isLikelyPutter(item) {
+  const title = norm(item?.title);
+  if (/\bputter\b/.test(title)) return true;
+
+  const aspects = [
+    ...(Array.isArray(item?.itemSpecifics) ? item.itemSpecifics : []),
+    ...(Array.isArray(item?.localizedAspects) ? item.localizedAspects : []),
+    ...(Array.isArray(item?.additionalProductIdentities) ? item.additionalProductIdentities : []),
+  ];
+  for (const ent of aspects) {
+    const n = norm(ent?.name);
+    const v = norm(ent?.value ?? (Array.isArray(ent?.values) ? ent.values[0] : ""));
+    if (!n) continue;
+    if ((n.includes("putter") || n.includes("head type")) && (v || n.includes("putter"))) {
+      return true;
+    }
+  }
+
+  // Some responses include a category path list of strings or nodes—check loosely
+  const cat = item?.categoryPath || item?.categoryPathIds || item?.categories;
+  const asString = JSON.stringify(cat || "").toLowerCase();
+  if (asString.includes("putter")) return true;
+
+  return false;
+}
 
 function pickAspect(item, names = []) {
   const lists = [item?.itemSpecifics, item?.localizedAspects, item?.additionalProductIdentities].filter(Boolean);
@@ -233,55 +265,6 @@ function normalizeModelFromTitle(title = "", fallbackFamily = null) {
   return tokens.length ? tokens.join(" ") : (title || "unknown").slice(0, 50);
 }
 
-// --------- NEW: de-dupe helpers ----------
-function extractItemIdFromUrl(raw) {
-  if (!raw) return null;
-  try {
-    const u = new URL(raw);
-    const path = u.pathname || "";
-    const mPath = path.match(/\/itm\/(?:[^/]+\/)?(\d{9,})/);
-    if (mPath) return mPath[1];
-    const mItem = u.search.match(/(?:\?|&)item=(\d{9,})/i);
-    if (mItem) return mItem[1];
-    const mItm = u.search.match(/(?:\?|&)itm=(\d{9,})/i);
-    if (mItm) return mItm[1];
-    return null;
-  } catch {
-    return null;
-  }
-}
-
-function canonicalItemId(item) {
-  return (
-    item?.itemId ||
-    item?.legacyItemId ||
-    extractItemIdFromUrl(item?.itemWebUrl || item?.itemHref) ||
-    null
-  );
-}
-
-function normalizeTitleForKey(s = "") {
-  return s
-    .toLowerCase()
-    .replace(/[^a-z0-9]+/g, " ")
-    .replace(/\b(scotty|cameron|titleist|putter|golf|lh|rh|left|right)\b/g, " ")
-    .replace(/\s+/g, " ")
-    .trim();
-}
-
-// tiny intra-model cleanup if needed
-function dedupeWithin(arr) {
-  const by = new Set();
-  const out = [];
-  for (const o of arr) {
-    const idish = /^\d{9,}$/.test(String(o.productId || "")) ? `id:${o.productId}` : `url:${o.url}`;
-    if (by.has(idish)) continue;
-    by.add(idish);
-    out.push(o);
-  }
-  return out;
-}
-
 // -------------------- eBay fetch --------------------
 async function fetchEbayBrowse({ q, limit = 50, offset = 0, sort, forceCategory }) {
   const token = await getEbayToken();
@@ -319,12 +302,16 @@ async function fetchEbayBrowse({ q, limit = 50, offset = 0, sort, forceCategory 
   return res.json();
 }
 
-// -------------------- API Route (pages router) --------------------
+// -------------------- API Route --------------------
 export default async function handler(req, res) {
   if (req.method !== "GET") return res.status(405).json({ ok: false, error: "Method Not Allowed" });
 
   const sp = req.query;
-  const q = (sp.q || "").toString().trim();
+
+  // Normalize + enforce "putters-only" semantics
+  const rawQ = (sp.q || "").toString().trim();
+  const q = normalizeSearchQ(rawQ);
+
   const group = (sp.group || "true") === "true";
   const onlyComplete = sp.onlyComplete === "true";
   const minPrice = safeNum(sp.minPrice);
@@ -333,16 +320,19 @@ export default async function handler(req, res) {
   const buyingOptions = (sp.buyingOptions || "").toString().split(",").map((s) => s.trim()).filter(Boolean);
   const sort = (sp.sort || "").toString();
 
-  const dex = (sp.dex || "").toString().toUpperCase(); // LEFT/RIGHT/""
-  const head = (sp.head || "").toString().toUpperCase(); // BLADE/MALLET/""
+  const dex = (sp.dex || "").toString().toUpperCase();
+  const head = (sp.head || "").toString().toUpperCase();
   const lengthsParam = (sp.lengths || "").toString().trim();
   const lengthList = lengthsParam ? lengthsParam.split(",").map(Number).filter(Number.isFinite) : [];
 
   const page = Math.max(1, Number(sp.page || "1"));
   const perPage = Math.max(1, Math.min(50, Number(sp.perPage || "10")));
-  const broaden = sp.broaden === "true";
-  const forceCategory = sp.forceCategory === "true";
-  const samplePages = Math.max(1, Math.min(5, Number(sp.samplePages || (broaden ? 3 : 2))));
+
+  // Default: lock to Golf Clubs category (you can pass ?forceCategory=false to compare)
+  const forceCategory = (sp.forceCategory || "true") !== "false";
+
+  // Wider default sampling for better recall (override with ?samplePages=N up to 5)
+  const samplePages = Math.max(1, Math.min(5, Number(sp.samplePages || 4)));
 
   if (!q) {
     return res.status(200).json({
@@ -353,7 +343,7 @@ export default async function handler(req, res) {
       hasPrev: false,
       fetchedCount: 0,
       keptCount: 0,
-      meta: { total: 0, returned: 0, cards: 0, page, perPage, broaden, sort, source: "ebay-browse" },
+      meta: { total: 0, returned: 0, cards: 0, page, perPage, sort, source: "ebay-browse" },
       analytics: { snapshot: null },
     });
   }
@@ -361,7 +351,7 @@ export default async function handler(req, res) {
   try {
     const limit = 50;
 
-    // Primary queries
+    // Primary queries (normalized q)
     const calls = [];
     for (let i = 0; i < samplePages; i++) {
       calls.push(fetchEbayBrowse({ q, limit, offset: i * limit, sort, forceCategory }));
@@ -379,22 +369,26 @@ export default async function handler(req, res) {
       }
     }
 
-    // Fallback: if recall is low, also try "<q> putter"
-    if (items.length < 10 && !/\bputter\b/i.test(q)) {
-      const fq = `${q} putter`;
-      const extra = await fetchEbayBrowse({ q: fq, limit, offset: 0, sort, forceCategory });
-      const arr = Array.isArray(extra?.itemSummaries) ? extra.itemSummaries : [];
-      items.push(...arr);
-      totalFromEbay = Math.max(totalFromEbay, Number(extra?.total || 0));
+    // If recall is still low, try an alternate variant (remove plural entirely, keep "putter" once)
+    if (items.length < 20) {
+      const alt = normalizeSearchQ(rawQ.replace(/\bputters\b/gi, "").trim());
+      if (alt && alt !== q) {
+        const extra = await fetchEbayBrowse({ q: alt, limit, offset: 0, sort, forceCategory });
+        const arr = Array.isArray(extra?.itemSummaries) ? extra.itemSummaries : [];
+        items.push(...arr);
+        totalFromEbay = Math.max(totalFromEbay, Number(extra?.total || 0));
+      }
     }
+
+    // Strict "putter only" filter
+    items = items.filter(isLikelyPutter);
 
     const fetchedCount = items.length;
 
-    // Map → offers (same as before but with canonical id + keys)
+    // Map → offers
     let offers = items.map((item) => {
       const image = item?.image?.imageUrl || item?.thumbnailImages?.[0]?.imageUrl || null;
 
-      // specs & enrichment
       const shipping = pickCheapestShipping(item?.shippingOptions);
       const sellerPct = item?.seller?.feedbackPercentage ? Number(item.seller.feedbackPercentage) : null;
       const sellerScore = item?.seller?.feedbackScore ? Number(item.seller.feedbackScore) : null;
@@ -403,7 +397,6 @@ export default async function handler(req, res) {
       const buying = {
         types: Array.isArray(item?.buyingOptions) ? item.buyingOptions : [],
         bidCount: item?.bidCount != null ? Number(item.bidCount) : null,
-        endTime: item?.itemEndDate || null,
       };
 
       const specs = parseSpecsFromItem(item);
@@ -417,10 +410,9 @@ export default async function handler(req, res) {
       const url = decorateEbayUrl(rawUrl);
 
       const modelKey = normalizeModelFromTitle(item?.title || "", family);
-      const canonId = canonicalItemId(item);
 
       return {
-        productId: canonId || item?.itemId || item?.legacyItemId || item?.itemHref || item?.title,
+        productId: item?.itemId || item?.legacyItemId || item?.itemHref || item?.title,
         url,
         title: item?.title,
         retailer: "eBay",
@@ -444,116 +436,18 @@ export default async function handler(req, res) {
         returns: { accepted: returnsAccepted, days: returnDays },
         buying,
         specs, // { length, family, headType, dexterity, hasHeadcover, shaft }
-
         __model: modelKey,
-        __titleKey: normalizeTitleForKey(item?.title || ""),
-        __imageKey: image || null,
       };
     });
 
-    // ✅ Persist snapshots (fire-and-forget; never blocks the response)
-    try {
-      for (const o of offers) {
-        db.query(
-          `insert into listing_events
-             (item_id, url, title, model_key, seller, price, ship_cost, currency, country,
-              condition, buying_types, end_time, length_inches, dexterity, head_type, has_headcover)
-           values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16)`,
-          [
-            o.productId || null,
-            o.url || null,
-            o.title || null,
-            o.__model || null,
-            o?.seller?.username || null,
-            Number.isFinite(o?.price) ? o.price : null,
-            Number.isFinite(o?.shipping?.cost) ? o.shipping.cost : null,
-            o.currency || null,
-            o?.location?.country || null,
-            o?.condition || null,
-            Array.isArray(o?.buying?.types) ? o.buying.types : null,
-            o?.buying?.endTime || null,
-            Number.isFinite(o?.specs?.length) ? o.specs.length : null,
-            o?.specs?.dexterity || null,
-            o?.specs?.headType || null,
-            Boolean(o?.specs?.hasHeadcover),
-          ]
-        ).catch(() => {});
-      }
-    } catch {
-      // swallow insert errors completely (no user impact)
-    }
-
-    // 🧹 DEDUPE: merge identical listings found across pages/variants
-    (() => {
-      const seen = new Map();
-      for (const o of offers) {
-        const key =
-          (typeof o.productId === "string" && /^\d{9,}$/.test(o.productId) ? `id:${o.productId}` : null) ||
-          `sig:${o.seller?.username || ""}|${o.__imageKey || ""}|${o.price ?? ""}|${o.__titleKey || ""}`;
-
-        const prev = seen.get(key);
-        if (!prev) {
-          seen.set(key, o);
-          continue;
-        }
-
-        // merge into prev
-        const next = { ...prev };
-
-        // price: keep cheaper (or the one that has a price)
-        if (typeof o.price === "number") {
-          if (typeof prev.price !== "number" || o.price < prev.price) {
-            next.price = o.price;
-            next.totalPrice = o.totalPrice;
-          }
-        }
-
-        // createdAt: keep earliest (older)
-        const ta = prev.createdAt ? new Date(prev.createdAt).getTime() : Infinity;
-        const tb = o.createdAt ? new Date(o.createdAt).getTime() : Infinity;
-        if (tb < ta) next.createdAt = o.createdAt;
-
-        // shipping: keep cheaper if both exist
-        const prevShip = prev?.shipping?.cost;
-        const newShip = o?.shipping?.cost;
-        if (Number.isFinite(newShip)) {
-          if (!Number.isFinite(prevShip) || newShip < prevShip) {
-            next.shipping = o.shipping;
-          }
-        }
-
-        // buying types union + earliest endTime
-        const sA = new Set(Array.isArray(prev?.buying?.types) ? prev.buying.types : []);
-        for (const t of (Array.isArray(o?.buying?.types) ? o.buying.types : [])) sA.add(t);
-        next.buying = {
-          ...prev.buying,
-          types: Array.from(sA),
-          bidCount: prev.buying?.bidCount ?? o.buying?.bidCount ?? null,
-          endTime:
-            (prev.buying?.endTime && o.buying?.endTime
-              ? (new Date(prev.buying.endTime) < new Date(o.buying.endTime) ? prev.buying.endTime : o.buying.endTime)
-              : (prev.buying?.endTime || o.buying?.endTime || null)),
-        };
-
-        // keep better specs/image if missing
-        if (!next.image && o.image) next.image = o.image;
-        next.specs = {
-          ...prev.specs,
-          ...Object.fromEntries(Object.entries(o.specs || {}).filter(([_, v]) => v != null)),
-        };
-
-        // location/returns/seller – prefer filled values
-        if (!next.location?.country && o.location?.country) next.location = o.location;
-        if (!next.returns?.accepted && o.returns?.accepted != null) next.returns = o.returns;
-        if (!next.seller?.username && o.seller?.username) next.seller = o.seller;
-
-        // prefer non-empty decorated url if somehow missing
-        if (!next.url && o.url) next.url = o.url;
-
-        seen.set(key, next);
-      }
-      offers = Array.from(seen.values());
-    })();
+    // De-dupe obvious clones (same seller + same title + same price)
+    const seen = new Set();
+    offers = offers.filter((o) => {
+      const key = `${(o.seller?.username || "").toLowerCase()}|${(o.title || "").toLowerCase()}|${o.price ?? "?"}`;
+      if (seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    });
 
     // Track drops for debugging
     let droppedNoPrice = 0;
@@ -646,10 +540,9 @@ export default async function handler(req, res) {
           cards: pageOffers.length,
           page,
           perPage,
-          broaden,
           sort: sort || "default",
           source: "ebay-browse",
-          debug: { droppedNoPrice, droppedNoImage },
+          debug: { droppedNoPrice, droppedNoImage, totalFromEbay, normalizedQ: q },
         },
         analytics,
       });
@@ -684,7 +577,7 @@ export default async function handler(req, res) {
     let groups = Array.from(groupsMap.values()).map((g) => ({
       ...g,
       retailers: Array.from(g.retailers),
-      offers: dedupeWithin(g.offers).sort((a, b) => (a.price ?? Infinity) - (b.price ?? Infinity)),
+      offers: g.offers.sort((a, b) => (a.price ?? Infinity) - (b.price ?? Infinity)),
     }));
 
     if (sort === "newlylisted") {
@@ -693,7 +586,7 @@ export default async function handler(req, res) {
           ? Math.max(...a.offers.map((o) => (o.createdAt ? new Date(o.createdAt).getTime() : 0)))
           : 0;
         const tb = b.offers.length
-          ? Math.max(...b.offers.map((o) => (o.createdAt ? new Date(o.createdAt).getTime() : 0)))
+          ? Math.max(...b.offers.map((o) => (o.createdAt ? new Date(b.createdAt).getTime() : 0)))
           : 0;
         return tb - ta;
       });
@@ -718,10 +611,9 @@ export default async function handler(req, res) {
         cards: pageGroups.length,
         page,
         perPage,
-        broaden,
         sort: sort || "bestprice",
         source: "ebay-browse",
-        debug: { droppedNoPrice, droppedNoImage },
+        debug: { droppedNoPrice, droppedNoImage, totalFromEbay, normalizedQ: q },
       },
       analytics,
     });
