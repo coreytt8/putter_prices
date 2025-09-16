@@ -4,7 +4,7 @@
  * Required ENV (Vercel + .env.local):
  * EBAY_CLIENT_ID
  * EBAY_CLIENT_SECRET
- * EBAY_SITE=EBAY_US
+ * EBAY_SITE=EBAY_US           // default marketplace if site param missing/invalid
  *
  * Optional EPN affiliate params (campid is the important one):
  * EPN_CAMPID=YOUR_CAMPAIGN_ID
@@ -17,7 +17,17 @@
  */
 
 const EBAY_BROWSE_URL = "https://api.ebay.com/buy/browse/v1/item_summary/search";
-const EBAY_SITE = process.env.EBAY_SITE || "EBAY_US";
+const DEFAULT_EBAY_SITE = process.env.EBAY_SITE || "EBAY_US";
+const SUPPORTED_MARKETS = new Set([
+  "EBAY_AT","EBAY_AU","EBAY_BE","EBAY_CA","EBAY_CH","EBAY_DE","EBAY_ES","EBAY_FR",
+  "EBAY_GB","EBAY_HK","EBAY_IE","EBAY_IT","EBAY_NL","EBAY_PL","EBAY_SG","EBAY_US"
+]);
+
+// Language hint for dual-language markets (optional)
+const MARKET_LANG = {
+  EBAY_BE: "nl-BE",   // change to "fr-BE" if you prefer French
+  EBAY_CA: "en-CA",   // change to "fr-CA" to prefer French
+};
 
 // -------------------- EPN affiliate decorator --------------------
 const EPN = {
@@ -87,7 +97,6 @@ async function getEbayToken() {
     },
     body: new URLSearchParams({
       grant_type: "client_credentials",
-      // Using root scope to match your restored deployment’s behavior
       scope: "https://api.ebay.com/oauth/api_scope",
     }),
   });
@@ -226,7 +235,7 @@ function normalizeModelFromTitle(title = "", fallbackFamily = null) {
 }
 
 // -------------------- eBay fetch --------------------
-async function fetchEbayBrowse({ q, limit = 200, offset = 0, sort, forceCategory }) {
+async function fetchEbayBrowse({ q, limit = 200, offset = 0, sort, forceCategory, site }) {
   const token = await getEbayToken();
 
   const url = new URL(EBAY_BROWSE_URL);
@@ -237,11 +246,15 @@ async function fetchEbayBrowse({ q, limit = 200, offset = 0, sort, forceCategory
   if (sort === "newlylisted") url.searchParams.set("sort", "newlyListed");
   if (forceCategory) url.searchParams.set("category_ids", "115280"); // Golf Clubs (optional)
 
-  // Per-query reference id + affiliate header so we get itemAffiliateWebUrl
+  const MARKET = SUPPORTED_MARKETS.has(site) ? site : DEFAULT_EBAY_SITE;
+
+  // Per-query reference id + affiliate header so we may get itemAffiliateWebUrl
   const refId = `putteriq-${(q || "").slice(0, 60)}`;
   const endUserCtx = EPN.campid
     ? `affiliateCampaignId=${EPN.campid},affiliateReferenceId=${encodeURIComponent(refId)}`
     : "";
+
+  const langHeader = MARKET_LANG[MARKET] ? { "Accept-Language": MARKET_LANG[MARKET] } : {};
 
   async function call(bearer) {
     return fetch(url.toString(), {
@@ -249,8 +262,9 @@ async function fetchEbayBrowse({ q, limit = 200, offset = 0, sort, forceCategory
         Authorization: `Bearer ${bearer}`,
         Accept: "application/json",
         "Content-Type": "application/json",
-        "X-EBAY-C-MARKETPLACE-ID": EBAY_SITE,
+        "X-EBAY-C-MARKETPLACE-ID": MARKET,
         ...(endUserCtx ? { "X-EBAY-C-ENDUSERCTX": endUserCtx } : {}),
+        ...langHeader,
       },
     });
   }
@@ -265,7 +279,7 @@ async function fetchEbayBrowse({ q, limit = 200, offset = 0, sort, forceCategory
     throw new Error(`eBay Browse error ${res.status}: ${txt}`);
   }
   const data = await res.json();
-  return { data, refId };
+  return { data, refId, site: MARKET };
 }
 
 // -------------------- API Route (pages router) --------------------
@@ -283,8 +297,7 @@ export default async function handler(req, res) {
   const maxPrice = safeNum(sp.maxPrice);
   const conds = (sp.conditions || "").toString().split(",").map((s) => s.trim()).filter(Boolean);
   const buyingOptions = (sp.buyingOptions || "").toString().split(",").map((s) => s.trim()).filter(Boolean);
-  const auctionsOnly = sp.auctionsOnly === "true"; // NEW: server-side auction filter
-
+  const auctionsOnly = sp.auctionsOnly === "true"; // server-side auction filter
   const sort = (sp.sort || "").toString();
 
   const dex = (sp.dex || "").toString().toUpperCase(); // LEFT/RIGHT/""
@@ -296,6 +309,7 @@ export default async function handler(req, res) {
   const perPage = Math.max(1, Math.min(50, Number(sp.perPage || "10")));
   const broaden = sp.broaden === "true";
   const forceCategory = sp.forceCategory === "true";
+  const siteParam = (sp.site || "").toString().trim().toUpperCase();
   const samplePages = Math.max(1, Math.min(5, Number(sp.samplePages || (broaden ? 3 : 2))));
 
   if (!q) {
@@ -307,7 +321,7 @@ export default async function handler(req, res) {
       hasPrev: false,
       fetchedCount: 0,
       keptCount: 0,
-      meta: { total: 0, returned: 0, cards: 0, page, perPage, broaden, sort, source: "ebay-browse" },
+      meta: { total: 0, returned: 0, cards: 0, page, perPage, broaden, sort, source: "ebay-browse", siteUsed: DEFAULT_EBAY_SITE },
       analytics: { snapshot: null },
     });
   }
@@ -318,18 +332,21 @@ export default async function handler(req, res) {
     // Primary queries
     const calls = [];
     for (let i = 0; i < samplePages; i++) {
-      calls.push(fetchEbayBrowse({ q, limit, offset: i * limit, sort, forceCategory }));
+      calls.push(fetchEbayBrowse({ q, limit, offset: i * limit, sort, forceCategory, site: siteParam }));
     }
     let responses = await Promise.allSettled(calls);
 
     let items = [];
     let totalFromEbay = 0;
     let lastRefId = null;
+    let siteUsed = SUPPORTED_MARKETS.has(siteParam) ? siteParam : DEFAULT_EBAY_SITE;
+
     for (const r of responses) {
       if (r.status === "fulfilled") {
         const payload = r.value || {};
         const data = payload.data || {};
         lastRefId = payload.refId || lastRefId;
+        siteUsed = payload.site || siteUsed;
         totalFromEbay = Math.max(totalFromEbay, Number(data?.total || 0));
         const arr = Array.isArray(data?.itemSummaries) ? data.itemSummaries : [];
         items.push(...arr);
@@ -340,11 +357,12 @@ export default async function handler(req, res) {
     if (items.length < 40 && !/\bputter(s)?\b/i.test(q)) {
       const widen = [`${q} putter`, `${q} putters`];
       for (const fq of widen) {
-        const extra = await fetchEbayBrowse({ q: fq, limit, offset: 0, sort, forceCategory });
+        const extra = await fetchEbayBrowse({ q: fq, limit, offset: 0, sort, forceCategory, site: siteParam });
         const arr = Array.isArray(extra?.data?.itemSummaries) ? extra.data.itemSummaries : [];
         items.push(...arr);
         totalFromEbay = Math.max(totalFromEbay, Number(extra?.data?.total || 0));
         lastRefId = extra?.refId || lastRefId;
+        siteUsed = extra?.site || siteUsed;
       }
     }
 
@@ -354,7 +372,6 @@ export default async function handler(req, res) {
     let offers = items.map((item) => {
       const image = item?.image?.imageUrl || item?.thumbnailImages?.[0]?.imageUrl || null;
 
-      // specs & enrichment
       const shipping = pickCheapestShipping(item?.shippingOptions);
       const sellerPct = item?.seller?.feedbackPercentage ? Number(item.seller.feedbackPercentage) : null;
       const sellerScore = item?.seller?.feedbackScore ? Number(item.seller.feedbackScore) : null;
@@ -363,7 +380,7 @@ export default async function handler(req, res) {
 
       const rawBuyingTypes = Array.isArray(item?.buyingOptions) ? item.buyingOptions : [];
       const types = rawBuyingTypes.map((t) => String(t).toUpperCase());
-      const isAuction = types.includes("AUCTION") || types.includes("AUCTION_WITH_BIN") || types.includes("CLASSIFIED_AD_AUCTION"); // future-proof
+      const isAuction = types.includes("AUCTION") || types.includes("AUCTION_WITH_BIN") || types.includes("CLASSIFIED_AD_AUCTION");
       const isBestOffer = types.includes("BEST_OFFER");
 
       const bidCount = item?.bidCount != null ? Number(item.bidCount) : null;
@@ -393,7 +410,7 @@ export default async function handler(req, res) {
         currency: item?.price?.currency || item?.currentBidPrice?.currency || "USD",
         condition: item?.condition || null,
         createdAt: item?.itemCreationDate || null,
-        endTime: item?.itemEndDate || null, // helpful for auctions
+        endTime: item?.itemEndDate || null,
         image,
 
         totalPrice,
@@ -520,6 +537,7 @@ export default async function handler(req, res) {
           broaden,
           sort: sort || "default",
           source: "ebay-browse",
+          siteUsed,
           debug: { droppedNoPrice, droppedNoImage },
         },
         analytics,
@@ -602,6 +620,7 @@ export default async function handler(req, res) {
         broaden,
         sort: sort || "bestprice",
         source: "ebay-browse",
+        siteUsed,
         debug: { droppedNoPrice, droppedNoImage },
       },
       analytics,

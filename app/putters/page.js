@@ -27,9 +27,29 @@ const BUYING_OPTIONS = [
 const SORT_OPTIONS = [
   { label: "Best Price: Low → High", value: "best_price_asc" },
   { label: "Best Price: High → Low", value: "best_price_desc" },
-  { label: "Recently listed", value: "recent" }, // maps to sort=newlylisted
+  { label: "Recently listed", value: "recent" },          // maps to sort=newlylisted
+  { label: "Ending soon (auctions)", value: "endingsoon" },// maps to sort=endingsoon
   { label: "Most Offers", value: "count_desc" },
   { label: "A → Z (Model)", value: "model_asc" },
+];
+
+const MARKET_OPTIONS = [
+  { code: "EBAY_US", label: "United States" },
+  { code: "EBAY_GB", label: "United Kingdom" },
+  { code: "EBAY_DE", label: "Germany" },
+  { code: "EBAY_FR", label: "France" },
+  { code: "EBAY_IT", label: "Italy" },
+  { code: "EBAY_ES", label: "Spain" },
+  { code: "EBAY_AU", label: "Australia" },
+  { code: "EBAY_CA", label: "Canada" },
+  { code: "EBAY_IE", label: "Ireland" },
+  { code: "EBAY_NL", label: "Netherlands" },
+  { code: "EBAY_PL", label: "Poland" },
+  { code: "EBAY_AT", label: "Austria" },
+  { code: "EBAY_CH", label: "Switzerland" },
+  { code: "EBAY_BE", label: "Belgium" },
+  { code: "EBAY_SG", label: "Singapore" },
+  { code: "EBAY_HK", label: "Hong Kong" },
 ];
 
 const FIXED_PER_PAGE = 10;
@@ -75,6 +95,10 @@ export default function PuttersPage() {
 
   const [page, setPage] = useState(1);
 
+  // NEW: marketplace + auctions
+  const [site, setSite] = useState("EBAY_US");
+  const [auctionsOnly, setAuctionsOnly] = useState(false);
+
   // NEW filters
   const [dex, setDex] = useState("");            // "", "LEFT", "RIGHT"
   const [head, setHead] = useState("");          // "", "BLADE", "MALLET"
@@ -101,6 +125,7 @@ export default function PuttersPage() {
     if (conds.length) params.set("conditions", conds.join(","));
     if (buying.length) params.set("buyingOptions", buying.join(","));
     if (sortBy === "recent") params.set("sort", "newlylisted");
+    if (sortBy === "endingsoon") params.set("sort", "endingsoon");
     if (broaden) params.set("broaden", "true");
 
     // NEW: filters
@@ -108,19 +133,23 @@ export default function PuttersPage() {
     if (head) params.set("head", head);
     if (lengths.length) params.set("lengths", lengths.join(","));
 
+    // NEW: marketplace + auctionsOnly
+    if (site) params.set("site", site);
+    if (auctionsOnly) params.set("auctionsOnly", "true");
+
     params.set("page", String(page));
     params.set("perPage", String(FIXED_PER_PAGE));
     params.set("group", groupMode ? "true" : "false");
 
-    // NEW: multi-page sampling hint (backend respects if supported)
+    // multi-page sampling hint
     params.set("samplePages", "3");
 
     return `/api/putters?${params.toString()}`;
-  }, [q, onlyComplete, minPrice, maxPrice, conds, buying, sortBy, page, groupMode, broaden, dex, head, lengths]);
+  }, [q, onlyComplete, minPrice, maxPrice, conds, buying, sortBy, page, groupMode, broaden, dex, head, lengths, site, auctionsOnly]);
 
   useEffect(() => {
     setPage(1);
-  }, [q, onlyComplete, minPrice, maxPrice, conds, buying, sortBy, groupMode, broaden, dex, head, lengths]);
+  }, [q, onlyComplete, minPrice, maxPrice, conds, buying, sortBy, groupMode, broaden, dex, head, lengths, site, auctionsOnly]);
 
   useEffect(() => {
     if (!q.trim()) {
@@ -175,7 +204,7 @@ export default function PuttersPage() {
     } else if (sortBy === "model_asc") {
       arr.sort((a,b) => (a.model || "").localeCompare(b.model || ""));
     }
-    // if "recent", backend already ordered by newest start time
+    // If "recent" or "endingsoon", backend already did ordering
     return arr;
   }, [groups, sortBy]);
 
@@ -193,13 +222,14 @@ export default function PuttersPage() {
     setConds([]); setBuying([]);
     setDex(""); setHead(""); setLengths([]);
     setSortBy("best_price_asc");
+    setSite("EBAY_US");
+    setAuctionsOnly(false);
     setPage(1); setGroupMode(true); setBroaden(false);
   };
 
   const canPrev = hasPrev && page > 1 && !loading;
   const canNext = hasNext && !loading;
 
-  // helper for group badges
   function summarizeDexHead(g) {
     const dexCounts = { LEFT: 0, RIGHT: 0 };
     const headCounts = { BLADE: 0, MALLET: 0 };
@@ -222,7 +252,6 @@ export default function PuttersPage() {
     const domHead = headCounts.BLADE === 0 && headCounts.MALLET === 0
       ? null
       : (headCounts.BLADE >= headCounts.MALLET ? "BLADE" : "MALLET");
-    // most common length among 33/34/35/36
     const domLen = Object.entries(lenCounts).sort((a,b)=>b[1]-a[1])[0];
     const domLenVal = domLen && domLen[1] > 0 ? Number(domLen[0]) : null;
     return { domDex, domHead, domLen: domLenVal };
@@ -289,18 +318,23 @@ export default function PuttersPage() {
           </select>
         </div>
 
-        <div className="rounded-md border border-gray-200 p-3">
-          <label className="flex items-center gap-2 text-sm">
-            <input
-              type="checkbox"
-              checked={broaden}
-              onChange={(e) => setBroaden(e.target.checked)}
-            />
-            Broaden search (include common variants)
-          </label>
-          <p className="mt-1 text-xs text-gray-500">
-            Pulls more pages from eBay before filtering. Helpful for niche models/years.
-          </p>
+        {/* NEW: Marketplace selector */}
+        <div>
+          <label className="mb-1 block text-sm font-medium">Marketplace</label>
+          <select
+            value={site}
+            onChange={(e) => setSite(e.target.value)}
+            className="w-full rounded-md border border-gray-300 px-3 py-2"
+          >
+            {MARKET_OPTIONS.map((opt) => (
+              <option key={opt.code} value={opt.code}>{opt.label}</option>
+            ))}
+          </select>
+          {apiData?.meta?.siteUsed && (
+            <div className="mt-1 text-xs text-gray-500">
+              Using: <span className="font-medium">{apiData.meta.siteUsed}</span>
+            </div>
+          )}
         </div>
 
         <div className="flex items-end justify-between gap-3">
@@ -326,6 +360,15 @@ export default function PuttersPage() {
               onChange={(e) => setOnlyComplete(e.target.checked)}
             />
             Only show listings with price & image
+          </label>
+          {/* NEW: Auctions only */}
+          <label className="mt-2 flex items-center gap-2 text-sm">
+            <input
+              type="checkbox"
+              checked={auctionsOnly}
+              onChange={(e) => setAuctionsOnly(e.target.checked)}
+            />
+            Auctions only (ending soon sort supported)
           </label>
         </div>
 
@@ -378,7 +421,7 @@ export default function PuttersPage() {
           </div>
         </div>
 
-        {/* NEW: Dexterity */}
+        {/* Dexterity */}
         <div className="rounded-lg border border-gray-200 p-4">
           <h3 className="mb-3 text-xs font-semibold uppercase tracking-wide text-gray-600">
             Dexterity
@@ -414,7 +457,7 @@ export default function PuttersPage() {
           </div>
         </div>
 
-        {/* NEW: Head Type */}
+        {/* Head Type */}
         <div className="rounded-lg border border-gray-200 p-4">
           <h3 className="mb-3 text-xs font-semibold uppercase tracking-wide text-gray-600">
             Head Type
@@ -450,7 +493,7 @@ export default function PuttersPage() {
           </div>
         </div>
 
-        {/* NEW: Common Lengths */}
+        {/* Common Lengths */}
         <div className="rounded-lg border border-gray-200 p-4 md:col-span-2">
           <h3 className="mb-3 text-xs font-semibold uppercase tracking-wide text-gray-600">
             Length (common)
@@ -541,7 +584,7 @@ export default function PuttersPage() {
         </div>
       )}
 
-      {/* LIVE analytics snapshot (renders only if backend returns analytics) */}
+      {/* LIVE analytics snapshot */}
       <MarketSnapshot
         snapshot={apiData?.analytics?.snapshot}
         meta={apiData?.meta}
@@ -709,7 +752,7 @@ export default function PuttersPage() {
             </div>
             <button
               disabled={!canNext}
-              onClick={() => setPage((p) => p + 1)}
+              onClick={() => setPage((p) => p + 1))}
               className={`rounded-md border px-3 py-2 text-sm ${canNext ? "hover:bg-gray-100" : "cursor-not-allowed opacity-50"}`}
             >
               Next →
@@ -768,7 +811,7 @@ export default function PuttersPage() {
             </div>
             <button
               disabled={!canNext}
-              onClick={() => setPage((p) => p + 1)}
+              onClick={() => setPage((p) => p + 1))}
               className={`rounded-md border px-3 py-2 text-sm ${canNext ? "hover:bg-gray-100" : "cursor-not-allowed opacity-50"}`}
             >
               Next →
