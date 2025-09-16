@@ -117,12 +117,15 @@ export default function PuttersPage() {
   const [head, setHead] = useState("");          // "", "BLADE", "MALLET"
   const [lengths, setLengths] = useState([]);    // [] or [33,34,35,36]
 
+  // NEW: Only Deals
+  const [onlyDeals, setOnlyDeals] = useState(false);
+
   const [groups, setGroups] = useState([]);
   const [offers, setOffers] = useState([]);
   const [loading, setLoading] = useState(false);
   const [err, setErr] = useState("");
-  const [hasNext, setHasNext] = useState(false);
-  const [hasPrev, setHasPrev] = useState(false);
+  const [hasNextServer, setHasNextServer] = useState(false);
+  const [hasPrevServer, setHasPrevServer] = useState(false);
   const [fetchedCount, setFetchedCount] = useState(null);
   const [keptCount, setKeptCount] = useState(null);
 
@@ -160,12 +163,12 @@ export default function PuttersPage() {
 
   useEffect(() => {
     setPage(1);
-  }, [q, onlyComplete, minPrice, maxPrice, conds, buying, sortBy, groupMode, broaden, dex, head, lengths]);
+  }, [q, onlyComplete, minPrice, maxPrice, conds, buying, sortBy, groupMode, broaden, dex, head, lengths, onlyDeals]);
 
   useEffect(() => {
     if (!q.trim()) {
       setGroups([]); setOffers([]);
-      setHasNext(false); setHasPrev(false);
+      setHasNextServer(false); setHasPrevServer(false);
       setFetchedCount(null); setKeptCount(null);
       setApiData(null);
       setErr(""); return;
@@ -189,8 +192,8 @@ export default function PuttersPage() {
             }
           }
           setOffers(pageOffers);
-          setHasNext(Boolean(data.hasNext));
-          setHasPrev(Boolean(data.hasPrev));
+          setHasNextServer(Boolean(data.hasNext));
+          setHasPrevServer(Boolean(data.hasPrev));
           setFetchedCount(typeof data.fetchedCount === "number" ? data.fetchedCount : null);
           setKeptCount(typeof data.keptCount === "number" ? data.keptCount : null);
           setApiData(data);
@@ -219,13 +222,7 @@ export default function PuttersPage() {
     return arr;
   }, [groups, sortBy]);
 
-  useEffect(() => {
-    const next = {};
-    sortedGroups.forEach((g) => { next[g.model] = false; });
-    setExpanded(next);
-  }, [sortedGroups.map((g) => g.model).join("|")]);
-
-  // Prefetch stats for models visible on the current page
+  // Prefetch stats for models visible in the *unfiltered* list (first page) to speed up filtering
   useEffect(() => {
     let ignore = false;
     async function prefetch() {
@@ -240,7 +237,31 @@ export default function PuttersPage() {
     if (sortedGroups.length) prefetch();
     return () => { ignore = true; };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [sortedGroups.map(g => g.model).join("|"), page]);
+  }, [sortedGroups.map(g => g.model).join("|")]);
+
+  // When "Only Deals" is ON, filter groups client-side using stats
+  const visibleGroups = useMemo(() => {
+    if (!onlyDeals) return sortedGroups;
+    return sortedGroups.filter((g) => {
+      const latest = statsByModel[g.model];
+      if (!latest || typeof g.bestPrice !== "number") return false;
+      const p25 = Number(latest.price_p25);
+      return Number.isFinite(p25) && g.bestPrice <= p25;
+    });
+  }, [sortedGroups, onlyDeals, statsByModel]);
+
+  // Client-side pagination when onlyDeals is ON; otherwise rely on server flags
+  const totalVisible = visibleGroups.length;
+  const pagedGroups = useMemo(() => {
+    const start = (page - 1) * FIXED_PER_PAGE;
+    return visibleGroups.slice(start, start + FIXED_PER_PAGE);
+  }, [visibleGroups, page]);
+
+  useEffect(() => {
+    const next = {};
+    visibleGroups.forEach((g) => { next[g.model] = false; });
+    setExpanded(next);
+  }, [visibleGroups.map((g) => g.model).join("|")]);
 
   const toggleExpand = (model) => setExpanded((prev) => ({ ...prev, [model]: !prev[model] }));
 
@@ -249,12 +270,13 @@ export default function PuttersPage() {
     setMinPrice(""); setMaxPrice("");
     setConds([]); setBuying([]);
     setDex(""); setHead(""); setLengths([]);
+    setOnlyDeals(false);
     setSortBy("best_price_asc");
     setPage(1); setGroupMode(true); setBroaden(false);
   };
 
-  const canPrev = hasPrev && page > 1 && !loading;
-  const canNext = hasNext && !loading;
+  const canPrev = page > 1 && !loading;
+  const canNext = !loading && ((onlyDeals && page * FIXED_PER_PAGE < totalVisible) || (!onlyDeals && hasNextServer));
 
   // helper for group badges (existing)
   function summarizeDexHead(g) {
@@ -357,6 +379,21 @@ export default function PuttersPage() {
           </label>
           <p className="mt-1 text-xs text-gray-500">
             Pulls more pages from eBay before filtering. Helpful for niche models/years.
+          </p>
+        </div>
+
+        {/* NEW: Only Deals toggle */}
+        <div className="rounded-md border border-gray-200 p-3">
+          <label className="flex items-center gap-2 text-sm">
+            <input
+              type="checkbox"
+              checked={onlyDeals}
+              onChange={(e) => { setOnlyDeals(e.target.checked); setPage(1); }}
+            />
+            Only Deals (≤ P25)
+          </label>
+          <p className="mt-1 text-xs text-gray-500">
+            Shows model cards where the current best price is at or below the 25th percentile of recent sales.
           </p>
         </div>
 
@@ -587,14 +624,23 @@ export default function PuttersPage() {
 
       {q.trim() && !loading && !err && (
         <div className="mt-2 text-sm text-gray-600">
-          Showing{" "}
-          <span className="font-medium">
-            {groupMode ? groups?.length ?? 0 : offers?.length ?? 0}
-          </span>{" "}
-          {groupMode ? "model groups" : "listings"}
-          {typeof keptCount === "number" && typeof fetchedCount === "number" ? (
-            <> from <span className="font-medium">{keptCount}</span> kept (fetched {fetchedCount}).</>
-          ) : null}
+          {onlyDeals ? (
+            <>
+              Showing <span className="font-medium">{totalVisible}</span> deal group
+              {totalVisible === 1 ? "" : "s"} (page {page})
+            </>
+          ) : (
+            <>
+              Showing{" "}
+              <span className="font-medium">
+                {groupMode ? groups?.length ?? 0 : offers?.length ?? 0}
+              </span>{" "}
+              {groupMode ? "model groups" : "listings"}
+              {typeof keptCount === "number" && typeof fetchedCount === "number" ? (
+                <> from <span className="font-medium">{keptCount}</span> kept (fetched {fetchedCount}).</>
+              ) : null}
+            </>
+          )}
         </div>
       )}
 
@@ -629,7 +675,7 @@ export default function PuttersPage() {
       {q.trim() && !loading && !err && groupMode && (
         <>
           <section className="mt-6 grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-2">
-            {sortedGroups.map((g) => {
+            {(onlyDeals ? pagedGroups : sortedGroups).map((g) => {
               const isOpen = !!expanded[g.model];
               const ordered =
                 sortBy === "best_price_desc"
@@ -645,7 +691,7 @@ export default function PuttersPage() {
 
               const { domDex, domHead, domLen } = summarizeDexHead(g);
 
-              // NEW: stats badge classification
+              // Stats-based badge
               const latest = statsByModel[g.model];
               const badge = classifyDeal(g.bestPrice, latest);
               const badgeCls =
@@ -697,7 +743,7 @@ export default function PuttersPage() {
                           Best: {formatPrice(g.bestPrice, g.bestCurrency)}
                         </div>
 
-                        {/* NEW: Deal/Fair/High badge (uses model_stats) */}
+                        {/* Deal/Fair/High badge */}
                         {badge && (
                           <div
                             className={`rounded-full px-3 py-1 text-[11px] font-medium ${badgeCls}`}
@@ -787,6 +833,7 @@ export default function PuttersPage() {
             </button>
             <div className="text-sm text-gray-600">
               Page <span className="font-medium">{page}</span> · {FIXED_PER_PAGE} groups per page
+              {onlyDeals && totalVisible > 0 ? ` · ${totalVisible} deal group${totalVisible === 1 ? "" : "s"} total` : ""}
             </div>
             <button
               disabled={!canNext}
@@ -838,9 +885,9 @@ export default function PuttersPage() {
           {/* Pagination (flat) */}
           <div className="mt-8 flex items-center justify-between">
             <button
-              disabled={!canPrev}
+              disabled={!(page > 1 && !loading)}
               onClick={() => setPage((p) => Math.max(1, p - 1))}
-              className={`rounded-md border px-3 py-2 text-sm ${canPrev ? "hover:bg-gray-100" : "cursor-not-allowed opacity-50"}`}
+              className={`rounded-md border px-3 py-2 text-sm ${(page > 1 && !loading) ? "hover:bg-gray-100" : "cursor-not-allowed opacity-50"}`}
             >
               ← Prev
             </button>
@@ -848,9 +895,9 @@ export default function PuttersPage() {
               Page <span className="font-medium">{page}</span> · {FIXED_PER_PAGE} listings per page
             </div>
             <button
-              disabled={!canNext}
+              disabled={!(!loading && hasNextServer)}
               onClick={() => setPage((p) => p + 1)}
-              className={`rounded-md border px-3 py-2 text-sm ${canNext ? "hover:bg-gray-100" : "cursor-not-allowed opacity-50"}`}
+              className={`rounded-md border px-3 py-2 text-sm ${(!loading && hasNextServer) ? "hover:bg-gray-100" : "cursor-not-allowed opacity-50"}`}
             >
               Next →
             </button>
