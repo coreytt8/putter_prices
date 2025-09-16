@@ -5,6 +5,7 @@
  * EBAY_CLIENT_ID
  * EBAY_CLIENT_SECRET
  * EBAY_SITE=EBAY_US
+ * DATABASE_URL (for Neon/Postgres)
  *
  * Optional EPN affiliate params (campid is the important one):
  * EPN_CAMPID=YOUR_CAMPAIGN_ID
@@ -16,10 +17,12 @@
  * EPN_MKEVT=1
  */
 
-const EBAY_BROWSE_URL = "https://api.ebay.com/buy/browse/v1/item_summary/search";
-const EBAY_SITE_DEFAULT = process.env.EBAY_SITE || "EBAY_US";
+import { db } from "../../lib/db"; // ✅ NEW: DB client (fire-and-forget inserts)
 
-// -------------------- EPN affiliate decorator --------------------
+const EBAY_BROWSE_URL = "https://api.ebay.com/buy/browse/v1/item_summary/search";
+const EBAY_SITE = process.env.EBAY_SITE || "EBAY_US";
+
+// -------------------- EPN affiliate decorator (patched) --------------------
 const EPN = {
   campid: process.env.EPN_CAMPID || "",
   customid: process.env.EPN_CUSTOMID || "",
@@ -60,11 +63,13 @@ function decorateEbayUrl(raw, overrides = {}) {
       mkevt: overrides.mkevt ?? EPN.mkevt,
     };
 
+    // Set/overwrite cleanly (works whether or not they already exist)
     for (const [k, v] of Object.entries(params)) {
       if (v !== undefined && v !== null && String(v).length) {
         u.searchParams.set(k, String(v));
       }
     }
+
     return u.toString();
   } catch {
     return raw;
@@ -228,55 +233,8 @@ function normalizeModelFromTitle(title = "", fallbackFamily = null) {
   return tokens.length ? tokens.join(" ") : (title || "unknown").slice(0, 50);
 }
 
-// -------------------- Dedupe helpers --------------------
-function normTitleForDedupe(s = "") {
-  return String(s)
-    .toLowerCase()
-    .replace(/\b(new|used|rh|lh|right[-\s]?hand(?:ed)?|left[-\s]?hand(?:ed)?|putter|golf|rare|vintage|bnib|nib|nr)\b/g, "")
-    .replace(/[^\w]+/g, " ")
-    .replace(/\s+/g, " ")
-    .trim();
-}
-
-// Prefer the “best” offer among duplicates
-function scoreOffer(o) {
-  const total = Number.isFinite(o.totalPrice) ? o.totalPrice : (Number.isFinite(o.price) ? o.price : 9e9);
-  const isBin = (o?.buying?.types || []).includes("FIXED_PRICE") ? 1 : 0;
-  const returns = o?.returns?.accepted ? 1 : 0;
-  const fb = Number(o?.seller?.feedbackScore || 0);
-  return (
-    total * 1000 -
-    isBin * 10 -
-    returns * 5 -
-    Math.min(fb, 100000) / 20000
-  );
-}
-
-function dedupeOffers(offers) {
-  const map = new Map();
-  for (const o of offers) {
-    const seller = (o?.seller?.username || "").toLowerCase();
-    const titleKey = normTitleForDedupe(o?.title || "");
-    const price = Number.isFinite(o?.price) ? o.price : -1;
-    const img = (o?.image || "").toLowerCase();
-    const key = `${seller}||${titleKey}||${price}||${img}`;
-
-    if (!map.has(key)) {
-      map.set(key, o);
-    } else {
-      const keep = map.get(key);
-      if (scoreOffer(o) < scoreOffer(keep)) {
-        map.set(key, o);
-      }
-    }
-  }
-  const unique = Array.from(map.values());
-  const dropped = offers.length - unique.length;
-  return { unique, dropped };
-}
-
 // -------------------- eBay fetch --------------------
-async function fetchEbayBrowse({ q, limit = 50, offset = 0, sort, forceCategory, site }) {
+async function fetchEbayBrowse({ q, limit = 50, offset = 0, sort, forceCategory }) {
   const token = await getEbayToken();
 
   const url = new URL(EBAY_BROWSE_URL);
@@ -285,7 +243,6 @@ async function fetchEbayBrowse({ q, limit = 50, offset = 0, sort, forceCategory,
   url.searchParams.set("offset", String(offset));
   url.searchParams.set("fieldgroups", "EXTENDED");
   if (sort === "newlylisted") url.searchParams.set("sort", "newlyListed");
-  if (sort === "endingsoon") url.searchParams.set("sort", "endingSoon");
   if (forceCategory) url.searchParams.set("category_ids", "115280"); // Golf Clubs
 
   async function call(bearer) {
@@ -293,9 +250,9 @@ async function fetchEbayBrowse({ q, limit = 50, offset = 0, sort, forceCategory,
       headers: {
         Authorization: `Bearer ${bearer}`,
         Accept: "application/json",
-      "Content-Type": "application/json",
-        "X-EBAY-C-MARKETPLACE-ID": site || EBAY_SITE_DEFAULT,
-        "X-EBAY-C-ENDUSERCTX": `contextualLocation=${site || EBAY_SITE_DEFAULT}`,
+        "Content-Type": "application/json",
+        "X-EBAY-C-MARKETPLACE-ID": EBAY_SITE,
+        "X-EBAY-C-ENDUSERCTX": `contextualLocation=${EBAY_SITE}`,
       },
     });
   }
@@ -336,14 +293,7 @@ export default async function handler(req, res) {
   const perPage = Math.max(1, Math.min(50, Number(sp.perPage || "10")));
   const broaden = sp.broaden === "true";
   const forceCategory = sp.forceCategory === "true";
-
-  // Higher recall by default: 4 pages * 50 = 200
-  const samplePages = Math.max(1, Math.min(8, Number(sp.samplePages || (broaden ? 5 : 4))));
-
-  // New options
-  const auctionsOnly = sp.auctionsOnly === "true";
-  const reqSite = (sp.site || "").toString().trim().toUpperCase();
-  const siteUsed = reqSite || EBAY_SITE_DEFAULT;
+  const samplePages = Math.max(1, Math.min(5, Number(sp.samplePages || (broaden ? 3 : 2))));
 
   if (!q) {
     return res.status(200).json({
@@ -354,7 +304,7 @@ export default async function handler(req, res) {
       hasPrev: false,
       fetchedCount: 0,
       keptCount: 0,
-      meta: { total: 0, returned: 0, cards: 0, page, perPage, broaden, sort, source: "ebay-browse", siteUsed },
+      meta: { total: 0, returned: 0, cards: 0, page, perPage, broaden, sort, source: "ebay-browse" },
       analytics: { snapshot: null },
     });
   }
@@ -365,9 +315,9 @@ export default async function handler(req, res) {
     // Primary queries
     const calls = [];
     for (let i = 0; i < samplePages; i++) {
-      calls.push(fetchEbayBrowse({ q, limit, offset: i * limit, sort, forceCategory, site: siteUsed }));
+      calls.push(fetchEbayBrowse({ q, limit, offset: i * limit, sort, forceCategory }));
     }
-    const responses = await Promise.allSettled(calls);
+    let responses = await Promise.allSettled(calls);
 
     let items = [];
     let totalFromEbay = 0;
@@ -383,7 +333,7 @@ export default async function handler(req, res) {
     // Fallback: if recall is low, also try "<q> putter"
     if (items.length < 10 && !/\bputter\b/i.test(q)) {
       const fq = `${q} putter`;
-      const extra = await fetchEbayBrowse({ q: fq, limit, offset: 0, sort, forceCategory, site: siteUsed });
+      const extra = await fetchEbayBrowse({ q: fq, limit, offset: 0, sort, forceCategory });
       const arr = Array.isArray(extra?.itemSummaries) ? extra.itemSummaries : [];
       items.push(...arr);
       totalFromEbay = Math.max(totalFromEbay, Number(extra?.total || 0));
@@ -401,7 +351,6 @@ export default async function handler(req, res) {
       const sellerScore = item?.seller?.feedbackScore ? Number(item.seller.feedbackScore) : null;
       const returnsAccepted = Boolean(item?.returnTerms?.returnsAccepted);
       const returnDays = item?.returnTerms?.returnPeriod?.value ? Number(item.returnTerms.returnPeriod.value) : null;
-
       const buying = {
         types: Array.isArray(item?.buyingOptions) ? item.buyingOptions : [],
         bidCount: item?.bidCount != null ? Number(item.bidCount) : null,
@@ -443,17 +392,49 @@ export default async function handler(req, res) {
         seller: { feedbackPct: sellerPct, feedbackScore: sellerScore, username: item?.seller?.username || null },
         location: { country: item?.itemLocation?.country || null, postalCode: item?.itemLocation?.postalCode || null },
         returns: { accepted: returnsAccepted, days: returnDays },
-        buying, // { types[], bidCount, endTime }
-        specs,  // { length, family, headType, dexterity, hasHeadcover, shaft }
+        buying,
+        specs, // { length, family, headType, dexterity, hasHeadcover, shaft }
 
         __model: modelKey,
       };
     });
 
-    // --- Filtering ---
-    // Only complete
+    // ✅ Persist snapshots (fire-and-forget; never blocks the response)
+    try {
+      for (const o of offers) {
+        db.query(
+          `insert into listing_events
+             (item_id, url, title, model_key, seller, price, ship_cost, currency, country,
+              condition, buying_types, end_time, length_inches, dexterity, head_type, has_headcover)
+           values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16)`,
+          [
+            o.productId || null,
+            o.url || null,
+            o.title || null,
+            o.__model || null,
+            o?.seller?.username || null,
+            Number.isFinite(o?.price) ? o.price : null,
+            Number.isFinite(o?.shipping?.cost) ? o.shipping.cost : null,
+            o.currency || null,
+            o?.location?.country || null,
+            o?.condition || null,
+            Array.isArray(o?.buying?.types) ? o.buying.types : null,
+            o?.buying?.endTime || null,
+            Number.isFinite(o?.specs?.length) ? o.specs.length : null,
+            o?.specs?.dexterity || null,
+            o?.specs?.headType || null,
+            Boolean(o?.specs?.hasHeadcover),
+          ]
+        ).catch(() => {});
+      }
+    } catch {
+      // swallow insert errors completely (no user impact)
+    }
+
+    // Track drops for debugging
     let droppedNoPrice = 0;
     let droppedNoImage = 0;
+
     if (onlyComplete) {
       offers = offers.filter((o) => {
         const ok = typeof o.price === "number" && o.image;
@@ -463,12 +444,6 @@ export default async function handler(req, res) {
         }
         return ok;
       });
-    }
-
-    // Auctions only (covers 0-bid auctions as long as type includes AUCTION)
-    const auctionsOnlyFlag = auctionsOnly || (buyingOptions.map((s) => s.toUpperCase()).includes("AUCTION"));
-    if (auctionsOnlyFlag) {
-      offers = offers.filter((o) => Array.isArray(o?.buying?.types) && o.buying.types.some((t) => String(t).toUpperCase() === "AUCTION"));
     }
 
     if (minPrice != null) offers = offers.filter((o) => typeof o.price === "number" && o.price >= minPrice);
@@ -501,25 +476,13 @@ export default async function handler(req, res) {
       });
     }
 
-    // Sort time-based on "newlylisted" or "endingsoon"
     if (sort === "newlylisted") {
       offers.sort((a, b) => {
         const ta = a.createdAt ? new Date(a.createdAt).getTime() : 0;
         const tb = b.createdAt ? new Date(b.createdAt).getTime() : 0;
         return tb - ta;
       });
-    } else if (sort === "endingsoon") {
-      offers.sort((a, b) => {
-        const ta = a?.buying?.endTime ? new Date(a.buying.endTime).getTime() : Infinity;
-        const tb = b?.buying?.endTime ? new Date(b.buying.endTime).getTime() : Infinity;
-        return ta - tb; // earliest first
-      });
     }
-
-    // --- Dedupe after all filters/sorts, before grouping/paging ---
-    const beforeDedupe = offers.length;
-    const { unique: deduped, dropped: duplicatesDropped } = dedupeOffers(offers);
-    offers = deduped;
 
     const keptCount = offers.length;
 
@@ -562,8 +525,7 @@ export default async function handler(req, res) {
           broaden,
           sort: sort || "default",
           source: "ebay-browse",
-          siteUsed,
-          debug: { droppedNoPrice, droppedNoImage, beforeDedupe, duplicatesDropped },
+          debug: { droppedNoPrice, droppedNoImage },
         },
         analytics,
       });
@@ -611,16 +573,6 @@ export default async function handler(req, res) {
           : 0;
         return tb - ta;
       });
-    } else if (sort === "endingsoon") {
-      groups.sort((a, b) => {
-        const ta = a.offers.length
-          ? Math.min(...a.offers.map((o) => (o?.buying?.endTime ? new Date(o.buying.endTime).getTime() : Infinity)))
-          : Infinity;
-        const tb = b.offers.length
-          ? Math.min(...b.offers.map((o) => (o?.buying?.endTime ? new Date(o.buying.endTime).getTime() : Infinity)))
-          : Infinity;
-        return ta - tb;
-      });
     } else {
       groups.sort((a, b) => (a.bestPrice ?? Infinity) - (b.bestPrice ?? Infinity));
     }
@@ -645,8 +597,7 @@ export default async function handler(req, res) {
         broaden,
         sort: sort || "bestprice",
         source: "ebay-browse",
-        siteUsed,
-        debug: { droppedNoPrice, droppedNoImage, beforeDedupe, duplicatesDropped },
+        debug: { droppedNoPrice, droppedNoImage },
       },
       analytics,
     });
