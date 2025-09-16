@@ -752,7 +752,7 @@ export default function PuttersPage() {
             </div>
             <button
               disabled={!canNext}
-              onClick={() => setPage((p) => p + 1))}
+              onClick={() => setPage((p) => p + 1)}
               className={`rounded-md border px-3 py-2 text-sm ${canNext ? "hover:bg-gray-100" : "cursor-not-allowed opacity-50"}`}
             >
               Next →
@@ -811,7 +811,7 @@ export default function PuttersPage() {
             </div>
             <button
               disabled={!canNext}
-              onClick={() => setPage((p) => p + 1))}
+              onClick={() => setPage((p) => p + 1)}
               className={`rounded-md border px-3 py-2 text-sm ${canNext ? "hover:bg-gray-100" : "cursor-not-allowed opacity-50"}`}
             >
               Next →
