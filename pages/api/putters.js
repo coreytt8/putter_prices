@@ -19,7 +19,7 @@
 const EBAY_BROWSE_URL = "https://api.ebay.com/buy/browse/v1/item_summary/search";
 const EBAY_SITE = process.env.EBAY_SITE || "EBAY_US";
 
-// -------------------- EPN affiliate decorator (patched) --------------------
+// -------------------- EPN affiliate decorator --------------------
 const EPN = {
   campid: process.env.EPN_CAMPID || "",
   customid: process.env.EPN_CUSTOMID || "",
@@ -30,7 +30,7 @@ const EPN = {
   mkevt: process.env.EPN_MKEVT || "1",
 };
 
-// Accept any ebay.* host (www, m., cgi., etc.). Do NOT decorate rover.ebay.* (already affiliate hop).
+// Accept any ebay.* host. Do NOT decorate rover.ebay.* (already affiliate hop).
 function isEbayHost(hostname) {
   if (!hostname) return false;
   const h = hostname.toLowerCase();
@@ -42,11 +42,8 @@ function decorateEbayUrl(raw, overrides = {}) {
   if (!raw) return raw;
   try {
     const u = new URL(raw);
-
-    // Only decorate ebay.* links (not external retailers)
     if (!isEbayHost(u.hostname)) return raw;
 
-    // Need your campaign id configured
     const campid = overrides.campid ?? EPN.campid;
     if (!campid) return raw;
 
@@ -59,14 +56,11 @@ function decorateEbayUrl(raw, overrides = {}) {
       toolid: overrides.toolid ?? EPN.toolid,
       mkevt: overrides.mkevt ?? EPN.mkevt,
     };
-
-    // Set/overwrite cleanly (works whether or not they already exist)
     for (const [k, v] of Object.entries(params)) {
       if (v !== undefined && v !== null && String(v).length) {
         u.searchParams.set(k, String(v));
       }
     }
-
     return u.toString();
   } catch {
     return raw;
@@ -93,7 +87,7 @@ async function getEbayToken() {
     },
     body: new URLSearchParams({
       grant_type: "client_credentials",
-      // Using root scope here to match your previously working deployment
+      // Using root scope to match your restored deployment’s behavior
       scope: "https://api.ebay.com/oauth/api_scope",
     }),
   });
@@ -232,23 +226,22 @@ function normalizeModelFromTitle(title = "", fallbackFamily = null) {
 }
 
 // -------------------- eBay fetch --------------------
-async function fetchEbayBrowse({ q, limit = 50, offset = 0, sort, forceCategory }) {
+async function fetchEbayBrowse({ q, limit = 200, offset = 0, sort, forceCategory }) {
   const token = await getEbayToken();
 
   const url = new URL(EBAY_BROWSE_URL);
   url.searchParams.set("q", q || "");
-  url.searchParams.set("limit", String(limit));
+  url.searchParams.set("limit", String(limit)); // 200 for max recall
   url.searchParams.set("offset", String(offset));
   url.searchParams.set("fieldgroups", "EXTENDED");
   if (sort === "newlylisted") url.searchParams.set("sort", "newlyListed");
-  if (forceCategory) url.searchParams.set("category_ids", "115280"); // Golf Clubs
+  if (forceCategory) url.searchParams.set("category_ids", "115280"); // Golf Clubs (optional)
 
-  // NEW: per-query reference id + minimal affiliate header to get itemAffiliateWebUrl
+  // Per-query reference id + affiliate header so we get itemAffiliateWebUrl
   const refId = `putteriq-${(q || "").slice(0, 60)}`;
-  const endUserCtx =
-    EPN.campid
-      ? `affiliateCampaignId=${EPN.campid},affiliateReferenceId=${encodeURIComponent(refId)}`
-      : "";
+  const endUserCtx = EPN.campid
+    ? `affiliateCampaignId=${EPN.campid},affiliateReferenceId=${encodeURIComponent(refId)}`
+    : "";
 
   async function call(bearer) {
     return fetch(url.toString(), {
@@ -265,15 +258,13 @@ async function fetchEbayBrowse({ q, limit = 50, offset = 0, sort, forceCategory 
   let res = await call(token);
   if (res.status === 401 || res.status === 403) {
     _tok = { val: null, exp: 0 };
-    const fresh = await getEbayToken();
-    res = await call(fresh);
+    res = await call(await getEbayToken());
   }
   if (!res.ok) {
     const txt = await res.text().catch(() => "");
     throw new Error(`eBay Browse error ${res.status}: ${txt}`);
   }
   const data = await res.json();
-  // Return refId so the mapper can include it in fallback decoration
   return { data, refId };
 }
 
@@ -283,12 +274,17 @@ export default async function handler(req, res) {
 
   const sp = req.query;
   const q = (sp.q || "").toString().trim();
-  const group = (sp.group || "true") === "true";
+
+  // DEFAULT: UNGROUPED (shows more, closer to eBay raw)
+  const group = (sp.group || "false") === "true";
+
   const onlyComplete = sp.onlyComplete === "true";
   const minPrice = safeNum(sp.minPrice);
   const maxPrice = safeNum(sp.maxPrice);
   const conds = (sp.conditions || "").toString().split(",").map((s) => s.trim()).filter(Boolean);
   const buyingOptions = (sp.buyingOptions || "").toString().split(",").map((s) => s.trim()).filter(Boolean);
+  const auctionsOnly = sp.auctionsOnly === "true"; // NEW: server-side auction filter
+
   const sort = (sp.sort || "").toString();
 
   const dex = (sp.dex || "").toString().toUpperCase(); // LEFT/RIGHT/""
@@ -317,7 +313,7 @@ export default async function handler(req, res) {
   }
 
   try {
-    const limit = 50;
+    const limit = 200; // max recall
 
     // Primary queries
     const calls = [];
@@ -340,19 +336,21 @@ export default async function handler(req, res) {
       }
     }
 
-    // Fallback: if recall is low, also try "<q> putter"
-    if (items.length < 10 && !/\bputter\b/i.test(q)) {
-      const fq = `${q} putter`;
-      const extra = await fetchEbayBrowse({ q: fq, limit, offset: 0, sort, forceCategory });
-      const arr = Array.isArray(extra?.data?.itemSummaries) ? extra.data.itemSummaries : [];
-      items.push(...arr);
-      totalFromEbay = Math.max(totalFromEbay, Number(extra?.data?.total || 0));
-      lastRefId = extra?.refId || lastRefId;
+    // Broaden if recall is low: try "<q> putter" and "<q> putters"
+    if (items.length < 40 && !/\bputter(s)?\b/i.test(q)) {
+      const widen = [`${q} putter`, `${q} putters`];
+      for (const fq of widen) {
+        const extra = await fetchEbayBrowse({ q: fq, limit, offset: 0, sort, forceCategory });
+        const arr = Array.isArray(extra?.data?.itemSummaries) ? extra.data.itemSummaries : [];
+        items.push(...arr);
+        totalFromEbay = Math.max(totalFromEbay, Number(extra?.data?.total || 0));
+        lastRefId = extra?.refId || lastRefId;
+      }
     }
 
     const fetchedCount = items.length;
 
-    // Map → offers
+    // Map → offers (auction-safe pricing + extra fields)
     let offers = items.map((item) => {
       const image = item?.image?.imageUrl || item?.thumbnailImages?.[0]?.imageUrl || null;
 
@@ -362,15 +360,19 @@ export default async function handler(req, res) {
       const sellerScore = item?.seller?.feedbackScore ? Number(item.seller.feedbackScore) : null;
       const returnsAccepted = Boolean(item?.returnTerms?.returnsAccepted);
       const returnDays = item?.returnTerms?.returnPeriod?.value ? Number(item.returnTerms.returnPeriod.value) : null;
-      const buying = {
-        types: Array.isArray(item?.buyingOptions) ? item.buyingOptions : [],
-        bidCount: item?.bidCount != null ? Number(item.bidCount) : null,
-      };
+
+      const rawBuyingTypes = Array.isArray(item?.buyingOptions) ? item.buyingOptions : [];
+      const types = rawBuyingTypes.map((t) => String(t).toUpperCase());
+      const isAuction = types.includes("AUCTION") || types.includes("AUCTION_WITH_BIN") || types.includes("CLASSIFIED_AD_AUCTION"); // future-proof
+      const isBestOffer = types.includes("BEST_OFFER");
+
+      const bidCount = item?.bidCount != null ? Number(item.bidCount) : null;
 
       const specs = parseSpecsFromItem(item);
       const family = specs?.family || null;
 
-      const itemPrice = safeNum(item?.price?.value);
+      // AUCTION-SAFE PRICE: fall back to currentBidPrice when price missing
+      const itemPrice = safeNum(item?.price?.value ?? item?.currentBidPrice?.value);
       const shipCost = shipping?.cost ?? 0;
       const totalPrice = itemPrice != null && shipCost != null ? itemPrice + shipCost : itemPrice ?? null;
 
@@ -388,24 +390,25 @@ export default async function handler(req, res) {
         title: item?.title,
         retailer: "eBay",
         price: itemPrice,
-        currency: item?.price?.currency || "USD",
+        currency: item?.price?.currency || item?.currentBidPrice?.currency || "USD",
         condition: item?.condition || null,
-        createdAt: item?.itemCreationDate || item?.itemEndDate || item?.estimatedAvailDate || null,
+        createdAt: item?.itemCreationDate || null,
+        endTime: item?.itemEndDate || null, // helpful for auctions
         image,
 
         totalPrice,
         shipping: shipping
           ? {
               cost: shipping.cost,
-              currency: shipping.currency || item?.price?.currency || "USD",
-              free: safeNum(shipping?.shippingCost?.value) === 0,
+              currency: shipping.currency || item?.price?.currency || item?.currentBidPrice?.currency || "USD",
+              free: shipping.cost === 0,
               type: shipping.type || null,
             }
           : null,
         seller: { feedbackPct: sellerPct, feedbackScore: sellerScore, username: item?.seller?.username || null },
         location: { country: item?.itemLocation?.country || null, postalCode: item?.itemLocation?.postalCode || null },
         returns: { accepted: returnsAccepted, days: returnDays },
-        buying,
+        buying: { types: rawBuyingTypes, bidCount, isAuction, isBestOffer },
         specs, // { length, family, headType, dexterity, hasHeadcover, shaft }
 
         __model: modelKey,
@@ -415,6 +418,11 @@ export default async function handler(req, res) {
     // Track drops for debugging
     let droppedNoPrice = 0;
     let droppedNoImage = 0;
+
+    // Optional server-side auction filter (for your Auctions tab)
+    if (auctionsOnly) {
+      offers = offers.filter((o) => o?.buying?.isAuction === true);
+    }
 
     if (onlyComplete) {
       offers = offers.filter((o) => {
@@ -462,6 +470,12 @@ export default async function handler(req, res) {
         const ta = a.createdAt ? new Date(a.createdAt).getTime() : 0;
         const tb = b.createdAt ? new Date(b.createdAt).getTime() : 0;
         return tb - ta;
+      });
+    } else if (sort === "endingsoon") {
+      offers.sort((a, b) => {
+        const ta = a.endTime ? new Date(a.endTime).getTime() : Number.POSITIVE_INFINITY;
+        const tb = b.endTime ? new Date(b.endTime).getTime() : Number.POSITIVE_INFINITY;
+        return ta - tb;
       });
     }
 
@@ -512,7 +526,7 @@ export default async function handler(req, res) {
       });
     }
 
-    // Grouped view
+    // Grouped view (collapses many offers to fewer model groups)
     const groupsMap = new Map();
     for (const o of offers) {
       const key = o.__model || "unknown";
@@ -553,6 +567,16 @@ export default async function handler(req, res) {
           ? Math.max(...b.offers.map((o) => (o.createdAt ? new Date(o.createdAt).getTime() : 0)))
           : 0;
         return tb - ta;
+      });
+    } else if (sort === "endingsoon") {
+      groups.sort((a, b) => {
+        const ta = a.offers.length
+          ? Math.min(...a.offers.map((o) => (o.endTime ? new Date(o.endTime).getTime() : Number.POSITIVE_INFINITY)))
+          : Number.POSITIVE_INFINITY;
+        const tb = b.offers.length
+          ? Math.min(...b.offers.map((o) => (o.endTime ? new Date(o.endTime).getTime() : Number.POSITIVE_INFINITY)))
+          : Number.POSITIVE_INFINITY;
+        return ta - tb;
       });
     } else {
       groups.sort((a, b) => (a.bestPrice ?? Infinity) - (b.bestPrice ?? Infinity));
