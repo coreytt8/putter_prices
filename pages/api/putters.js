@@ -4,7 +4,7 @@
  * Required ENV (Vercel + .env.local):
  * EBAY_CLIENT_ID
  * EBAY_CLIENT_SECRET
- * EBAY_SITE=EBAY_US           // default marketplace if site param missing/invalid
+ * EBAY_SITE=EBAY_US
  *
  * Optional EPN affiliate params (campid is the important one):
  * EPN_CAMPID=YOUR_CAMPAIGN_ID
@@ -17,17 +17,7 @@
  */
 
 const EBAY_BROWSE_URL = "https://api.ebay.com/buy/browse/v1/item_summary/search";
-const DEFAULT_EBAY_SITE = process.env.EBAY_SITE || "EBAY_US";
-const SUPPORTED_MARKETS = new Set([
-  "EBAY_AT","EBAY_AU","EBAY_BE","EBAY_CA","EBAY_CH","EBAY_DE","EBAY_ES","EBAY_FR",
-  "EBAY_GB","EBAY_HK","EBAY_IE","EBAY_IT","EBAY_NL","EBAY_PL","EBAY_SG","EBAY_US"
-]);
-
-// Language hint for dual-language markets (optional)
-const MARKET_LANG = {
-  EBAY_BE: "nl-BE",   // change to "fr-BE" if you prefer French
-  EBAY_CA: "en-CA",   // change to "fr-CA" to prefer French
-};
+const EBAY_SITE_DEFAULT = process.env.EBAY_SITE || "EBAY_US";
 
 // -------------------- EPN affiliate decorator --------------------
 const EPN = {
@@ -40,7 +30,7 @@ const EPN = {
   mkevt: process.env.EPN_MKEVT || "1",
 };
 
-// Accept any ebay.* host. Do NOT decorate rover.ebay.* (already affiliate hop).
+// Accept any ebay.* host (www, m., cgi., etc.). Do NOT decorate rover.ebay.* (already affiliate hop).
 function isEbayHost(hostname) {
   if (!hostname) return false;
   const h = hostname.toLowerCase();
@@ -52,8 +42,11 @@ function decorateEbayUrl(raw, overrides = {}) {
   if (!raw) return raw;
   try {
     const u = new URL(raw);
+
+    // Only decorate ebay.* links (not external retailers)
     if (!isEbayHost(u.hostname)) return raw;
 
+    // Need your campaign id configured
     const campid = overrides.campid ?? EPN.campid;
     if (!campid) return raw;
 
@@ -66,6 +59,7 @@ function decorateEbayUrl(raw, overrides = {}) {
       toolid: overrides.toolid ?? EPN.toolid,
       mkevt: overrides.mkevt ?? EPN.mkevt,
     };
+
     for (const [k, v] of Object.entries(params)) {
       if (v !== undefined && v !== null && String(v).length) {
         u.searchParams.set(k, String(v));
@@ -234,37 +228,74 @@ function normalizeModelFromTitle(title = "", fallbackFamily = null) {
   return tokens.length ? tokens.join(" ") : (title || "unknown").slice(0, 50);
 }
 
+// -------------------- Dedupe helpers --------------------
+function normTitleForDedupe(s = "") {
+  return String(s)
+    .toLowerCase()
+    .replace(/\b(new|used|rh|lh|right[-\s]?hand(?:ed)?|left[-\s]?hand(?:ed)?|putter|golf|rare|vintage|bnib|nib|nr)\b/g, "")
+    .replace(/[^\w]+/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+// Prefer the “best” offer among duplicates
+function scoreOffer(o) {
+  const total = Number.isFinite(o.totalPrice) ? o.totalPrice : (Number.isFinite(o.price) ? o.price : 9e9);
+  const isBin = (o?.buying?.types || []).includes("FIXED_PRICE") ? 1 : 0;
+  const returns = o?.returns?.accepted ? 1 : 0;
+  const fb = Number(o?.seller?.feedbackScore || 0);
+  return (
+    total * 1000 -
+    isBin * 10 -
+    returns * 5 -
+    Math.min(fb, 100000) / 20000
+  );
+}
+
+function dedupeOffers(offers) {
+  const map = new Map();
+  for (const o of offers) {
+    const seller = (o?.seller?.username || "").toLowerCase();
+    const titleKey = normTitleForDedupe(o?.title || "");
+    const price = Number.isFinite(o?.price) ? o.price : -1;
+    const img = (o?.image || "").toLowerCase();
+    const key = `${seller}||${titleKey}||${price}||${img}`;
+
+    if (!map.has(key)) {
+      map.set(key, o);
+    } else {
+      const keep = map.get(key);
+      if (scoreOffer(o) < scoreOffer(keep)) {
+        map.set(key, o);
+      }
+    }
+  }
+  const unique = Array.from(map.values());
+  const dropped = offers.length - unique.length;
+  return { unique, dropped };
+}
+
 // -------------------- eBay fetch --------------------
-async function fetchEbayBrowse({ q, limit = 200, offset = 0, sort, forceCategory, site }) {
+async function fetchEbayBrowse({ q, limit = 50, offset = 0, sort, forceCategory, site }) {
   const token = await getEbayToken();
 
   const url = new URL(EBAY_BROWSE_URL);
   url.searchParams.set("q", q || "");
-  url.searchParams.set("limit", String(limit)); // 200 for max recall
+  url.searchParams.set("limit", String(limit));
   url.searchParams.set("offset", String(offset));
   url.searchParams.set("fieldgroups", "EXTENDED");
   if (sort === "newlylisted") url.searchParams.set("sort", "newlyListed");
-  if (forceCategory) url.searchParams.set("category_ids", "115280"); // Golf Clubs (optional)
-
-  const MARKET = SUPPORTED_MARKETS.has(site) ? site : DEFAULT_EBAY_SITE;
-
-  // Per-query reference id + affiliate header so we may get itemAffiliateWebUrl
-  const refId = `putteriq-${(q || "").slice(0, 60)}`;
-  const endUserCtx = EPN.campid
-    ? `affiliateCampaignId=${EPN.campid},affiliateReferenceId=${encodeURIComponent(refId)}`
-    : "";
-
-  const langHeader = MARKET_LANG[MARKET] ? { "Accept-Language": MARKET_LANG[MARKET] } : {};
+  if (sort === "endingsoon") url.searchParams.set("sort", "endingSoon");
+  if (forceCategory) url.searchParams.set("category_ids", "115280"); // Golf Clubs
 
   async function call(bearer) {
     return fetch(url.toString(), {
       headers: {
         Authorization: `Bearer ${bearer}`,
         Accept: "application/json",
-        "Content-Type": "application/json",
-        "X-EBAY-C-MARKETPLACE-ID": MARKET,
-        ...(endUserCtx ? { "X-EBAY-C-ENDUSERCTX": endUserCtx } : {}),
-        ...langHeader,
+      "Content-Type": "application/json",
+        "X-EBAY-C-MARKETPLACE-ID": site || EBAY_SITE_DEFAULT,
+        "X-EBAY-C-ENDUSERCTX": `contextualLocation=${site || EBAY_SITE_DEFAULT}`,
       },
     });
   }
@@ -272,14 +303,14 @@ async function fetchEbayBrowse({ q, limit = 200, offset = 0, sort, forceCategory
   let res = await call(token);
   if (res.status === 401 || res.status === 403) {
     _tok = { val: null, exp: 0 };
-    res = await call(await getEbayToken());
+    const fresh = await getEbayToken();
+    res = await call(fresh);
   }
   if (!res.ok) {
     const txt = await res.text().catch(() => "");
     throw new Error(`eBay Browse error ${res.status}: ${txt}`);
   }
-  const data = await res.json();
-  return { data, refId, site: MARKET };
+  return res.json();
 }
 
 // -------------------- API Route (pages router) --------------------
@@ -288,16 +319,12 @@ export default async function handler(req, res) {
 
   const sp = req.query;
   const q = (sp.q || "").toString().trim();
-
-  // DEFAULT: UNGROUPED (shows more, closer to eBay raw)
-  const group = (sp.group || "false") === "true";
-
+  const group = (sp.group || "true") === "true";
   const onlyComplete = sp.onlyComplete === "true";
   const minPrice = safeNum(sp.minPrice);
   const maxPrice = safeNum(sp.maxPrice);
   const conds = (sp.conditions || "").toString().split(",").map((s) => s.trim()).filter(Boolean);
   const buyingOptions = (sp.buyingOptions || "").toString().split(",").map((s) => s.trim()).filter(Boolean);
-  const auctionsOnly = sp.auctionsOnly === "true"; // server-side auction filter
   const sort = (sp.sort || "").toString();
 
   const dex = (sp.dex || "").toString().toUpperCase(); // LEFT/RIGHT/""
@@ -309,8 +336,14 @@ export default async function handler(req, res) {
   const perPage = Math.max(1, Math.min(50, Number(sp.perPage || "10")));
   const broaden = sp.broaden === "true";
   const forceCategory = sp.forceCategory === "true";
-  const siteParam = (sp.site || "").toString().trim().toUpperCase();
-  const samplePages = Math.max(1, Math.min(5, Number(sp.samplePages || (broaden ? 3 : 2))));
+
+  // Higher recall by default: 4 pages * 50 = 200
+  const samplePages = Math.max(1, Math.min(8, Number(sp.samplePages || (broaden ? 5 : 4))));
+
+  // New options
+  const auctionsOnly = sp.auctionsOnly === "true";
+  const reqSite = (sp.site || "").toString().trim().toUpperCase();
+  const siteUsed = reqSite || EBAY_SITE_DEFAULT;
 
   if (!q) {
     return res.status(200).json({
@@ -321,83 +354,69 @@ export default async function handler(req, res) {
       hasPrev: false,
       fetchedCount: 0,
       keptCount: 0,
-      meta: { total: 0, returned: 0, cards: 0, page, perPage, broaden, sort, source: "ebay-browse", siteUsed: DEFAULT_EBAY_SITE },
+      meta: { total: 0, returned: 0, cards: 0, page, perPage, broaden, sort, source: "ebay-browse", siteUsed },
       analytics: { snapshot: null },
     });
   }
 
   try {
-    const limit = 200; // max recall
+    const limit = 50;
 
     // Primary queries
     const calls = [];
     for (let i = 0; i < samplePages; i++) {
-      calls.push(fetchEbayBrowse({ q, limit, offset: i * limit, sort, forceCategory, site: siteParam }));
+      calls.push(fetchEbayBrowse({ q, limit, offset: i * limit, sort, forceCategory, site: siteUsed }));
     }
-    let responses = await Promise.allSettled(calls);
+    const responses = await Promise.allSettled(calls);
 
     let items = [];
     let totalFromEbay = 0;
-    let lastRefId = null;
-    let siteUsed = SUPPORTED_MARKETS.has(siteParam) ? siteParam : DEFAULT_EBAY_SITE;
-
     for (const r of responses) {
       if (r.status === "fulfilled") {
-        const payload = r.value || {};
-        const data = payload.data || {};
-        lastRefId = payload.refId || lastRefId;
-        siteUsed = payload.site || siteUsed;
+        const data = r.value || {};
         totalFromEbay = Math.max(totalFromEbay, Number(data?.total || 0));
         const arr = Array.isArray(data?.itemSummaries) ? data.itemSummaries : [];
         items.push(...arr);
       }
     }
 
-    // Broaden if recall is low: try "<q> putter" and "<q> putters"
-    if (items.length < 40 && !/\bputter(s)?\b/i.test(q)) {
-      const widen = [`${q} putter`, `${q} putters`];
-      for (const fq of widen) {
-        const extra = await fetchEbayBrowse({ q: fq, limit, offset: 0, sort, forceCategory, site: siteParam });
-        const arr = Array.isArray(extra?.data?.itemSummaries) ? extra.data.itemSummaries : [];
-        items.push(...arr);
-        totalFromEbay = Math.max(totalFromEbay, Number(extra?.data?.total || 0));
-        lastRefId = extra?.refId || lastRefId;
-        siteUsed = extra?.site || siteUsed;
-      }
+    // Fallback: if recall is low, also try "<q> putter"
+    if (items.length < 10 && !/\bputter\b/i.test(q)) {
+      const fq = `${q} putter`;
+      const extra = await fetchEbayBrowse({ q: fq, limit, offset: 0, sort, forceCategory, site: siteUsed });
+      const arr = Array.isArray(extra?.itemSummaries) ? extra.itemSummaries : [];
+      items.push(...arr);
+      totalFromEbay = Math.max(totalFromEbay, Number(extra?.total || 0));
     }
 
     const fetchedCount = items.length;
 
-    // Map → offers (auction-safe pricing + extra fields)
+    // Map → offers
     let offers = items.map((item) => {
       const image = item?.image?.imageUrl || item?.thumbnailImages?.[0]?.imageUrl || null;
 
+      // specs & enrichment
       const shipping = pickCheapestShipping(item?.shippingOptions);
       const sellerPct = item?.seller?.feedbackPercentage ? Number(item.seller.feedbackPercentage) : null;
       const sellerScore = item?.seller?.feedbackScore ? Number(item.seller.feedbackScore) : null;
       const returnsAccepted = Boolean(item?.returnTerms?.returnsAccepted);
       const returnDays = item?.returnTerms?.returnPeriod?.value ? Number(item.returnTerms.returnPeriod.value) : null;
 
-      const rawBuyingTypes = Array.isArray(item?.buyingOptions) ? item.buyingOptions : [];
-      const types = rawBuyingTypes.map((t) => String(t).toUpperCase());
-      const isAuction = types.includes("AUCTION") || types.includes("AUCTION_WITH_BIN") || types.includes("CLASSIFIED_AD_AUCTION");
-      const isBestOffer = types.includes("BEST_OFFER");
-
-      const bidCount = item?.bidCount != null ? Number(item.bidCount) : null;
+      const buying = {
+        types: Array.isArray(item?.buyingOptions) ? item.buyingOptions : [],
+        bidCount: item?.bidCount != null ? Number(item.bidCount) : null,
+        endTime: item?.itemEndDate || null,
+      };
 
       const specs = parseSpecsFromItem(item);
       const family = specs?.family || null;
 
-      // AUCTION-SAFE PRICE: fall back to currentBidPrice when price missing
-      const itemPrice = safeNum(item?.price?.value ?? item?.currentBidPrice?.value);
+      const itemPrice = safeNum(item?.price?.value);
       const shipCost = shipping?.cost ?? 0;
       const totalPrice = itemPrice != null && shipCost != null ? itemPrice + shipCost : itemPrice ?? null;
 
-      // Prefer eBay's affiliate URL; fallback to decorated WebUrl + include customid=refId
-      const rawUrl = item?.itemAffiliateWebUrl || item?.itemWebUrl || item?.itemHref;
-      const url = item?.itemAffiliateWebUrl
-        ? item.itemAffiliateWebUrl
-        : decorateEbayUrl(rawUrl, { customid: lastRefId || `putteriq-${(q || "").slice(0, 60)}` });
+      const rawUrl = item?.itemWebUrl || item?.itemHref;
+      const url = decorateEbayUrl(rawUrl);
 
       const modelKey = normalizeModelFromTitle(item?.title || "", family);
 
@@ -407,40 +426,34 @@ export default async function handler(req, res) {
         title: item?.title,
         retailer: "eBay",
         price: itemPrice,
-        currency: item?.price?.currency || item?.currentBidPrice?.currency || "USD",
+        currency: item?.price?.currency || "USD",
         condition: item?.condition || null,
-        createdAt: item?.itemCreationDate || null,
-        endTime: item?.itemEndDate || null,
+        createdAt: item?.itemCreationDate || item?.itemEndDate || item?.estimatedAvailDate || null,
         image,
 
         totalPrice,
         shipping: shipping
           ? {
               cost: shipping.cost,
-              currency: shipping.currency || item?.price?.currency || item?.currentBidPrice?.currency || "USD",
-              free: shipping.cost === 0,
+              currency: shipping.currency || item?.price?.currency || "USD",
+              free: Boolean(shipping.free),
               type: shipping.type || null,
             }
           : null,
         seller: { feedbackPct: sellerPct, feedbackScore: sellerScore, username: item?.seller?.username || null },
         location: { country: item?.itemLocation?.country || null, postalCode: item?.itemLocation?.postalCode || null },
         returns: { accepted: returnsAccepted, days: returnDays },
-        buying: { types: rawBuyingTypes, bidCount, isAuction, isBestOffer },
-        specs, // { length, family, headType, dexterity, hasHeadcover, shaft }
+        buying, // { types[], bidCount, endTime }
+        specs,  // { length, family, headType, dexterity, hasHeadcover, shaft }
 
         __model: modelKey,
       };
     });
 
-    // Track drops for debugging
+    // --- Filtering ---
+    // Only complete
     let droppedNoPrice = 0;
     let droppedNoImage = 0;
-
-    // Optional server-side auction filter (for your Auctions tab)
-    if (auctionsOnly) {
-      offers = offers.filter((o) => o?.buying?.isAuction === true);
-    }
-
     if (onlyComplete) {
       offers = offers.filter((o) => {
         const ok = typeof o.price === "number" && o.image;
@@ -450,6 +463,12 @@ export default async function handler(req, res) {
         }
         return ok;
       });
+    }
+
+    // Auctions only (covers 0-bid auctions as long as type includes AUCTION)
+    const auctionsOnlyFlag = auctionsOnly || (buyingOptions.map((s) => s.toUpperCase()).includes("AUCTION"));
+    if (auctionsOnlyFlag) {
+      offers = offers.filter((o) => Array.isArray(o?.buying?.types) && o.buying.types.some((t) => String(t).toUpperCase() === "AUCTION"));
     }
 
     if (minPrice != null) offers = offers.filter((o) => typeof o.price === "number" && o.price >= minPrice);
@@ -482,6 +501,7 @@ export default async function handler(req, res) {
       });
     }
 
+    // Sort time-based on "newlylisted" or "endingsoon"
     if (sort === "newlylisted") {
       offers.sort((a, b) => {
         const ta = a.createdAt ? new Date(a.createdAt).getTime() : 0;
@@ -490,11 +510,16 @@ export default async function handler(req, res) {
       });
     } else if (sort === "endingsoon") {
       offers.sort((a, b) => {
-        const ta = a.endTime ? new Date(a.endTime).getTime() : Number.POSITIVE_INFINITY;
-        const tb = b.endTime ? new Date(b.endTime).getTime() : Number.POSITIVE_INFINITY;
-        return ta - tb;
+        const ta = a?.buying?.endTime ? new Date(a.buying.endTime).getTime() : Infinity;
+        const tb = b?.buying?.endTime ? new Date(b.buying.endTime).getTime() : Infinity;
+        return ta - tb; // earliest first
       });
     }
+
+    // --- Dedupe after all filters/sorts, before grouping/paging ---
+    const beforeDedupe = offers.length;
+    const { unique: deduped, dropped: duplicatesDropped } = dedupeOffers(offers);
+    offers = deduped;
 
     const keptCount = offers.length;
 
@@ -538,13 +563,13 @@ export default async function handler(req, res) {
           sort: sort || "default",
           source: "ebay-browse",
           siteUsed,
-          debug: { droppedNoPrice, droppedNoImage },
+          debug: { droppedNoPrice, droppedNoImage, beforeDedupe, duplicatesDropped },
         },
         analytics,
       });
     }
 
-    // Grouped view (collapses many offers to fewer model groups)
+    // Grouped view
     const groupsMap = new Map();
     for (const o of offers) {
       const key = o.__model || "unknown";
@@ -589,11 +614,11 @@ export default async function handler(req, res) {
     } else if (sort === "endingsoon") {
       groups.sort((a, b) => {
         const ta = a.offers.length
-          ? Math.min(...a.offers.map((o) => (o.endTime ? new Date(o.endTime).getTime() : Number.POSITIVE_INFINITY)))
-          : Number.POSITIVE_INFINITY;
+          ? Math.min(...a.offers.map((o) => (o?.buying?.endTime ? new Date(o.buying.endTime).getTime() : Infinity)))
+          : Infinity;
         const tb = b.offers.length
-          ? Math.min(...b.offers.map((o) => (o.endTime ? new Date(o.endTime).getTime() : Number.POSITIVE_INFINITY)))
-          : Number.POSITIVE_INFINITY;
+          ? Math.min(...b.offers.map((o) => (o?.buying?.endTime ? new Date(o.buying.endTime).getTime() : Infinity)))
+          : Infinity;
         return ta - tb;
       });
     } else {
@@ -621,7 +646,7 @@ export default async function handler(req, res) {
         sort: sort || "bestprice",
         source: "ebay-browse",
         siteUsed,
-        debug: { droppedNoPrice, droppedNoImage },
+        debug: { droppedNoPrice, droppedNoImage, beforeDedupe, duplicatesDropped },
       },
       analytics,
     });
