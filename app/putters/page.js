@@ -95,11 +95,11 @@ export default function PuttersPage() {
 
   const [page, setPage] = useState(1);
 
-  // NEW: marketplace + auctions
+  // marketplace + auctions
   const [site, setSite] = useState("EBAY_US");
   const [auctionsOnly, setAuctionsOnly] = useState(false);
 
-  // NEW filters
+  // filters
   const [dex, setDex] = useState("");            // "", "LEFT", "RIGHT"
   const [head, setHead] = useState("");          // "", "BLADE", "MALLET"
   const [lengths, setLengths] = useState([]);    // [] or [33,34,35,36]
@@ -114,6 +114,7 @@ export default function PuttersPage() {
   const [keptCount, setKeptCount] = useState(null);
 
   const [expanded, setExpanded] = useState({});
+  const [groupShownCount, setGroupShownCount] = useState({});
   const [apiData, setApiData] = useState(null); // for live snapshot
 
   const apiUrl = useMemo(() => {
@@ -128,12 +129,12 @@ export default function PuttersPage() {
     if (sortBy === "endingsoon") params.set("sort", "endingsoon");
     if (broaden) params.set("broaden", "true");
 
-    // NEW: filters
+    // filters
     if (dex) params.set("dex", dex);
     if (head) params.set("head", head);
     if (lengths.length) params.set("lengths", lengths.join(","));
 
-    // NEW: marketplace + auctionsOnly
+    // marketplace + auctionsOnly
     if (site) params.set("site", site);
     if (auctionsOnly) params.set("auctionsOnly", "true");
 
@@ -157,7 +158,8 @@ export default function PuttersPage() {
       setHasNext(false); setHasPrev(false);
       setFetchedCount(null); setKeptCount(null);
       setApiData(null);
-      setErr(""); return;
+      setErr("");
+      return;
     }
     let ignore = false;
     const t = setTimeout(async () => {
@@ -204,17 +206,22 @@ export default function PuttersPage() {
     } else if (sortBy === "model_asc") {
       arr.sort((a,b) => (a.model || "").localeCompare(b.model || ""));
     }
-    // If "recent" or "endingsoon", backend already did ordering
+    // "recent" and "endingsoon" are ordered by backend already
     return arr;
   }, [groups, sortBy]);
 
+  // Reset expand state and initial "shown count" when groups change
   useEffect(() => {
-    const next = {};
-    sortedGroups.forEach((g) => { next[g.model] = false; });
-    setExpanded(next);
+    const nextExpanded = {};
+    const nextShown = {};
+    sortedGroups.forEach((g) => { nextExpanded[g.model] = false; nextShown[g.model] = 20; });
+    setExpanded(nextExpanded);
+    setGroupShownCount(nextShown);
   }, [sortedGroups.map((g) => g.model).join("|")]);
 
   const toggleExpand = (model) => setExpanded((prev) => ({ ...prev, [model]: !prev[model] }));
+  const loadMoreFor = (model, step = 20) =>
+    setGroupShownCount((prev) => ({ ...prev, [model]: (prev[model] || 20) + step }));
 
   const clearAll = () => {
     setQ(""); setOnlyComplete(true);
@@ -318,7 +325,7 @@ export default function PuttersPage() {
           </select>
         </div>
 
-        {/* NEW: Marketplace selector */}
+        {/* Marketplace selector */}
         <div>
           <label className="mb-1 block text-sm font-medium">Marketplace</label>
           <select
@@ -361,7 +368,6 @@ export default function PuttersPage() {
             />
             Only show listings with price & image
           </label>
-          {/* NEW: Auctions only */}
           <label className="mt-2 flex items-center gap-2 text-sm">
             <input
               type="checkbox"
@@ -630,6 +636,7 @@ export default function PuttersPage() {
                 : null;
 
               const { domDex, domHead, domLen } = summarizeDexHead(g);
+              const showN = groupShownCount[g.model] ?? 20;
 
               return (
                 <article key={g.model} className="overflow-hidden rounded-xl border border-gray-200 bg-white shadow-sm">
@@ -693,44 +700,52 @@ export default function PuttersPage() {
                     </button>
 
                     {isOpen && (
-                      <ul className="mt-3 space-y-2">
-                        {ordered.slice(0, 10).map((o) => (
-                          <li key={o.productId + o.url} className="flex items-center justify-between gap-3 rounded border border-gray-100 p-2">
-                            <div className="flex min-w-0 items-center gap-2">
-                              {retailerLogos[o.retailer] && (
-                                // eslint-disable-next-line @next/next/no-img-element
-                                <img src={retailerLogos[o.retailer]} alt={o.retailer} className="h-4 w-12 object-contain" />
-                              )}
-                              <div className="min-w-0">
-                                <div className="truncate text-sm font-medium">{o.retailer}</div>
-                                <div className="mt-0.5 truncate text-xs text-gray-500">
-                                  {(o.specs?.dexterity || "").toUpperCase() === "LEFT" ? "LH" :
-                                   (o.specs?.dexterity || "").toUpperCase() === "RIGHT" ? "RH" : "—"}
-                                  {" · "}
-                                  {(o.specs?.headType || "").toUpperCase() || "—"}
-                                  {" · "}
-                                  {Number.isFinite(Number(o?.specs?.length)) ? `${o.specs.length}"` : "—"}
-                                  {o.createdAt && (<> · listed {timeAgo(new Date(o.createdAt).getTime())}</>)}
+                      <>
+                        <ul className="mt-3 space-y-2">
+                          {ordered.slice(0, showN).map((o) => (
+                            <li key={o.productId + o.url} className="flex items-center justify-between gap-3 rounded border border-gray-100 p-2">
+                              <div className="flex min-w-0 items-center gap-2">
+                                {retailerLogos[o.retailer] && (
+                                  // eslint-disable-next-line @next/next/no-img-element
+                                  <img src={retailerLogos[o.retailer]} alt={o.retailer} className="h-4 w-12 object-contain" />
+                                )}
+                                <div className="min-w-0">
+                                  <div className="truncate text-sm font-medium">{o.retailer}</div>
+                                  <div className="mt-0.5 truncate text-xs text-gray-500">
+                                    {(o.specs?.dexterity || "").toUpperCase() === "LEFT" ? "LH" :
+                                     (o.specs?.dexterity || "").toUpperCase() === "RIGHT" ? "RH" : "—"}
+                                    {" · "}
+                                    {(o.specs?.headType || "").toUpperCase() || "—"}
+                                    {" · "}
+                                    {Number.isFinite(Number(o?.specs?.length)) ? `${o.specs.length}"` : "—"}
+                                    {o.createdAt && (<> · listed {timeAgo(new Date(o.createdAt).getTime())}</>)}
+                                  </div>
                                 </div>
                               </div>
-                            </div>
-                            <div className="flex items-center gap-3">
-                              <span className="text-sm font-semibold">{formatPrice(o.price, o.currency)}</span>
-                              <a
-                                href={o.url}
-                                target="_blank"
-                                rel="noopener noreferrer"
-                                className="inline-flex items-center rounded-md bg-blue-600 px-3 py-1.5 text-sm font-medium text-white hover:bg-blue-700"
-                              >
-                                View
-                              </a>
-                            </div>
-                          </li>
-                        ))}
-                        {g.count > 10 && (
-                          <li className="px-2 pt-1 text-xs text-gray-500">Showing top 10 offers.</li>
+                              <div className="flex items-center gap-3">
+                                <span className="text-sm font-semibold">{formatPrice(o.price, o.currency)}</span>
+                                <a
+                                  href={o.url}
+                                  target="_blank"
+                                  rel="noopener noreferrer"
+                                  className="inline-flex items-center rounded-md bg-blue-600 px-3 py-1.5 text-sm font-medium text-white hover:bg-blue-700"
+                                >
+                                  View
+                                </a>
+                              </div>
+                            </li>
+                          ))}
+                        </ul>
+
+                        {g.count > showN && (
+                          <button
+                            onClick={() => loadMoreFor(g.model)}
+                            className="mt-2 w-full rounded-md border border-gray-300 px-3 py-2 text-sm hover:bg-gray-50"
+                          >
+                            Load more ({g.count - showN} remaining)
+                          </button>
                         )}
-                      </ul>
+                      </>
                     )}
                   </div>
                 </article>
