@@ -1,0 +1,11 @@
+{
+  "crons": [
+    {
+      "path": "/api/compute-model-stats",
+      "schedule": "0 3 * * *",
+      "headers": {
+        "x-cron-secret": "@CRON_SECRET"
+      }
+    }
+  ]
+}
