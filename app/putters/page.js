@@ -3,6 +3,40 @@
 import { useEffect, useMemo, useState } from "react";
 import MarketSnapshot from "@/components/MarketSnapshot";
 
+/** ---------- Brand keywords for suggested chips ---------- */
+const BRAND_KEYWORDS = [
+  "Scotty Cameron","Cameron","Titleist",
+  "TaylorMade","TM",
+  "Ping",
+  "Odyssey",
+  "Bettinardi",
+  "Callaway","Toulon",
+  "PXG","Cobra","Nike","Wilson","Mizuno","Cleveland","Srixon",
+  "SeeMore","Yes!",
+  "L.A.B.","LAB Golf","LAB",
+  "Logan Olson","Olson",
+];
+
+/** ---------- Model-family cues for suggested chips ---------- */
+const FAMILY_KEYS = [
+  // Scotty
+  "Newport","Newport 2","Newport 2.5","Del Mar","Napa","Fastback","Squareback","Futura","Phantom",
+  "Studio Select","Special Select","Button Back","T22","TeI3","009",
+  // TaylorMade
+  "Spider","Spider Tour","Spider X","Truss","Rossa","Monza","Ghost Spider",
+  // Ping
+  "Anser","Tyne","Fetch","Tomcat","Zing","Pal","B60","B61","Karsten",
+  // Odyssey
+  "Two Ball","2-ball","White Hot","Jailbird","Tri Hot","O-Works","Eleven","Seven","Versa",
+  // Bettinardi
+  "Queen B","Studio Stock","Inovai","BB",
+  // L.A.B.
+  "Mezz","DF","Link",
+  // Evnroll
+  "Evnroll","ER1","ER2","ER5",
+];
+
+/** ---------- Brand shortcut buttons ---------- */
 const BRANDS = [
   { label: "Scotty Cameron", q: "scotty cameron putter" },
   { label: "TaylorMade", q: "taylormade putter" },
@@ -60,41 +94,15 @@ function timeAgo(ts) {
   return days === 1 ? "1 day ago" : `${days} days ago`;
 }
 
-/* =======================
-   Phase 2: Stats helpers
-   ======================= */
-
-// LRU-ish session cache for stats calls
-const _statsCache = new Map();
-
-async function getModelStats(model) {
-  if (!model) return null;
-  if (_statsCache.has(model)) return _statsCache.get(model);
-  try {
-    const res = await fetch(`/api/model-stats?model=${encodeURIComponent(model)}`, { cache: "no-store" });
-    const json = await res.json();
-    const latest = json?.latest || null;
-    _statsCache.set(model, latest);
-    return latest;
-  } catch {
-    return null;
-  }
-}
-
-function classifyDeal(bestPrice, latest) {
-  if (typeof bestPrice !== "number" || !latest) return null;
-  const p25 = Number(latest.price_p25);
-  const p75 = Number(latest.price_p75);
-  const med = Number(latest.price_median);
-  if (!Number.isFinite(p25) || !Number.isFinite(p75)) return null;
-
-  if (bestPrice <= p25) {
-    return { label: "Deal", tone: "green", hint: `≤ P25 (${isFinite(p25) ? `$${Math.round(p25)}` : "—"})`, median: med };
-  }
-  if (bestPrice >= p75) {
-    return { label: "High", tone: "amber", hint: `≥ P75 (${isFinite(p75) ? `$${Math.round(p75)}` : "—"})`, median: med };
-  }
-  return { label: "Fair", tone: "slate", hint: "between P25 and P75", median: med };
+/** Canonicalize text for simple contains checks */
+function canon(s) {
+  return String(s || "")
+    .toLowerCase()
+    .replace(/[#™®]/g, "")
+    .replace(/[\.\,\:\;\(\)\[\]\{\}]/g, "")
+    .replace(/[-_/\\]+/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
 }
 
 export default function PuttersPage() {
@@ -106,7 +114,10 @@ export default function PuttersPage() {
   const [buying, setBuying] = useState([]);
   const [broaden, setBroaden] = useState(false);
 
-  const [groupMode, setGroupMode] = useState(true);
+  // View mode tabs: "models" (grouped) | "listings" (flat)
+  const [viewMode, setViewMode] = useState("models");
+  const groupMode = viewMode === "models";
+
   const [showAdvanced, setShowAdvanced] = useState(false);
   const [sortBy, setSortBy] = useState("best_price_asc");
 
@@ -117,23 +128,21 @@ export default function PuttersPage() {
   const [head, setHead] = useState("");          // "", "BLADE", "MALLET"
   const [lengths, setLengths] = useState([]);    // [] or [33,34,35,36]
 
-  // NEW: Only Deals
-  const [onlyDeals, setOnlyDeals] = useState(false);
-
   const [groups, setGroups] = useState([]);
   const [offers, setOffers] = useState([]);
   const [loading, setLoading] = useState(false);
   const [err, setErr] = useState("");
-  const [hasNextServer, setHasNextServer] = useState(false);
-  const [hasPrevServer, setHasPrevServer] = useState(false);
+  const [hasNext, setHasNext] = useState(false);
+  const [hasPrev, setHasPrev] = useState(false);
   const [fetchedCount, setFetchedCount] = useState(null);
   const [keptCount, setKeptCount] = useState(null);
 
   const [expanded, setExpanded] = useState({});
   const [apiData, setApiData] = useState(null); // for live snapshot
 
-  // NEW: stats state keyed by model
-  const [statsByModel, setStatsByModel] = useState({});
+  // Suggested chips derived from results
+  const [brandChips, setBrandChips] = useState([]);
+  const [familyChips, setFamilyChips] = useState([]);
 
   const apiUrl = useMemo(() => {
     const params = new URLSearchParams();
@@ -146,7 +155,7 @@ export default function PuttersPage() {
     if (sortBy === "recent") params.set("sort", "newlylisted");
     if (broaden) params.set("broaden", "true");
 
-    // NEW: filters
+    // filters
     if (dex) params.set("dex", dex);
     if (head) params.set("head", head);
     if (lengths.length) params.set("lengths", lengths.join(","));
@@ -155,56 +164,119 @@ export default function PuttersPage() {
     params.set("perPage", String(FIXED_PER_PAGE));
     params.set("group", groupMode ? "true" : "false");
 
-    // NEW: multi-page sampling hint (backend respects if supported)
+    // sampling hint (server may ignore)
     params.set("samplePages", "3");
 
-    return `/api/putters?${params.toString()}`;
-  }, [q, onlyComplete, minPrice, maxPrice, conds, buying, sortBy, page, groupMode, broaden, dex, head, lengths]);
+    // explicit cache buster
+    params.set("_ts", String(Date.now()));
 
+    return `/api/putters?${params.toString()}`;
+  }, [
+    q, onlyComplete, minPrice, maxPrice, conds, buying,
+    sortBy, page, groupMode, broaden, dex, head, lengths
+  ]);
+
+  // Reset to page 1 when any input changes
   useEffect(() => {
     setPage(1);
-  }, [q, onlyComplete, minPrice, maxPrice, conds, buying, sortBy, groupMode, broaden, dex, head, lengths, onlyDeals]);
+  }, [
+    q, onlyComplete, minPrice, maxPrice, conds, buying,
+    sortBy, groupMode, broaden, dex, head, lengths
+  ]);
 
+  // Fetch results
   useEffect(() => {
     if (!q.trim()) {
       setGroups([]); setOffers([]);
-      setHasNextServer(false); setHasPrevServer(false);
+      setHasNext(false); setHasPrev(false);
       setFetchedCount(null); setKeptCount(null);
       setApiData(null);
-      setErr(""); return;
+      setErr("");
+      setBrandChips([]); setFamilyChips([]);
+      return;
     }
+
+    const ctrl = new AbortController();
     let ignore = false;
+
     const t = setTimeout(async () => {
       setLoading(true); setErr("");
+
       try {
-        const res = await fetch(apiUrl, { cache: "no-store" });
-        const data = await res.json();
-        if (!ignore) {
-          setGroups(Array.isArray(data.groups) ? data.groups : []);
-          let pageOffers = Array.isArray(data.offers) ? data.offers : [];
-          if (!groupMode && pageOffers.length) {
-            if (sortBy === "best_price_asc") {
-              pageOffers = [...pageOffers].sort((a,b) => (a.price ?? Infinity) - (b.price ?? Infinity));
-            } else if (sortBy === "best_price_desc") {
-              pageOffers = [...pageOffers].sort((a,b) => (b.price ?? -Infinity) - (a.price ?? -Infinity));
-            } else if (sortBy === "model_asc") {
-              pageOffers = [...pageOffers].sort((a,b) => (a.title || "").localeCompare(b.title || ""));
-            }
+        const res = await fetch(apiUrl, {
+          cache: "no-store",
+          signal: ctrl.signal,
+          headers: {
+            "pragma": "no-cache",
+            "cache-control": "no-cache"
           }
-          setOffers(pageOffers);
-          setHasNextServer(Boolean(data.hasNext));
-          setHasPrevServer(Boolean(data.hasPrev));
-          setFetchedCount(typeof data.fetchedCount === "number" ? data.fetchedCount : null);
-          setKeptCount(typeof data.keptCount === "number" ? data.keptCount : null);
-          setApiData(data);
+        });
+        const data = await res.json();
+        if (ignore) return;
+
+        const nextGroups = Array.isArray(data.groups) ? data.groups : [];
+        let pageOffers = Array.isArray(data.offers) ? data.offers : [];
+
+        // Frontend sorts for flat view when grouping is off
+        if (!groupMode && pageOffers.length) {
+          if (sortBy === "best_price_asc") {
+            pageOffers = [...pageOffers].sort((a,b) => (a.price ?? Infinity) - (b.price ?? Infinity));
+          } else if (sortBy === "best_price_desc") {
+            pageOffers = [...pageOffers].sort((a,b) => (b.price ?? -Infinity) - (a.price ?? -Infinity));
+          } else if (sortBy === "model_asc") {
+            pageOffers = [...pageOffers].sort((a,b) => (a.title || "").localeCompare(b.title || ""));
+          }
         }
-      } catch {
-        if (!ignore) setErr("Failed to load results. Please try again.");
+
+        setGroups(nextGroups);
+        setOffers(pageOffers);
+        setHasNext(Boolean(data.hasNext));
+        setHasPrev(Boolean(data.hasPrev));
+        setFetchedCount(typeof data.fetchedCount === "number" ? data.fetchedCount : null);
+        setKeptCount(typeof data.keptCount === "number" ? data.keptCount : null);
+        setApiData(data);
+
+        // Build suggested chips from results
+        const titles = [
+          ...nextGroups.map(g => g.model || ""),
+          ...pageOffers.map(o => o?.title || "")
+        ];
+        const titleCanon = titles.map(canon);
+
+        // Brand chips: brands that occur in any title
+        const brandSet = new Set();
+        for (const b of BRAND_KEYWORDS) {
+          const bC = canon(b);
+          if (!bC) continue;
+          if (titleCanon.some(t => t.includes(bC))) brandSet.add(b);
+        }
+        // Limit to top 8
+        setBrandChips(Array.from(brandSet).slice(0, 8));
+
+        // Family chips: choose from FAMILY_KEYS and models seen
+        const famSet = new Set();
+        for (const f of FAMILY_KEYS) {
+          const fC = canon(f);
+          if (!fC) continue;
+          if (titleCanon.some(t => t.includes(fC))) famSet.add(f);
+        }
+        // Also add top group models (first 6)
+        nextGroups.slice(0, 6).forEach(g => { if (g?.model) famSet.add(g.model); });
+        setFamilyChips(Array.from(famSet).slice(0, 10));
+      } catch (e) {
+        if (!ignore && e.name !== "AbortError") {
+          setErr("Failed to load results. Please try again.");
+        }
       } finally {
         if (!ignore) setLoading(false);
       }
-    }, 200);
-    return () => { ignore = true; clearTimeout(t); };
+    }, 150);
+
+    return () => {
+      ignore = true;
+      clearTimeout(t);
+      ctrl.abort();
+    };
   }, [apiUrl, groupMode, sortBy, q]);
 
   const sortedGroups = useMemo(() => {
@@ -218,50 +290,14 @@ export default function PuttersPage() {
     } else if (sortBy === "model_asc") {
       arr.sort((a,b) => (a.model || "").localeCompare(b.model || ""));
     }
-    // if "recent", backend already ordered by newest start time
     return arr;
   }, [groups, sortBy]);
 
-  // Prefetch stats for models visible in the *unfiltered* list (first page) to speed up filtering
-  useEffect(() => {
-    let ignore = false;
-    async function prefetch() {
-      const toFetch = sortedGroups.map(g => g.model).slice(0, FIXED_PER_PAGE);
-      const entries = await Promise.all(toFetch.map(async (m) => [m, await getModelStats(m)]));
-      if (!ignore) {
-        const next = { ...statsByModel };
-        for (const [m, latest] of entries) next[m] = latest;
-        setStatsByModel(next);
-      }
-    }
-    if (sortedGroups.length) prefetch();
-    return () => { ignore = true; };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [sortedGroups.map(g => g.model).join("|")]);
-
-  // When "Only Deals" is ON, filter groups client-side using stats
-  const visibleGroups = useMemo(() => {
-    if (!onlyDeals) return sortedGroups;
-    return sortedGroups.filter((g) => {
-      const latest = statsByModel[g.model];
-      if (!latest || typeof g.bestPrice !== "number") return false;
-      const p25 = Number(latest.price_p25);
-      return Number.isFinite(p25) && g.bestPrice <= p25;
-    });
-  }, [sortedGroups, onlyDeals, statsByModel]);
-
-  // Client-side pagination when onlyDeals is ON; otherwise rely on server flags
-  const totalVisible = visibleGroups.length;
-  const pagedGroups = useMemo(() => {
-    const start = (page - 1) * FIXED_PER_PAGE;
-    return visibleGroups.slice(start, start + FIXED_PER_PAGE);
-  }, [visibleGroups, page]);
-
   useEffect(() => {
     const next = {};
-    visibleGroups.forEach((g) => { next[g.model] = false; });
+    sortedGroups.forEach((g) => { next[g.model] = false; });
     setExpanded(next);
-  }, [visibleGroups.map((g) => g.model).join("|")]);
+  }, [sortedGroups.map((g) => g.model).join("|")]);
 
   const toggleExpand = (model) => setExpanded((prev) => ({ ...prev, [model]: !prev[model] }));
 
@@ -270,15 +306,14 @@ export default function PuttersPage() {
     setMinPrice(""); setMaxPrice("");
     setConds([]); setBuying([]);
     setDex(""); setHead(""); setLengths([]);
-    setOnlyDeals(false);
     setSortBy("best_price_asc");
-    setPage(1); setGroupMode(true); setBroaden(false);
+    setPage(1); setBroaden(false);
+    setViewMode("models");
   };
 
-  const canPrev = page > 1 && !loading;
-  const canNext = !loading && ((onlyDeals && page * FIXED_PER_PAGE < totalVisible) || (!onlyDeals && hasNextServer));
+  const canPrev = hasPrev && page > 1 && !loading;
+  const canNext = hasNext && !loading;
 
-  // helper for group badges (existing)
   function summarizeDexHead(g) {
     const dexCounts = { LEFT: 0, RIGHT: 0 };
     const headCounts = { BLADE: 0, MALLET: 0 };
@@ -301,11 +336,17 @@ export default function PuttersPage() {
     const domHead = headCounts.BLADE === 0 && headCounts.MALLET === 0
       ? null
       : (headCounts.BLADE >= headCounts.MALLET ? "BLADE" : "MALLET");
-    // most common length among 33/34/35/36
     const domLen = Object.entries(lenCounts).sort((a,b)=>b[1]-a[1])[0];
     const domLenVal = domLen && domLen[1] > 0 ? Number(domLen[0]) : null;
     return { domDex, domHead, domLen: domLenVal };
   }
+
+  // Chip handlers: clicks refine the query quickly
+  const clickChip = (text) => {
+    // If chip isn't already in q, append
+    const exists = canon(q).includes(canon(text));
+    setQ(exists ? q : (q.trim() ? `${q} ${text}` : text));
+  };
 
   return (
     <main className="mx-auto max-w-6xl px-4 py-8">
@@ -318,13 +359,29 @@ export default function PuttersPage() {
         </div>
         {q.trim() && (
           <div className="text-sm text-gray-500">
-            {groupMode ? "Grouped by model" : "Flat list"} · Page{" "}
+            {viewMode === "models" ? "Model view" : "All listings"} · Page{" "}
             <span className="font-medium">{page}</span> ·{" "}
             <span className="font-medium">{FIXED_PER_PAGE}</span>{" "}
-            {groupMode ? "groups" : "listings"}
+            {viewMode === "models" ? "groups" : "listings"}
           </div>
         )}
       </header>
+
+      {/* Tabs: Models | All listings */}
+      <div className="mt-4 inline-flex overflow-hidden rounded-lg border border-gray-200">
+        <button
+          onClick={() => setViewMode("models")}
+          className={`px-4 py-2 text-sm ${viewMode === "models" ? "bg-gray-900 text-white" : "bg-white text-gray-700 hover:bg-gray-50"}`}
+        >
+          Models
+        </button>
+        <button
+          onClick={() => setViewMode("listings")}
+          className={`px-4 py-2 text-sm border-l ${viewMode === "listings" ? "bg-gray-900 text-white" : "bg-white text-gray-700 hover:bg-gray-50"}`}
+        >
+          All listings
+        </button>
+      </div>
 
       {/* Brand shortcuts */}
       <section className="mt-6 flex flex-wrap gap-2">
@@ -339,6 +396,38 @@ export default function PuttersPage() {
           </button>
         ))}
       </section>
+
+      {/* Suggested chips (appear when there are results) */}
+      {q.trim() && !loading && !err && (brandChips.length || familyChips.length) ? (
+        <section className="mt-4">
+          <div className="flex flex-wrap items-center gap-2">
+            {brandChips.length > 0 && <span className="text-xs uppercase tracking-wide text-gray-500 mr-1">Brands:</span>}
+            {brandChips.map((c) => (
+              <button
+                key={`b-${c}`}
+                onClick={() => clickChip(c)}
+                className="rounded-full bg-gray-100 px-3 py-1 text-xs font-medium text-gray-700 hover:bg-gray-200"
+                title={`Refine to ${c}`}
+              >
+                {c}
+              </button>
+            ))}
+          </div>
+          <div className="mt-2 flex flex-wrap items-center gap-2">
+            {familyChips.length > 0 && <span className="text-xs uppercase tracking-wide text-gray-500 mr-1">Models:</span>}
+            {familyChips.map((c) => (
+              <button
+                key={`f-${c}`}
+                onClick={() => clickChip(c)}
+                className="rounded-full bg-gray-100 px-3 py-1 text-xs font-medium text-gray-700 hover:bg-gray-200"
+                title={`Add ${c}`}
+              >
+                {c}
+              </button>
+            ))}
+          </div>
+        </section>
+      ) : null}
 
       {/* Controls */}
       <section className="mt-6 grid grid-cols-1 gap-3 md:grid-cols-5">
@@ -379,21 +468,6 @@ export default function PuttersPage() {
           </label>
           <p className="mt-1 text-xs text-gray-500">
             Pulls more pages from eBay before filtering. Helpful for niche models/years.
-          </p>
-        </div>
-
-        {/* NEW: Only Deals toggle */}
-        <div className="rounded-md border border-gray-200 p-3">
-          <label className="flex items-center gap-2 text-sm">
-            <input
-              type="checkbox"
-              checked={onlyDeals}
-              onChange={(e) => { setOnlyDeals(e.target.checked); setPage(1); }}
-            />
-            Only Deals (≤ P25)
-          </label>
-          <p className="mt-1 text-xs text-gray-500">
-            Shows model cards where the current best price is at or below the 25th percentile of recent sales.
           </p>
         </div>
 
@@ -472,43 +546,43 @@ export default function PuttersPage() {
           </div>
         </div>
 
-        {/* NEW: Dexterity */}
+        {/* Dexterity */}
         <div className="rounded-lg border border-gray-200 p-4">
           <h3 className="mb-3 text-xs font-semibold uppercase tracking-wide text-gray-600">
             Dexterity
           </h3>
-            <div className="flex flex-col gap-2 text-sm">
-              <label className="flex items-center gap-2">
-                <input
-                  type="radio"
-                  name="dex"
-                  checked={dex === ""}
-                  onChange={() => setDex("")}
-                />
-                Any
-              </label>
-              <label className="flex items-center gap-2">
-                <input
-                  type="radio"
-                  name="dex"
-                  checked={dex === "RIGHT"}
-                  onChange={() => setDex("RIGHT")}
-                />
-                Right-handed
-              </label>
-              <label className="flex items-center gap-2">
-                <input
-                  type="radio"
-                  name="dex"
-                  checked={dex === "LEFT"}
-                  onChange={() => setDex("LEFT")}
-                />
-                Left-handed
-              </label>
-            </div>
+          <div className="flex flex-col gap-2 text-sm">
+            <label className="flex items-center gap-2">
+              <input
+                type="radio"
+                name="dex"
+                checked={dex === ""}
+                onChange={() => setDex("")}
+              />
+              Any
+            </label>
+            <label className="flex items-center gap-2">
+              <input
+                type="radio"
+                name="dex"
+                checked={dex === "RIGHT"}
+                onChange={() => setDex("RIGHT")}
+              />
+              Right-handed
+            </label>
+            <label className="flex items-center gap-2">
+              <input
+                type="radio"
+                name="dex"
+                checked={dex === "LEFT"}
+                onChange={() => setDex("LEFT")}
+              />
+              Left-handed
+            </label>
+          </div>
         </div>
 
-        {/* NEW: Head Type */}
+        {/* Head Type */}
         <div className="rounded-lg border border-gray-200 p-4">
           <h3 className="mb-3 text-xs font-semibold uppercase tracking-wide text-gray-600">
             Head Type
@@ -544,7 +618,7 @@ export default function PuttersPage() {
           </div>
         </div>
 
-        {/* NEW: Common Lengths */}
+        {/* Common Lengths */}
         <div className="rounded-lg border border-gray-200 p-4 md:col-span-2">
           <h3 className="mb-3 text-xs font-semibold uppercase tracking-wide text-gray-600">
             Length (common)
@@ -601,17 +675,6 @@ export default function PuttersPage() {
               />
               Show advanced options
             </label>
-
-            {showAdvanced && (
-              <label className="mt-3 flex items-center gap-2 text-sm">
-                <input
-                  type="checkbox"
-                  checked={groupMode}
-                  onChange={(e) => setGroupMode(e.target.checked)}
-                />
-                Group similar listings (model cards)
-              </label>
-            )}
           </div>
         </div>
       </section>
@@ -624,27 +687,31 @@ export default function PuttersPage() {
 
       {q.trim() && !loading && !err && (
         <div className="mt-2 text-sm text-gray-600">
-          {onlyDeals ? (
-            <>
-              Showing <span className="font-medium">{totalVisible}</span> deal group
-              {totalVisible === 1 ? "" : "s"} (page {page})
-            </>
-          ) : (
-            <>
-              Showing{" "}
-              <span className="font-medium">
-                {groupMode ? groups?.length ?? 0 : offers?.length ?? 0}
-              </span>{" "}
-              {groupMode ? "model groups" : "listings"}
-              {typeof keptCount === "number" && typeof fetchedCount === "number" ? (
-                <> from <span className="font-medium">{keptCount}</span> kept (fetched {fetchedCount}).</>
-              ) : null}
-            </>
-          )}
+          Showing{" "}
+          <span className="font-medium">
+            {viewMode === "models" ? groups?.length ?? 0 : offers?.length ?? 0}
+          </span>{" "}
+          {viewMode === "models" ? "model groups" : "listings"}
+          {typeof keptCount === "number" && typeof fetchedCount === "number" ? (
+            <> from <span className="font-medium">{keptCount}</span> kept (fetched {fetchedCount}).</>
+          ) : null}
+
+          {/* DEBUG PANEL */}
+          <div className="mt-2 rounded bg-gray-50 p-2 text-xs text-gray-500">
+            <div>API URL: <code className="break-all">{apiUrl}</code></div>
+            {apiData?.meta?.debug && (
+              <details className="mt-1">
+                <summary>server debug</summary>
+                <pre className="whitespace-pre-wrap">
+{JSON.stringify(apiData.meta.debug, null, 2)}
+                </pre>
+              </details>
+            )}
+          </div>
         </div>
       )}
 
-      {/* LIVE analytics snapshot (renders only if backend returns analytics) */}
+      {/* LIVE analytics snapshot */}
       <MarketSnapshot
         snapshot={apiData?.analytics?.snapshot}
         meta={apiData?.meta}
@@ -671,33 +738,29 @@ export default function PuttersPage() {
         </div>
       )}
 
-      {/* GROUPED VIEW (default) */}
-      {q.trim() && !loading && !err && groupMode && (
+      {/* GROUPED VIEW (Models) */}
+      {q.trim() && !loading && !err && viewMode === "models" && (
         <>
           <section className="mt-6 grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-2">
-            {(onlyDeals ? pagedGroups : sortedGroups).map((g) => {
+            {sortedGroups.map((g) => {
               const isOpen = !!expanded[g.model];
               const ordered =
                 sortBy === "best_price_desc"
                   ? [...g.offers].sort((a,b) => (b.price ?? -Infinity) - (a.price ?? -Infinity))
                   : [...g.offers].sort((a,b) => (a.price ?? Infinity) - (b.price ?? Infinity));
 
+              // Median, min, max
               const nums = ordered.map(o => o?.price).filter(x => typeof x === "number").sort((a,b)=>a-b);
               const n = nums.length;
-              const med = n < 2 ? null : (n % 2 ? nums[Math.floor(n/2)] : (nums[n/2-1]+nums[n/2])/2);
+              const med = n === 0 ? null : (n % 2 ? nums[Math.floor(n/2)] : (nums[n/2-1]+nums[n/2])/2);
+              const minPrice = n ? nums[0] : null;
+              const maxPrice = n ? nums[n-1] : null;
+
               const bestDelta = (typeof g.bestPrice === "number" && typeof med === "number" && med - g.bestPrice > 0)
                 ? { diff: med - g.bestPrice, pct: ((med - g.bestPrice)/med)*100 }
                 : null;
 
               const { domDex, domHead, domLen } = summarizeDexHead(g);
-
-              // Stats-based badge
-              const latest = statsByModel[g.model];
-              const badge = classifyDeal(g.bestPrice, latest);
-              const badgeCls =
-                badge?.tone === "green" ? "bg-green-100 text-green-700" :
-                badge?.tone === "amber" ? "bg-amber-100 text-amber-800" :
-                "bg-slate-100 text-slate-700";
 
               return (
                 <article key={g.model} className="overflow-hidden rounded-xl border border-gray-200 bg-white shadow-sm">
@@ -742,22 +805,12 @@ export default function PuttersPage() {
                         <div className="shrink-0 rounded-full bg-green-100 px-3 py-1 text-xs font-semibold text-green-700">
                           Best: {formatPrice(g.bestPrice, g.bestCurrency)}
                         </div>
-
-                        {/* Deal/Fair/High badge */}
-                        {badge && (
-                          <div
-                            className={`rounded-full px-3 py-1 text-[11px] font-medium ${badgeCls}`}
-                            title={
-                              latest?.price_median
-                                ? `Median ${formatPrice(Number(latest.price_median))} · ${badge.hint}`
-                                : badge.hint
-                            }
-                          >
-                            {badge.label}
-                            {Number.isFinite(badge?.median) ? ` · Med ${formatPrice(Number(badge.median))}` : ""}
-                          </div>
-                        )}
-
+                        <div className="text-[11px] text-gray-600">
+                          {med != null ? <>Median {formatPrice(med)}</> : "—"}
+                          {minPrice != null && maxPrice != null && (
+                            <> · Range {formatPrice(minPrice)}–{formatPrice(maxPrice)}</>
+                          )}
+                        </div>
                         {bestDelta && (
                           <div
                             className="rounded-full bg-emerald-50 px-3 py-1 text-[11px] font-medium text-emerald-700"
@@ -778,40 +831,55 @@ export default function PuttersPage() {
 
                     {isOpen && (
                       <ul className="mt-3 space-y-2">
-                        {/* CHANGED: render ALL ordered offers */}
-                        {ordered.map((o) => (
-                          <li key={o.productId + o.url} className="flex items-center justify-between gap-3 rounded border border-gray-100 p-2">
-                            <div className="flex min-w-0 items-center gap-2">
-                              {retailerLogos[o.retailer] && (
-                                // eslint-disable-next-line @next/next/no-img-element
-                                <img src={retailerLogos[o.retailer]} alt={o.retailer} className="h-4 w-12 object-contain" />
-                              )}
-                              <div className="min-w-0">
-                                <div className="truncate text-sm font-medium">{o.retailer}</div>
-                                <div className="mt-0.5 truncate text-xs text-gray-500">
-                                  {(o.specs?.dexterity || "").toUpperCase() === "LEFT" ? "LH" :
-                                   (o.specs?.dexterity || "").toUpperCase() === "RIGHT" ? "RH" : "—"}
-                                  {" · "}
-                                  {(o.specs?.headType || "").toUpperCase() || "—"}
-                                  {" · "}
-                                  {Number.isFinite(Number(o?.specs?.length)) ? `${o.specs.length}"` : "—"}
-                                  {o.createdAt && (<> · listed {timeAgo(new Date(o.createdAt).getTime())}</>)}
+                        {ordered.slice(0, 10).map((o) => {
+                          const ship = o?.shipping;
+                          const shipText =
+                            ship?.free ? "Free ship" :
+                            (typeof ship?.cost === "number" ? `+${formatPrice(ship.cost, ship.currency)} ship` : "");
+                          const buy = Array.isArray(o?.buying?.types) ? o.buying.types : [];
+                          return (
+                            <li key={o.productId + o.url} className="flex items-center justify-between gap-3 rounded border border-gray-100 p-2">
+                              <div className="flex min-w-0 items-center gap-2">
+                                {retailerLogos[o.retailer] && (
+                                  // eslint-disable-next-line @next/next/no-img-element
+                                  <img src={retailerLogos[o.retailer]} alt={o.retailer} className="h-4 w-12 object-contain" />
+                                )}
+                                <div className="min-w-0">
+                                  <div className="truncate text-sm font-medium">{o.retailer}</div>
+                                  <div className="mt-0.5 truncate text-xs text-gray-500">
+                                    {(o.specs?.dexterity || "").toUpperCase() === "LEFT" ? "LH" :
+                                     (o.specs?.dexterity || "").toUpperCase() === "RIGHT" ? "RH" : "—"}
+                                    {" · "}
+                                    {(o.specs?.headType || "").toUpperCase() || "—"}
+                                    {" · "}
+                                    {Number.isFinite(Number(o?.specs?.length)) ? `${o.specs.length}"` : "—"}
+                                    {o.createdAt && (<> · listed {timeAgo(new Date(o.createdAt).getTime())}</>)}
+                                  </div>
+                                  <div className="mt-0.5 flex flex-wrap gap-1 text-[11px] text-gray-600">
+                                    {shipText && <span className="rounded bg-gray-100 px-1.5 py-0.5">{shipText}</span>}
+                                    {buy.includes("AUCTION") && <span className="rounded bg-orange-100 px-1.5 py-0.5">Auction</span>}
+                                    {buy.includes("FIXED_PRICE") && <span className="rounded bg-blue-100 px-1.5 py-0.5">Buy It Now</span>}
+                                    {buy.includes("BEST_OFFER") && <span className="rounded bg-emerald-100 px-1.5 py-0.5">Best Offer</span>}
+                                  </div>
                                 </div>
                               </div>
-                            </div>
-                            <div className="flex items-center gap-3">
-                              <span className="text-sm font-semibold">{formatPrice(o.price, o.currency)}</span>
-                              <a
-                                href={o.url}
-                                target="_blank"
-                                rel="noopener noreferrer"
-                                className="inline-flex items-center rounded-md bg-blue-600 px-3 py-1.5 text-sm font-medium text-white hover:bg-blue-700"
-                              >
-                                View
-                              </a>
-                            </div>
-                          </li>
-                        ))}
+                              <div className="flex items-center gap-3">
+                                <span className="text-sm font-semibold">{formatPrice(o.price, o.currency)}</span>
+                                <a
+                                  href={o.url}
+                                  target="_blank"
+                                  rel="noopener noreferrer"
+                                  className="inline-flex items-center rounded-md bg-blue-600 px-3 py-1.5 text-sm font-medium text-white hover:bg-blue-700"
+                                >
+                                  View
+                                </a>
+                              </div>
+                            </li>
+                          );
+                        })}
+                        {g.count > 10 && (
+                          <li className="px-2 pt-1 text-xs text-gray-500">Showing top 10 offers.</li>
+                        )}
                       </ul>
                     )}
                   </div>
@@ -831,7 +899,6 @@ export default function PuttersPage() {
             </button>
             <div className="text-sm text-gray-600">
               Page <span className="font-medium">{page}</span> · {FIXED_PER_PAGE} groups per page
-              {onlyDeals && totalVisible > 0 ? ` · ${totalVisible} deal group${totalVisible === 1 ? "" : "s"} total` : ""}
             </div>
             <button
               disabled={!canNext}
@@ -844,48 +911,63 @@ export default function PuttersPage() {
         </>
       )}
 
-      {/* FLAT VIEW (advanced) */}
-      {q.trim() && !loading && !err && !groupMode && showAdvanced && (
+      {/* FLAT VIEW (All listings) */}
+      {q.trim() && !loading && !err && viewMode === "listings" && (
         <>
           <section className="mt-6 grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
-            {offers.map((o) => (
-              <article key={o.productId + o.url} className="overflow-hidden rounded-xl border border-gray-200 bg-white shadow-sm">
-                <div className="relative aspect-[4/3] w-full bg-gray-50">
-                  {o.image ? (
-                    // eslint-disable-next-line @next/next/no-img-element
-                    <img src={o.image} alt={o.title} className="h-full w-full object-contain" loading="lazy" />
-                  ) : (
-                    <div className="flex h-full w-full items-center justify-center text-xs text-gray-400">No image</div>
-                  )}
-                </div>
-                <div className="p-4">
-                  <h3 className="line-clamp-2 text-sm font-semibold">{o.title}</h3>
-                  <p className="mt-1 text-xs text-gray-500">
-                    {(o.specs?.dexterity || "").toUpperCase() || "—"} · {(o.specs?.headType || "").toUpperCase() || "—"} · {Number.isFinite(Number(o?.specs?.length)) ? `${o.specs.length}"` : "—"}
-                    {o.createdAt && (<> · listed {timeAgo(new Date(o.createdAt).getTime())}</>)}
-                  </p>
-                  <div className="mt-3 flex items-center justify-between">
-                    <span className="text-base font-semibold">{formatPrice(o.price, o.currency)}</span>
-                    <a
-                      href={o.url}
-                      target="_blank"
-                      rel="noopener noreferrer"
-                      className="inline-flex items-center rounded-md bg-blue-600 px-3 py-1.5 text-sm font-medium text-white hover:bg-blue-700"
-                    >
-                      View
-                    </a>
+            {offers.map((o) => {
+              const ship = o?.shipping;
+              const shipText =
+                ship?.free ? "Free ship" :
+                (typeof ship?.cost === "number" ? `+${formatPrice(ship.cost, ship.currency)} ship` : "");
+
+              const buy = Array.isArray(o?.buying?.types) ? o.buying.types : [];
+
+              return (
+                <article key={o.productId + o.url} className="overflow-hidden rounded-xl border border-gray-200 bg-white shadow-sm">
+                  <div className="relative aspect-[4/3] w-full bg-gray-50">
+                    {o.image ? (
+                      // eslint-disable-next-line @next/next/no-img-element
+                      <img src={o.image} alt={o.title} className="h-full w-full object-contain" loading="lazy" />
+                    ) : (
+                      <div className="flex h-full w-full items-center justify-center text-xs text-gray-400">No image</div>
+                    )}
                   </div>
-                </div>
-              </article>
-            ))}
+                  <div className="p-4">
+                    <h3 className="line-clamp-2 text-sm font-semibold">{o.title}</h3>
+                    <p className="mt-1 text-xs text-gray-500">
+                      {(o.specs?.dexterity || "").toUpperCase() || "—"} · {(o.specs?.headType || "").toUpperCase() || "—"} · {Number.isFinite(Number(o?.specs?.length)) ? `${o.specs.length}"` : "—"}
+                      {o.createdAt && (<> · listed {timeAgo(new Date(o.createdAt).getTime())}</>)}
+                    </p>
+                    <div className="mt-2 flex flex-wrap items-center gap-1 text-[11px] text-gray-600">
+                      {shipText && <span className="rounded bg-gray-100 px-1.5 py-0.5">{shipText}</span>}
+                      {buy.includes("AUCTION") && <span className="rounded bg-orange-100 px-1.5 py-0.5">Auction</span>}
+                      {buy.includes("FIXED_PRICE") && <span className="rounded bg-blue-100 px-1.5 py-0.5">Buy It Now</span>}
+                      {buy.includes("BEST_OFFER") && <span className="rounded bg-emerald-100 px-1.5 py-0.5">Best Offer</span>}
+                    </div>
+                    <div className="mt-3 flex items-center justify-between">
+                      <span className="text-base font-semibold">{formatPrice(o.price, o.currency)}</span>
+                      <a
+                        href={o.url}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="inline-flex items-center rounded-md bg-blue-600 px-3 py-1.5 text-sm font-medium text-white hover:bg-blue-700"
+                      >
+                        View
+                      </a>
+                    </div>
+                  </div>
+                </article>
+              );
+            })}
           </section>
 
           {/* Pagination (flat) */}
           <div className="mt-8 flex items-center justify-between">
             <button
-              disabled={!(page > 1 && !loading)}
+              disabled={!canPrev}
               onClick={() => setPage((p) => Math.max(1, p - 1))}
-              className={`rounded-md border px-3 py-2 text-sm ${(page > 1 && !loading) ? "hover:bg-gray-100" : "cursor-not-allowed opacity-50"}`}
+              className={`rounded-md border px-3 py-2 text-sm ${canPrev ? "hover:bg-gray-100" : "cursor-not-allowed opacity-50"}`}
             >
               ← Prev
             </button>
@@ -893,9 +975,9 @@ export default function PuttersPage() {
               Page <span className="font-medium">{page}</span> · {FIXED_PER_PAGE} listings per page
             </div>
             <button
-              disabled={!(!loading && hasNextServer)}
-              onClick={() => setPage((p) => p + 1)}
-              className={`rounded-md border px-3 py-2 text-sm ${(!loading && hasNextServer) ? "hover:bg-gray-100" : "cursor-not-allowed opacity-50"}`}
+              disabled={!canNext}
+              onClick={() => setPage((p) => p + 1))}
+              className={`rounded-md border px-3 py-2 text-sm ${canNext ? "hover:bg-gray-100" : "cursor-not-allowed opacity-50"}`}
             >
               Next →
             </button>
