@@ -32,9 +32,18 @@ const ACCESSORY_NEGATIVE = [
   "practice aid", "training aid", "putting mirror", "putting mat"
 ];
 
+/** ===== Non-putter club types to EXCLUDE (title & aspects) ===== */
+const NON_PUTTER_NEGATIVE = [
+  "driver", "drivers",
+  "fairway", "3 wood", "5 wood", "7 wood", "wood", "woods",
+  "hybrid", "rescue", "utility",
+  "iron", "irons", "iron set", "combo set", "complete set", "full set", "set of",
+  "wedge", "wedges", "sand wedge", "lob wedge", "gap wedge",
+  "chipper", "chip putter" // “chip putter” is not a real putter
+];
+
 /** ===== Brand/model cues used to derive relevance tokens ===== */
 const BRAND_KEYWORDS = [
-  // Brands
   "scotty cameron", "cameron", "titleist",
   "taylormade", "tm", "spider", "truss",
   "ping", "anser", "tyne", "fetch", "tomcat", "zing",
@@ -47,7 +56,6 @@ const BRAND_KEYWORDS = [
 ];
 
 const MODEL_KEYWORDS = [
-  // Broad model cues
   "newport", "newport 2", "newport 2.5",
   "phantom", "fastback", "squareback", "futura", "tei3", "studio select", "special select",
   "anser", "tyne", "zing", "tomcat", "fetch",
@@ -167,43 +175,71 @@ function pickCheapestShipping(shippingOptions) {
   };
 }
 
-/** Normalize user query to always contain exactly one "putter" token (one variant) */
+/** Ensure every query is about putters (and improve recall) */
 function normalizeSearchQ(q = "") {
   let s = String(q || "").trim();
   if (!s) return s;
+
   s = s.replace(/\bputters\b/gi, "putter");
   if (!/\bputter\b/i.test(s)) s = `${s} putter`;
   s = s.replace(/\b(putter)(\s+\1)+\b/gi, "putter");
+
   return s.replace(/\s+/g, " ").trim();
 }
 
-/** Recognize putter items; also drop accessories by title */
+/** Recognize putter items and reject non-putter clubs/accessories */
 function isLikelyPutter(item) {
   const title = norm(item?.title || "");
 
-  // Exclude obvious accessories/parts
+  // Reject accessories
   if (ACCESSORY_NEGATIVE.some(k => title.includes(k))) return false;
 
+  // Reject non-putter club types by title
+  if (NON_PUTTER_NEGATIVE.some(k => title.includes(k))) return false;
+
+  // Positive title signal
   if (/\bputter\b/.test(title)) return true;
 
+  // Aspects: reject non-putter club types and accept explicit putter signals
   const aspects = [
     ...(Array.isArray(item?.itemSpecifics) ? item.itemSpecifics : []),
     ...(Array.isArray(item?.localizedAspects) ? item.localizedAspects : []),
     ...(Array.isArray(item?.additionalProductIdentities) ? item.additionalProductIdentities : []),
   ];
+
+  let aspectPositive = false;
+
   for (const ent of aspects) {
     const n = norm(ent?.name);
     const v = norm(ent?.value ?? (Array.isArray(ent?.values) ? ent.values[0] : ""));
+
     if (!n) continue;
-    if (ACCESSORY_NEGATIVE.some(k => (v || "").includes(k))) return false;
-    if ((n.includes("putter") || n.includes("head type")) && (v || n.includes("putter"))) {
-      return true;
+
+    // Fast reject on non-putter club type
+    if (n.includes("club type") && v) {
+      if (/(driver|wood|hybrid|iron|wedge|chipper)/.test(v)) return false;
+      if (/putter/.test(v)) aspectPositive = true;
     }
+
+    // Other positive hints
+    if (n.includes("putter")) aspectPositive = true;
+    if ((n.includes("head type") || n.includes("putter head")) && v) aspectPositive = true;
+
+    // Also reject accessories via aspects
+    if (ACCESSORY_NEGATIVE.some(k => (v || "").includes(k))) return false;
   }
 
+  if (aspectPositive) return true;
+
+  // Category breadcrumb text (when present)
   const cat = item?.categoryPath || item?.categoryPathIds || item?.categories;
   const asString = JSON.stringify(cat || "").toLowerCase();
   if (asString.includes("putter")) return true;
+
+  // Model cues that are overwhelmingly putter families
+  const t = title;
+  const putterModelCue = MODEL_KEYWORDS.some(k => t.includes(k));
+  if (putterModelCue) return true;
 
   return false;
 }
@@ -243,7 +279,7 @@ function dexFromTitle(title = "") {
 function headTypeFromTitle(title = "") {
   const t = norm(title);
   const MALLET_KEYS = ["phantom", "fastback", "squareback", "futura", "mallet", "spider", "inovai", "tyne"];
-  const BLADE_KEYS = ["newport", "anser", "tei3", "blade", "studio select", "special select", "bb", "queen b", "link"];
+  const BLADE_KEYS  = ["newport", "anser", "tei3", "blade", "studio select", "special select", "bb", "queen b", "link"];
   if (MALLET_KEYS.some((k) => t.includes(k))) return "MALLET";
   if (BLADE_KEYS.some((k) => t.includes(k))) return "BLADE";
   return null;
@@ -277,7 +313,6 @@ function parseSpecsFromItem(item) {
   const shaftMatch = /slant|flow|plumber|single bend/i.exec(title);
   const shaft = shaftMatch ? shaftMatch[0] : null;
 
-  // coarse family tagging
   const FAMILIES = [
     "newport 2.5", "newport 2", "newport",
     "phantom 11.5", "phantom 11", "phantom 5.5", "phantom 5",
@@ -302,28 +337,15 @@ function normalizeModelFromTitle(title = "", fallbackFamily = null) {
   return tokens.length ? tokens.join(" ") : (title || "unknown").slice(0, 50);
 }
 
-function collectCategoryIds(item) {
-  const set = new Set();
-  if (item?.categoryId) set.add(String(item.categoryId));
-  if (Array.isArray(item?.categories)) {
-    for (const c of item.categories) if (c?.categoryId) set.add(String(c.categoryId));
-  }
-  if (Array.isArray(item?.categoryPathIds)) {
-    for (const id of item.categoryPathIds) if (id) set.add(String(id));
-  }
-  return set;
-}
-
-/** Build recall queries — keep broad ones ONLY when broaden=true or we’re too thin */
+/** Build recall queries — broad variants only if broaden=true */
 function buildRecallQueries(rawQ, broaden) {
   const n = norm(rawQ || "");
   const variants = new Set();
 
   const normalized = normalizeSearchQ(rawQ || "");
-  if (normalized) variants.add(normalized);     // “scotty cameron putter”
-  if (rawQ && rawQ.trim()) variants.add(rawQ.trim()); // raw as typed
+  if (normalized) variants.add(normalized);
+  if (rawQ && rawQ.trim()) variants.add(rawQ.trim());
 
-  // brand/model tokens found in the query (try with/without “putter”)
   const hintedBrands = BRAND_KEYWORDS.filter(k => n.includes(k));
   const hintedModels = MODEL_KEYWORDS.filter(k => n.includes(k));
   const baseTokens = [...new Set([...hintedBrands, ...hintedModels])];
@@ -332,13 +354,11 @@ function buildRecallQueries(rawQ, broaden) {
     variants.add(`${t} putter`);
   });
 
-  // only add super-broad catch-alls if user asked to broaden
   if (broaden) {
     variants.add("putter");
     variants.add("golf putter");
   }
 
-  // if user typed plural, also try single
   if (/\bputters\b/i.test(rawQ || "")) {
     const alt = normalizeSearchQ(String(rawQ || "").replace(/\bputters\b/gi, "").trim());
     if (alt) variants.add(alt);
@@ -463,23 +483,18 @@ export default async function handler(req, res) {
       }
     }
 
-    // Drop accessories by title quickly
+    // Quick title-level exclusions
     items = items.filter((it) => {
       const t = norm(it?.title || "");
-      return !ACCESSORY_NEGATIVE.some(k => t.includes(k));
+      if (ACCESSORY_NEGATIVE.some(k => t.includes(k))) return false;
+      if (NON_PUTTER_NEGATIVE.some(k => t.includes(k))) return false;
+      return true;
     });
 
-    // Putter-only acceptance: category umbrella or heuristic
-    items = items.filter((it) => {
-      const cats = collectCategoryIds(it);
-      if (cats.has("115280")) return true;
-      return isLikelyPutter(it);
-    });
+    // Strict “putter-only” acceptance via heuristic (NO umbrella category pass)
+    items = items.filter(isLikelyPutter);
 
-    /** === BRAND/MODEL RELEVANCE GUARD (prevents random “non-brand” results) ===
-     * If the user query contains recognizable brand/model tokens AND broaden=false,
-     * keep only items whose title/aspects contain at least one of those tokens.
-     */
+    /** Brand/Model relevance guard (same as before) */
     const n = norm(rawQ);
     const hintedBrands = BRAND_KEYWORDS.filter(k => n.includes(k));
     const hintedModels = MODEL_KEYWORDS.filter(k => n.includes(k));
@@ -491,7 +506,6 @@ export default async function handler(req, res) {
         const title = norm(it?.title || "");
         if (tokens.some(tok => title.includes(tok))) return true;
 
-        // quick aspect check
         const lists = [it?.itemSpecifics, it?.localizedAspects, it?.additionalProductIdentities].filter(Boolean);
         for (const list of lists) {
           for (const ent of list) {
@@ -669,7 +683,6 @@ export default async function handler(req, res) {
             samplePages: pagesToTry,
             forceCategory,
             broaden,
-            relevanceTokens,
             fetchedCount
           },
         },
@@ -748,7 +761,6 @@ export default async function handler(req, res) {
           samplePages: pagesToTry,
           forceCategory,
           broaden,
-          relevanceTokens,
           fetchedCount
         },
       },
