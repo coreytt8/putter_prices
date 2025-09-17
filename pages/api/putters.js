@@ -389,21 +389,31 @@ export default async function handler(req, res) {
       }
     }
 
-    // PATCH: tighten scope → drop non-putter gear, then keep putters OR clearly putter accessories
-    // 1) drop obvious non-putter equipment
+    // ✅ Safer scope: trust category_ids first, then apply minimal title checks.
+
+    // 0) drop obvious non-putter equipment by title
     items = items.filter((it) => {
       const t = norm(it?.title);
       return !NON_PUTTER_NEGATIVE.some(k => t.includes(k));
     });
-    // 2) keep likely putters OR accessories that say 'putter'
+
+    // 1) allow everything from the Putters category (115280)
+    // 2) allow Headcovers (18930) ONLY if the title mentions "putter" + (headcover|cover|grip|shaft)
     items = items.filter((it) => {
+      const cid = String(it?.categoryId || "");
       const title = String(it?.title || "");
-      const putterHit = /\bputter\b/i.test(title);
-      const accessoryHit = /\b(head\s*cover|headcover|cover|grip|shaft)\b/i.test(title);
-      return isLikelyPutter(it) || (putterHit && accessoryHit);
+      if (cid === "115280") return true; // real putters
+      if (cid === "18930") {
+        const putterHit = /\bputter\b/i.test(title);
+        const accessoryHit = /\b(head\s*cover|headcover|cover|grip|shaft)\b/i.test(title);
+        return putterHit && accessoryHit;
+      }
+      // If eBay returns other categories despite our filter, drop them.
+      return false;
     });
 
     const fetchedCount = items.length;
+    const filteredCount = fetchedCount; // for debug visibility
 
     // Map → offers
     let offers = items.map((item) => {
@@ -564,8 +574,9 @@ export default async function handler(req, res) {
           source: "ebay-browse",
           debug: {
             droppedNoPrice, droppedNoImage, totalFromEbay, normalizedQ: q,
-            // PATCH: show enforced categories for debugging
-            categoryIds: "115280,18930"
+            // show enforced categories and post-filter volume
+            categoryIds: "115280,18930",
+            filteredCount
           },
         },
         analytics,
@@ -639,8 +650,8 @@ export default async function handler(req, res) {
         source: "ebay-browse",
         debug: {
           droppedNoPrice, droppedNoImage, totalFromEbay, normalizedQ: q,
-          // PATCH: show enforced categories for debugging
-          categoryIds: "115280,18930"
+          categoryIds: "115280,18930",
+          filteredCount
         },
       },
       analytics,
