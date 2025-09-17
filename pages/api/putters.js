@@ -19,6 +19,14 @@
 const EBAY_BROWSE_URL = "https://api.ebay.com/buy/browse/v1/item_summary/search";
 const EBAY_SITE = process.env.EBAY_SITE || "EBAY_US";
 
+// PATCH: block obvious non-putter equipment by title (extra safety net)
+const NON_PUTTER_NEGATIVE = [
+  "driver","wood","fairway","hybrid","iron","wedge","sand wedge","lob wedge",
+  "chipper","utility","rescue","ball","balls","tees","tee","bag","cart bag",
+  "stand bag","rangefinder","gps","shoe","shoes","glove","gloves","hat","cap",
+  "apparel","shirt","pants","shorts","hoodie","jacket"
+];
+
 // -------------------- EPN affiliate decorator --------------------
 const EPN = {
   campid: process.env.EPN_CAMPID || "",
@@ -275,7 +283,8 @@ async function fetchEbayBrowse({ q, limit = 50, offset = 0, sort, forceCategory 
   url.searchParams.set("offset", String(offset));
   url.searchParams.set("fieldgroups", "EXTENDED");
   if (sort === "newlylisted") url.searchParams.set("sort", "newlyListed");
-  if (forceCategory) url.searchParams.set("category_ids", "115280"); // Golf Clubs
+  // PATCH: category allow-list → putters + putter headcovers
+  if (forceCategory) url.searchParams.set("category_ids", "115280,18930");
 
   async function call(bearer) {
     return fetch(url.toString(), {
@@ -328,7 +337,7 @@ export default async function handler(req, res) {
   const page = Math.max(1, Number(sp.page || "1"));
   const perPage = Math.max(1, Math.min(50, Number(sp.perPage || "10")));
 
-  // Default: lock to Golf Clubs category (you can pass ?forceCategory=false to compare)
+  // Default: lock to Golf Clubs (now narrowed in fetch to putters + headcovers)
   const forceCategory = (sp.forceCategory || "true") !== "false";
 
   // Wider default sampling for better recall (override with ?samplePages=N up to 5)
@@ -380,8 +389,19 @@ export default async function handler(req, res) {
       }
     }
 
-    // Strict "putter only" filter
-    items = items.filter(isLikelyPutter);
+    // PATCH: tighten scope → drop non-putter gear, then keep putters OR clearly putter accessories
+    // 1) drop obvious non-putter equipment
+    items = items.filter((it) => {
+      const t = norm(it?.title);
+      return !NON_PUTTER_NEGATIVE.some(k => t.includes(k));
+    });
+    // 2) keep likely putters OR accessories that say 'putter'
+    items = items.filter((it) => {
+      const title = String(it?.title || "");
+      const putterHit = /\bputter\b/i.test(title);
+      const accessoryHit = /\b(head\s*cover|headcover|cover|grip|shaft)\b/i.test(title);
+      return isLikelyPutter(it) || (putterHit && accessoryHit);
+    });
 
     const fetchedCount = items.length;
 
@@ -542,7 +562,11 @@ export default async function handler(req, res) {
           perPage,
           sort: sort || "default",
           source: "ebay-browse",
-          debug: { droppedNoPrice, droppedNoImage, totalFromEbay, normalizedQ: q },
+          debug: {
+            droppedNoPrice, droppedNoImage, totalFromEbay, normalizedQ: q,
+            // PATCH: show enforced categories for debugging
+            categoryIds: "115280,18930"
+          },
         },
         analytics,
       });
@@ -613,7 +637,11 @@ export default async function handler(req, res) {
         perPage,
         sort: sort || "bestprice",
         source: "ebay-browse",
-        debug: { droppedNoPrice, droppedNoImage, totalFromEbay, normalizedQ: q },
+        debug: {
+          droppedNoPrice, droppedNoImage, totalFromEbay, normalizedQ: q,
+          // PATCH: show enforced categories for debugging
+          categoryIds: "115280,18930"
+        },
       },
       analytics,
     });
