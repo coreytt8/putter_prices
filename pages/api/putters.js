@@ -19,7 +19,7 @@
 const EBAY_BROWSE_URL = "https://api.ebay.com/buy/browse/v1/item_summary/search";
 const EBAY_SITE = process.env.EBAY_SITE || "EBAY_US";
 
-// PATCH: block obvious non-putter equipment by title (extra safety net)
+// Optional, conservative guard against obvious non-putter gear by *title* only
 const NON_PUTTER_NEGATIVE = [
   "driver","wood","fairway","hybrid","iron","wedge","sand wedge","lob wedge",
   "chipper","utility","rescue","ball","balls","tees","tee","bag","cart bag",
@@ -121,7 +121,7 @@ function pickCheapestShipping(shippingOptions) {
   if (!Array.isArray(shippingOptions) || shippingOptions.length === 0) return null;
   const sorted = [...shippingOptions].sort((a, b) => {
     const av = safeNum(a?.shippingCost?.value);
-    const bv = safeNum(b?.shippingCost?.value);
+       const bv = safeNum(b?.shippingCost?.value);
     if (av === null && bv === null) return 0;
     if (av === null) return 1;
     if (bv === null) return -1;
@@ -170,7 +170,7 @@ function isLikelyPutter(item) {
     }
   }
 
-  // Some responses include a category path list of strings or nodes—check loosely
+  // Some responses include category infos—check loosely
   const cat = item?.categoryPath || item?.categoryPathIds || item?.categories;
   const asString = JSON.stringify(cat || "").toLowerCase();
   if (asString.includes("putter")) return true;
@@ -273,6 +273,23 @@ function normalizeModelFromTitle(title = "", fallbackFamily = null) {
   return tokens.length ? tokens.join(" ") : (title || "unknown").slice(0, 50);
 }
 
+/** Robustly collect category IDs from any field eBay might use */
+function collectCategoryIds(item) {
+  const set = new Set();
+  if (item?.categoryId) set.add(String(item.categoryId));
+  if (Array.isArray(item?.categories)) {
+    for (const c of item.categories) {
+      if (c?.categoryId) set.add(String(c.categoryId));
+    }
+  }
+  if (Array.isArray(item?.categoryPathIds)) {
+    for (const id of item.categoryPathIds) {
+      if (id) set.add(String(id));
+    }
+  }
+  return set;
+}
+
 // -------------------- eBay fetch --------------------
 async function fetchEbayBrowse({ q, limit = 50, offset = 0, sort, forceCategory }) {
   const token = await getEbayToken();
@@ -283,8 +300,8 @@ async function fetchEbayBrowse({ q, limit = 50, offset = 0, sort, forceCategory 
   url.searchParams.set("offset", String(offset));
   url.searchParams.set("fieldgroups", "EXTENDED");
   if (sort === "newlylisted") url.searchParams.set("sort", "newlyListed");
-  // PATCH: category allow-list → putters + putter headcovers
-  if (forceCategory) url.searchParams.set("category_ids", "115280,18930");
+  // Fetch from Golf Clubs umbrella for volume (old behavior). If you want accessories too, keep 18930.
+  if (forceCategory) url.searchParams.set("category_ids", "115280"); // Golf Clubs umbrella
 
   async function call(bearer) {
     return fetch(url.toString(), {
@@ -337,10 +354,10 @@ export default async function handler(req, res) {
   const page = Math.max(1, Number(sp.page || "1"));
   const perPage = Math.max(1, Math.min(50, Number(sp.perPage || "10")));
 
-  // Default: lock to Golf Clubs (now narrowed in fetch to putters + headcovers)
+  // Default: lock to Golf Clubs umbrella (old working behavior)
   const forceCategory = (sp.forceCategory || "true") !== "false";
 
-  // Wider default sampling for better recall (override with ?samplePages=N up to 5)
+  // Sampling for recall
   const samplePages = Math.max(1, Math.min(5, Number(sp.samplePages || 4)));
 
   if (!q) {
@@ -378,7 +395,7 @@ export default async function handler(req, res) {
       }
     }
 
-    // If recall is still low, try an alternate variant (remove plural entirely, keep "putter" once)
+    // Fallback query variant if recall is low
     if (items.length < 20) {
       const alt = normalizeSearchQ(rawQ.replace(/\bputters\b/gi, "").trim());
       if (alt && alt !== q) {
@@ -389,31 +406,31 @@ export default async function handler(req, res) {
       }
     }
 
-    // ✅ Safer scope: trust category_ids first, then apply minimal title checks.
-
-    // 0) drop obvious non-putter equipment by title
+    // Safety: drop obvious non-putter equipment by title (very light)
     items = items.filter((it) => {
       const t = norm(it?.title);
       return !NON_PUTTER_NEGATIVE.some(k => t.includes(k));
     });
 
-    // 1) allow everything from the Putters category (115280)
-    // 2) allow Headcovers (18930) ONLY if the title mentions "putter" + (headcover|cover|grip|shaft)
+    // ✅ Putters-only filter (robust):
+    // Accept if:
+    //   - any categoryId equals "115280" (umbrella Golf Clubs we fetch under),
+    //   - OR the item *looks like* a putter by our heuristic,
+    //   - OR (if we later fetch 18930 headcovers) title says "putter" AND mentions headcover/cover/grip/shaft.
     items = items.filter((it) => {
-      const cid = String(it?.categoryId || "");
-      const title = String(it?.title || "");
-      if (cid === "115280") return true; // real putters
-      if (cid === "18930") {
+      const cats = collectCategoryIds(it); // may be empty if eBay omitted
+      if (cats.has("115280")) return true; // umbrella / contains putters
+      if (cats.has("18930")) {
+        const title = String(it?.title || "");
         const putterHit = /\bputter\b/i.test(title);
         const accessoryHit = /\b(head\s*cover|headcover|cover|grip|shaft)\b/i.test(title);
         return putterHit && accessoryHit;
       }
-      // If eBay returns other categories despite our filter, drop them.
-      return false;
+      // If we can't read categories, fall back to the heuristic (prevents 0-result bug)
+      return isLikelyPutter(it);
     });
 
     const fetchedCount = items.length;
-    const filteredCount = fetchedCount; // for debug visibility
 
     // Map → offers
     let offers = items.map((item) => {
@@ -574,9 +591,9 @@ export default async function handler(req, res) {
           source: "ebay-browse",
           debug: {
             droppedNoPrice, droppedNoImage, totalFromEbay, normalizedQ: q,
-            // show enforced categories and post-filter volume
-            categoryIds: "115280,18930",
-            filteredCount
+            // quick visibility
+            categoryParam: forceCategory ? "115280" : "(none)",
+            fetchedCount
           },
         },
         analytics,
@@ -650,8 +667,8 @@ export default async function handler(req, res) {
         source: "ebay-browse",
         debug: {
           droppedNoPrice, droppedNoImage, totalFromEbay, normalizedQ: q,
-          categoryIds: "115280,18930",
-          filteredCount
+          categoryParam: forceCategory ? "115280" : "(none)",
+          fetchedCount
         },
       },
       analytics,
