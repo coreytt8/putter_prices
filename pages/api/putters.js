@@ -1,19 +1,16 @@
 /* eslint-disable no-console */
 
 /**
- * Required ENV (Vercel + .env.local):
+ * Required ENV:
  * EBAY_CLIENT_ID
  * EBAY_CLIENT_SECRET
  * EBAY_SITE=EBAY_US
  *
  * Optional EPN affiliate params (campid is the important one):
- * EPN_CAMPID=YOUR_CAMPAIGN_ID
- * EPN_CUSTOMID=putteriq
- * EPN_TOOLID=10001
- * EPN_MKCID=1
- * EPN_MKRID=711-53200-19255-0
- * EPN_SITEID=0
- * EPN_MKEVT=1
+ * EPN_CAMPID, EPN_CUSTOMID, EPN_TOOLID, EPN_MKCID, EPN_MKRID, EPN_SITEID, EPN_MKEVT
+ *
+ * Optional rate control:
+ * EBAY_MAX_CONCURRENCY (default 2)
  */
 
 const EBAY_BROWSE_URL = "https://api.ebay.com/buy/browse/v1/item_summary/search";
@@ -33,7 +30,7 @@ const EPN = {
 function isEbayHost(hostname) {
   if (!hostname) return false;
   const h = hostname.toLowerCase();
-  if (h.includes("rover.ebay.")) return false; // let your direct ebay links remain direct
+  if (h.includes("rover.ebay.")) return false;
   return h.includes(".ebay.");
 }
 
@@ -66,8 +63,8 @@ function decorateEbayUrl(raw, overrides = {}) {
   }
 }
 
-// -------------------- Token (auto-refresh with explicit retry) --------------------
-let _tok = { val: null, exp: 0 }; // exp = epoch ms
+// -------------------- Token (auto-refresh) --------------------
+let _tok = { val: null, exp: 0 };
 
 async function getEbayToken(force = false) {
   const now = Date.now();
@@ -86,7 +83,6 @@ async function getEbayToken(force = false) {
     },
     body: new URLSearchParams({
       grant_type: "client_credentials",
-      // Minimal scope for Browse
       scope: "https://api.ebay.com/oauth/api_scope",
     }).toString(),
   });
@@ -99,24 +95,13 @@ async function getEbayToken(force = false) {
 
   const json = await res.json();
   const ttlMs = Math.max(30, Number(json.expires_in || 7200)) * 1000;
-  _tok = {
-    val: json.access_token,
-    // keep a safety buffer so we never cut it close
-    exp: Date.now() + ttlMs,
-  };
+  _tok = { val: json.access_token, exp: Date.now() + ttlMs };
   return _tok.val;
 }
-
-function invalidateToken() {
-  _tok = { val: null, exp: 0 };
-}
+function invalidateToken() { _tok = { val: null, exp: 0 }; }
 
 // -------------------- Helpers --------------------
-const safeNum = (n) => {
-  const x = Number(n);
-  return Number.isFinite(x) ? x : null;
-};
-
+const safeNum = (n) => { const x = Number(n); return Number.isFinite(x) ? x : null; };
 const norm = (s) => String(s || "").trim().toLowerCase();
 
 function pickCheapestShipping(shippingOptions) {
@@ -138,25 +123,26 @@ function pickCheapestShipping(shippingOptions) {
   };
 }
 
-/** Ensure every query is about putters (and improve recall) */
 function normalizeSearchQ(q = "") {
   let s = String(q || "").trim();
   if (!s) return s;
-
-  // singularize "putters" → "putter"
   s = s.replace(/\bputters\b/gi, "putter");
-
-  // guarantee exactly one "putter"
   if (!/\bputter\b/i.test(s)) s = `${s} putter`;
   s = s.replace(/\b(putter)(\s+\1)+\b/gi, "putter");
-
   return s.replace(/\s+/g, " ").trim();
 }
 
-// Recognize putter items (title, aspects, or category path)
 function isLikelyPutter(item) {
   const title = norm(item?.title);
-  if (/\bputter\b/.test(title)) return true;
+  if (/\bputter(s)?\b/.test(title)) return true;
+  const FAMILY_HINTS = [
+    "newport", "phantom", "fastback", "squareback", "futura",
+    "anser", "tyne", "zing", "fetch", "tomcat",
+    "spider", "studio stock", "queen b", "bb", "inovai",
+    "two ball", "2-ball", "jailbird", "versa",
+    "mezz", "df", "link", "evnroll", "er1", "er2", "er5",
+  ];
+  if (FAMILY_HINTS.some(k => title.includes(k))) return true;
 
   const aspects = [
     ...(Array.isArray(item?.itemSpecifics) ? item.itemSpecifics : []),
@@ -167,12 +153,10 @@ function isLikelyPutter(item) {
     const n = norm(ent?.name);
     const v = norm(ent?.value ?? (Array.isArray(ent?.values) ? ent.values[0] : ""));
     if (!n) continue;
-    if ((n.includes("putter") || n.includes("head type")) && (v || n.includes("putter"))) {
-      return true;
-    }
+    if (n.includes("putter") || v.includes("putter")) return true;
+    if (n.includes("head type") && (v.includes("blade") || v.includes("mallet"))) return true;
   }
 
-  // Some responses include a category path list of strings or nodes—check loosely
   const cat = item?.categoryPath || item?.categoryPathIds || item?.categories;
   const asString = JSON.stringify(cat || "").toLowerCase();
   if (asString.includes("putter")) return true;
@@ -328,7 +312,7 @@ function hasAnyToken(text, tokens) {
 
 function detectBrandInText(text) {
   const n = norm(text);
-  const brandAliases = Object.keys(BRAND_LIMITED_TOKENS).concat(["titleist"]); // titleist ~ cameron
+  const brandAliases = Object.keys(BRAND_LIMITED_TOKENS).concat(["titleist"]);
   for (const b of brandAliases) {
     if (n.includes(norm(b))) return b;
   }
@@ -365,61 +349,126 @@ function buildLimitedRecallQueries(rawQ, normalizedQ) {
   return Array.from(qset);
 }
 
-// -------------------- eBay fetch (with robust token retry) --------------------
-async function fetchEbayBrowse({ q, limit = 50, offset = 0, sort, forceCategory }) {
-  // Build URL first (pure)
+// -------------------- Rate/Concurrency/Cache utils --------------------
+const sleep = (ms) => new Promise(r => setTimeout(r, ms));
+function calcBackoffMs(attempt, retryAfterSec = 0) {
+  if (retryAfterSec) return Number(retryAfterSec) * 1000;
+  const base = 500 * Math.pow(2, attempt); // 500ms, 1s, 2s
+  const jitter = Math.floor(Math.random() * 250);
+  return base + jitter;
+}
+function bodyShowsTooMany(text) {
+  try {
+    const j = JSON.parse(text);
+    const errs = j?.errors || [];
+    return errs.some(e => Number(e.errorId) === 2001 || /Too many requests/i.test(e.message || ''));
+  } catch {
+    return /Too many requests/i.test(text);
+  }
+}
+const _ebayCache = new Map(); // url -> { data, exp }
+function cacheGet(url) {
+  const hit = _ebayCache.get(url);
+  if (hit && Date.now() < hit.exp) return hit.data;
+  if (hit) _ebayCache.delete(url);
+  return null;
+}
+function cacheSet(url, data, ttlMs = 60_000) {
+  _ebayCache.set(url, { data, exp: Date.now() + ttlMs });
+}
+const MAX_CONCURRENT_EBAY = Math.max(1, Number(process.env.EBAY_MAX_CONCURRENCY || 2));
+let _inFlight = 0;
+const _waiters = [];
+async function withEbaySlot(fn) {
+  while (_inFlight >= MAX_CONCURRENT_EBAY) {
+    await new Promise(res => _waiters.push(res));
+  }
+  _inFlight++;
+  try { return await fn(); }
+  finally {
+    _inFlight--;
+    const next = _waiters.shift();
+    if (next) next();
+  }
+}
+
+// -------------------- eBay fetch (rate-limit aware) --------------------
+async function fetchEbayBrowse({ q, limit = 50, offset = 0, sort, forceCategory, useExtended = false }) {
   const url = new URL(EBAY_BROWSE_URL);
   url.searchParams.set("q", q || "");
   url.searchParams.set("limit", String(limit));
   url.searchParams.set("offset", String(offset));
-  url.searchParams.set("fieldgroups", "EXTENDED");
+  if (useExtended) url.searchParams.set("fieldgroups", "EXTENDED");
   if (sort === "newlylisted") url.searchParams.set("sort", "newlyListed");
   if (forceCategory) url.searchParams.set("category_ids", "115280"); // Golf Clubs
+
+  const urlStr = url.toString();
+  const cached = cacheGet(urlStr);
+  if (cached) return cached;
 
   const marketplaceHeaders = {
     Accept: "application/json",
     "Content-Type": "application/json",
     "X-EBAY-C-MARKETPLACE-ID": EBAY_SITE,
-    // enduser ctx is optional; keep minimal
-    "X-EBAY-C-ENDUSERCTX": `contextualLocation=${EBAY_SITE}`,
   };
 
-  async function call(withToken) {
-    return fetch(url.toString(), {
-      headers: {
-        Authorization: `Bearer ${withToken}`,
-        ...marketplaceHeaders,
-      },
-    });
+  const MAX_RETRIES = 2;
+
+  async function oneCall(withToken) {
+    return withEbaySlot(() =>
+      fetch(urlStr, {
+        headers: {
+          Authorization: `Bearer ${withToken}`,
+          ...marketplaceHeaders,
+        },
+      })
+    );
   }
 
-  let token = await getEbayToken();             // try cached/fresh
-  let res = await call(token);
-  let text = await res.text().catch(() => "");
+  let token = await getEbayToken();
+  for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
+    let res = await oneCall(token);
+    let text = await res.text().catch(() => "");
 
-  // If token invalid/expired => force refresh once and retry
-  const bodyIndicatesInvalid =
-    text.includes('"Invalid access token"') ||
-    text.includes('"errorId":1001') ||
-    text.includes('"errorId": 1001');
+    // Handle invalid/expired token
+    const invalidToken = res.status === 401 || text.includes('"Invalid access token"') || text.includes('"errorId":1001');
+    if (invalidToken) {
+      if (attempt < MAX_RETRIES) {
+        console.warn("[ebay] token invalid; refreshing");
+        invalidateToken();
+        token = await getEbayToken(true);
+        continue; // retry
+      }
+    }
 
-  if (res.status === 401 || bodyIndicatesInvalid) {
-    invalidateToken();
-    const fresh = await getEbayToken(true);
-    res = await call(fresh);
-    text = await res.text().catch(() => "");
+    // Handle rate limiting with backoff
+    const retryAfterSec = Number(res.headers.get("Retry-After") || 0);
+    if (res.status === 429 || bodyShowsTooMany(text)) {
+      if (attempt < MAX_RETRIES) {
+        const waitMs = calcBackoffMs(attempt, retryAfterSec);
+        console.warn(`[ebay] 429/2001; backing off ${waitMs}ms then retrying`);
+        await sleep(waitMs);
+        continue; // retry
+      }
+    }
+
+    if (!res.ok) {
+      throw new Error(`eBay Browse error ${res.status}: ${text}`);
+    }
+
+    // success
+    try {
+      const json = JSON.parse(text);
+      cacheSet(urlStr, json, 60_000);
+      // Optional: introspect limits
+      // console.log('[ebay] limits:', res.headers.get('X-EBAY-C-APICALL-LIMITS'), res.headers.get('X-EBAY-C-REQUEST-ID'));
+      return json;
+    } catch {
+      return { raw: text };
+    }
   }
 
-  if (!res.ok) {
-    // Surface useful diagnostics up the stack
-    throw new Error(`eBay Browse error ${res.status}: ${text}`);
-  }
-
-  try {
-    return JSON.parse(text);
-  } catch {
-    return { raw: text };
-  }
+  throw new Error("eBay Browse: retries exhausted due to rate limiting or auth errors");
 }
 
 // -------------------- API Route --------------------
@@ -428,7 +477,6 @@ export default async function handler(req, res) {
 
   const sp = req.query;
 
-  // Normalize + enforce "putters-only" semantics
   const rawQ = (sp.q || "").toString().trim();
   const q = normalizeSearchQ(rawQ);
 
@@ -448,11 +496,8 @@ export default async function handler(req, res) {
   const page = Math.max(1, Number(sp.page || "1"));
   const perPage = Math.max(1, Math.min(50, Number(sp.perPage || "10")));
 
-  // Default: lock to Golf Clubs category (you can pass ?forceCategory=false to compare)
-  const forceCategory = (sp.forceCategory || "true") !== "false";
-
-  // Wider default sampling for better recall (override with ?samplePages=N up to 5)
-  const samplePages = Math.max(1, Math.min(5, Number(sp.samplePages || 4)));
+  // Keep your existing behavior/param; just lower default fan-out to reduce throttling
+  const samplePages = Math.max(1, Math.min(5, Number(sp.samplePages || 1))); // <= was 4
 
   if (!q) {
     return res.status(200).json({
@@ -471,16 +516,29 @@ export default async function handler(req, res) {
   try {
     const limit = 50;
 
-    // Primary + limited/collectible recall variants
+    // Build jobs (same as before)
     const calls = [];
     const recallQs = buildLimitedRecallQueries(rawQ, q);
     for (const qq of recallQs) {
       for (let i = 0; i < samplePages; i++) {
-        calls.push(fetchEbayBrowse({ q: qq, limit, offset: i * limit, sort, forceCategory }));
+        calls.push(() => fetchEbayBrowse({ q: qq, limit, offset: i * limit, sort, forceCategory: true, useExtended: false }));
       }
     }
 
-    let responses = await Promise.allSettled(calls);
+    // Run jobs SEQUENTIALLY to avoid bursts (replaces Promise.allSettled)
+    let responses = [];
+    for (const job of calls) {
+      try {
+        const data = await job();
+        responses.push({ status: "fulfilled", value: data });
+        // tiny pause helps smooth bursts even more
+        await sleep(120);
+      } catch (e) {
+        responses.push({ status: "rejected", reason: e });
+        // optional: small pause on error to avoid hammering
+        await sleep(150);
+      }
+    }
 
     let items = [];
     let totalFromEbay = 0;
@@ -491,25 +549,24 @@ export default async function handler(req, res) {
         const arr = Array.isArray(data?.itemSummaries) ? data.itemSummaries : [];
         items.push(...arr);
       } else {
-        // Keep a breadcrumb for debugging if needed (won't leak in UI)
-        console.error("Browse subcall failed:", r.reason);
+        console.error("Browse subcall failed:", r.reason?.message || r.reason);
       }
     }
 
-    // If recall is still low, try an alternate variant (remove plural entirely, keep "putter" once)
-    if (items.length < 20) {
-      const alt = normalizeSearchQ(rawQ.replace(/\bputters\b/gi, "").trim());
-      if (alt && alt !== q) {
-        const extra = await fetchEbayBrowse({ q: alt, limit, offset: 0, sort, forceCategory });
-        const arr = Array.isArray(extra?.itemSummaries) ? extra.itemSummaries : [];
+    // Fallback: if still very low recall, do one minimal single-page call
+    if (items.length === 0) {
+      try {
+        const fb = await fetchEbayBrowse({ q: q || "putter", limit: 50, offset: 0, sort, forceCategory: true, useExtended: false });
+        const arr = Array.isArray(fb?.itemSummaries) ? fb.itemSummaries : [];
         items.push(...arr);
-        totalFromEbay = Math.max(totalFromEbay, Number(extra?.total || 0));
+        totalFromEbay = Math.max(totalFromEbay, Number(fb?.total || 0));
+      } catch (e) {
+        console.error("Fallback fetch failed:", e);
       }
     }
 
-    // Strict "putter only" filter
+    // Strict putter filter
     items = items.filter(isLikelyPutter);
-
     const fetchedCount = items.length;
 
     // Map → offers
@@ -551,23 +608,18 @@ export default async function handler(req, res) {
 
         totalPrice,
         shipping: shipping
-          ? {
-              cost: shipping.cost,
-              currency: shipping.currency || item?.price?.currency || "USD",
-              free: Boolean(shipping.free),
-              type: shipping.type || null,
-            }
+          ? { cost: shipping.cost, currency: shipping.currency || item?.price?.currency || "USD", free: Boolean(shipping.free), type: shipping.type || null }
           : null,
         seller: { feedbackPct: sellerPct, feedbackScore: sellerScore, username: item?.seller?.username || null },
         location: { country: item?.itemLocation?.country || null, postalCode: item?.itemLocation?.postalCode || null },
         returns: { accepted: returnsAccepted, days: returnDays },
         buying,
-        specs, // { length, family, headType, dexterity, hasHeadcover, shaft }
+        specs,
         __model: modelKey,
       };
     });
 
-    // De-dupe obvious clones (same seller + same title + same price)
+    // De-dupe
     const seen = new Set();
     offers = offers.filter((o) => {
       const key = `${(o.seller?.username || "").toLowerCase()}|${(o.title || "").toLowerCase()}|${o.price ?? "?"}`;
@@ -576,10 +628,10 @@ export default async function handler(req, res) {
       return true;
     });
 
-    // Track drops for debugging
+    // Optional completeness filter
     let droppedNoPrice = 0;
     let droppedNoImage = 0;
-
+    const onlyComplete = sp.onlyComplete === "true";
     if (onlyComplete) {
       offers = offers.filter((o) => {
         const ok = typeof o.price === "number" && o.image;
@@ -591,14 +643,19 @@ export default async function handler(req, res) {
       });
     }
 
+    // Post filters
+    const minPrice = safeNum(sp.minPrice);
+    const maxPrice = safeNum(sp.maxPrice);
     if (minPrice != null) offers = offers.filter((o) => typeof o.price === "number" && o.price >= minPrice);
     if (maxPrice != null) offers = offers.filter((o) => typeof o.price === "number" && o.price <= maxPrice);
 
+    const conds = (sp.conditions || "").toString().split(",").map((s) => s.trim()).filter(Boolean);
     if (conds.length) {
       const set = new Set(conds.map((s) => s.toUpperCase()));
       offers = offers.filter((o) => o?.condition && set.has(String(o.condition).toUpperCase()));
     }
 
+    const buyingOptions = (sp.buyingOptions || "").toString().split(",").map((s) => s.trim()).filter(Boolean);
     if (buyingOptions.length) {
       const set = new Set(buyingOptions.map((s) => s.toUpperCase()));
       offers = offers.filter((o) => {
@@ -607,12 +664,17 @@ export default async function handler(req, res) {
       });
     }
 
+    const dex = (sp.dex || "").toString().toUpperCase();
+    const head = (sp.head || "").toString().toUpperCase();
     if (dex === "LEFT" || dex === "RIGHT") {
       offers = offers.filter((o) => (o?.specs?.dexterity || "").toUpperCase() === dex);
     }
     if (head === "BLADE" || head === "MALLET") {
       offers = offers.filter((o) => (o?.specs?.headType || "").toUpperCase() === head);
     }
+
+    const lengthsParam = (sp.lengths || "").toString().trim();
+    const lengthList = lengthsParam ? lengthsParam.split(",").map(Number).filter(Number.isFinite) : [];
     if (lengthList.length) {
       offers = offers.filter((o) => {
         const L = Number(o?.specs?.length);
@@ -631,7 +693,7 @@ export default async function handler(req, res) {
 
     const keptCount = offers.length;
 
-    // lightweight analytics for the snapshot
+    // analytics snapshot
     const analytics = (() => {
       const byHead = { BLADE: 0, MALLET: 0 };
       const byDex = { LEFT: 0, RIGHT: 0 };
@@ -650,6 +712,7 @@ export default async function handler(req, res) {
       return { snapshot: { byHead, byDex, byLen } };
     })();
 
+    const group = (sp.group || "true") === "true";
     if (!group) {
       const start = (page - 1) * perPage;
       const pageOffers = offers.slice(start, start + perPage);
