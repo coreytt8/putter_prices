@@ -90,9 +90,8 @@ export default function PuttersPage() {
   const [keptCount, setKeptCount] = useState(null);
 
   const [expanded, setExpanded] = useState({});
-  const [showAllOffersByModel, setShowAllOffersByModel] = useState({}); // NEW: show >10 per group
-
-  const [apiData, setApiData] = useState(null); // for snapshot meta only
+  const [showCount, setShowCount] = useState({}); // per-model number of offers to show when expanded
+  const [apiData, setApiData] = useState(null);   // for live snapshot (not showing server debug anymore)
 
   const apiUrl = useMemo(() => {
     const params = new URLSearchParams();
@@ -183,11 +182,6 @@ export default function PuttersPage() {
         setFetchedCount(typeof data.fetchedCount === "number" ? data.fetchedCount : null);
         setKeptCount(typeof data.keptCount === "number" ? data.keptCount : null);
         setApiData(data);
-
-        // when new groups arrive, reset per-model "show all" flag
-        const nextShowAll = {};
-        nextGroups.forEach(g => { nextShowAll[g.model] = false; });
-        setShowAllOffersByModel(nextShowAll);
       } catch (e) {
         if (!ignore && e.name !== "AbortError") {
           setErr("Failed to load results. Please try again.");
@@ -218,14 +212,41 @@ export default function PuttersPage() {
     return arr;
   }, [groups, sortBy]);
 
+  // Whenever the set of groups changes, reset expanded + showCount per model
   useEffect(() => {
-    const next = {};
-    sortedGroups.forEach((g) => { next[g.model] = false; });
-    setExpanded(next);
+    const nextExpanded = {};
+    const nextShowCount = {};
+    sortedGroups.forEach((g) => {
+      nextExpanded[g.model] = false;
+      nextShowCount[g.model] = Math.min(10, g.count || 0);
+    });
+    setExpanded(nextExpanded);
+    setShowCount(nextShowCount);
   }, [sortedGroups.map((g) => g.model).join("|")]);
 
-  const toggleExpand = (model) => setExpanded((prev) => ({ ...prev, [model]: !prev[model] }));
-  const toggleShowAllOffers = (model) => setShowAllOffersByModel(prev => ({ ...prev, [model]: !prev[model] }));
+  const toggleExpand = (model, countForModel) => {
+    setExpanded((prev) => ({ ...prev, [model]: !prev[model] }));
+    // When opening, ensure we at least show up to 10
+    setShowCount((prev) => ({
+      ...prev,
+      [model]: Math.max(prev[model] ?? 10, Math.min(10, countForModel || 0)),
+    }));
+  };
+
+  const increaseShow = (model, max) => {
+    setShowCount((prev) => {
+      const cur = prev[model] ?? 10;
+      return { ...prev, [model]: Math.min(cur + 10, max) };
+    });
+  };
+
+  const showAll = (model, max) => {
+    setShowCount((prev) => ({ ...prev, [model]: max }));
+  };
+
+  const showLess = (model) => {
+    setShowCount((prev) => ({ ...prev, [model]: Math.min(10, prev[model] || 10) }));
+  };
 
   const clearAll = () => {
     setQ(""); setOnlyComplete(true);
@@ -517,24 +538,24 @@ export default function PuttersPage() {
           <h3 className="mb-3 text-xs font-semibold uppercase tracking-wide text-gray-600">
             Buying Options
           </h3>
-            <div className="flex flex-wrap gap-3">
-              {BUYING_OPTIONS.map((b) => (
-                <label key={b.value} className="flex items-center gap-2 text-sm">
-                  <input
-                    type="checkbox"
-                    checked={buying.includes(b.value)}
-                    onChange={() =>
-                      setBuying((prev) =>
-                        prev.includes(b.value)
-                          ? prev.filter((v) => v !== b.value)
-                          : [...prev, b.value]
-                      )
-                    }
-                  />
-                  {b.label}
-                </label>
-              ))}
-            </div>
+          <div className="flex flex-wrap gap-3">
+            {BUYING_OPTIONS.map((b) => (
+              <label key={b.value} className="flex items-center gap-2 text-sm">
+                <input
+                  type="checkbox"
+                  checked={buying.includes(b.value)}
+                  onChange={() =>
+                    setBuying((prev) =>
+                      prev.includes(b.value)
+                        ? prev.filter((v) => v !== b.value)
+                        : [...prev, b.value]
+                    )
+                  }
+                />
+                {b.label}
+              </label>
+            ))}
+          </div>
 
           <div className="mt-4">
             <label className="flex items-center gap-2 text-sm">
@@ -612,7 +633,6 @@ export default function PuttersPage() {
           <section className="mt-6 grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-2">
             {sortedGroups.map((g) => {
               const isOpen = !!expanded[g.model];
-
               const ordered =
                 sortBy === "best_price_desc"
                   ? [...g.offers].sort((a,b) => (b.price ?? -Infinity) - (a.price ?? -Infinity))
@@ -627,10 +647,9 @@ export default function PuttersPage() {
 
               const { domDex, domHead, domLen } = summarizeDexHead(g);
 
-              const showAll = !!showAllOffersByModel[g.model];
-              const list = isOpen
-                ? (showAll ? ordered : ordered.slice(0, 10))
-                : [];
+              // How many offers to show for this model
+              const maxToShow = showCount[g.model] ?? Math.min(10, g.count || 0);
+              const remaining = Math.max(0, (g.count || 0) - maxToShow);
 
               return (
                 <article key={g.model} className="overflow-hidden rounded-xl border border-gray-200 bg-white shadow-sm">
@@ -686,74 +705,79 @@ export default function PuttersPage() {
                       </div>
                     </div>
 
-                    <div className="mt-4 flex gap-2">
-                      <button
-                        onClick={() => toggleExpand(g.model)}
-                        className="w-full rounded-md border border-gray-300 px-3 py-2 text-sm hover:bg-gray-50"
-                      >
-                        {isOpen ? "Hide offers" : `View offers (${g.count})`}
-                      </button>
-                      {isOpen && g.count > 10 && (
-                        <button
-                          onClick={() => toggleShowAllOffers(g.model)}
-                          className="rounded-md border border-gray-300 px-3 py-2 text-sm hover:bg-gray-50"
-                        >
-                          {showAll ? "Show top 10" : "Show all"}
-                        </button>
-                      )}
-                    </div>
+                    <button
+                      onClick={() => toggleExpand(g.model, g.count)}
+                      className="mt-4 w-full rounded-md border border-gray-300 px-3 py-2 text-sm hover:bg-gray-50"
+                    >
+                      {isOpen ? "Hide offers" : `View offers (${g.count})`}
+                    </button>
 
                     {isOpen && (
-                      <ul className="mt-3 space-y-2">
-                        {list.map((o) => (
-                          <li key={o.productId + o.url} className="flex items-center justify-between gap-3 rounded border border-gray-100 p-2">
-                            <div className="flex min-w-0 items-center gap-2">
-                              {retailerLogos[o.retailer] && (
-                                // eslint-disable-next-line @next/next/no-img-element
-                                <img src={retailerLogos[o.retailer]} alt={o.retailer} className="h-4 w-12 object-contain" />
-                              )}
-                              <div className="min-w-0">
-                                <div className="truncate text-sm font-medium">
-                                  {o.retailer}
-                                  {o?.seller?.username && (
-                                    <span className="ml-2 text-xs text-gray-500">
-                                      @{o.seller.username}
-                                    </span>
-                                  )}
-                                  {typeof o?.seller?.feedbackPct === "number" && (
-                                    <span className="ml-2 rounded-full bg-gray-100 px-2 py-[2px] text-[11px] font-medium text-gray-700">
-                                      {o.seller.feedbackPct.toFixed(1)}%
-                                    </span>
-                                  )}
-                                </div>
-                                <div className="mt-0.5 truncate text-xs text-gray-500">
-                                  {(o.specs?.dexterity || "").toUpperCase() === "LEFT" ? "LH" :
-                                   (o.specs?.dexterity || "").toUpperCase() === "RIGHT" ? "RH" : "—"}
-                                  {" · "}
-                                  {(o.specs?.headType || "").toUpperCase() || "—"}
-                                  {" · "}
-                                  {Number.isFinite(Number(o?.specs?.length)) ? `${o.specs.length}"` : "—"}
-                                  {o.createdAt && (<> · listed {timeAgo(new Date(o.createdAt).getTime())}</>)}
+                      <>
+                        <ul className="mt-3 space-y-2">
+                          {ordered.slice(0, maxToShow).map((o) => (
+                            <li key={o.productId + o.url} className="flex items-center justify-between gap-3 rounded border border-gray-100 p-2">
+                              <div className="flex min-w-0 items-center gap-2">
+                                {retailerLogos[o.retailer] && (
+                                  // eslint-disable-next-line @next/next/no-img-element
+                                  <img src={retailerLogos[o.retailer]} alt={o.retailer} className="h-4 w-12 object-contain" />
+                                )}
+                                <div className="min-w-0">
+                                  <div className="truncate text-sm font-medium">{o.retailer}</div>
+                                  <div className="mt-0.5 truncate text-xs text-gray-500">
+                                    {(o.specs?.dexterity || "").toUpperCase() === "LEFT" ? "LH" :
+                                     (o.specs?.dexterity || "").toUpperCase() === "RIGHT" ? "RH" : "—"}
+                                    {" · "}
+                                    {(o.specs?.headType || "").toUpperCase() || "—"}
+                                    {" · "}
+                                    {Number.isFinite(Number(o?.specs?.length)) ? `${o.specs.length}"` : "—"}
+                                    {o.createdAt && (<> · listed {timeAgo(new Date(o.createdAt).getTime())}</>)}
+                                  </div>
                                 </div>
                               </div>
-                            </div>
-                            <div className="flex items-center gap-3">
-                              <span className="text-sm font-semibold">{formatPrice(o.price, o.currency)}</span>
-                              <a
-                                href={o.url}
-                                target="_blank"
-                                rel="noopener noreferrer"
-                                className="inline-flex items-center rounded-md bg-blue-600 px-3 py-1.5 text-sm font-medium text-white hover:bg-blue-700"
+                              <div className="flex items-center gap-3">
+                                <span className="text-sm font-semibold">{formatPrice(o.price, o.currency)}</span>
+                                <a
+                                  href={o.url}
+                                  target="_blank"
+                                  rel="noopener noreferrer"
+                                  className="inline-flex items-center rounded-md bg-blue-600 px-3 py-1.5 text-sm font-medium text-white hover:bg-blue-700"
+                                >
+                                  View
+                                </a>
+                              </div>
+                            </li>
+                          ))}
+                        </ul>
+
+                        {/* Show more / all / less controls */}
+                        <div className="mt-3 flex items-center justify-end gap-2">
+                          {remaining > 0 && (
+                            <>
+                              <button
+                                onClick={() => increaseShow(g.model, g.count)}
+                                className="rounded-md border border-gray-300 px-3 py-1.5 text-sm hover:bg-gray-50"
                               >
-                                View
-                              </a>
-                            </div>
-                          </li>
-                        ))}
-                        {!showAll && g.count > 10 && (
-                          <li className="px-2 pt-1 text-xs text-gray-500">Showing top 10 offers.</li>
-                        )}
-                      </ul>
+                                Show more ({Math.min(10, remaining)} of {remaining} more)
+                              </button>
+                              <button
+                                onClick={() => showAll(g.model, g.count)}
+                                className="rounded-md border border-gray-300 px-3 py-1.5 text-sm hover:bg-gray-50"
+                              >
+                                Show all ({g.count})
+                              </button>
+                            </>
+                          )}
+                          {maxToShow > 10 && (
+                            <button
+                              onClick={() => showLess(g.model)}
+                              className="rounded-md border border-gray-300 px-3 py-1.5 text-sm hover:bg-gray-50"
+                            >
+                              Show less
+                            </button>
+                          )}
+                        </div>
+                      </>
                     )}
                   </div>
                 </article>
@@ -801,8 +825,6 @@ export default function PuttersPage() {
                 <div className="p-4">
                   <h3 className="line-clamp-2 text-sm font-semibold">{o.title}</h3>
                   <p className="mt-1 text-xs text-gray-500">
-                    {o?.seller?.username && <>@{o.seller.username} · </>}
-                    {typeof o?.seller?.feedbackPct === "number" && <>{o.seller.feedbackPct.toFixed(1)}% · </>}
                     {(o.specs?.dexterity || "").toUpperCase() || "—"} · {(o.specs?.headType || "").toUpperCase() || "—"} · {Number.isFinite(Number(o?.specs?.length)) ? `${o.specs.length}"` : "—"}
                     {o.createdAt && (<> · listed {timeAgo(new Date(o.createdAt).getTime())}</>)}
                   </p>

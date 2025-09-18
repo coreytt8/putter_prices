@@ -1,22 +1,85 @@
 /* eslint-disable no-console */
 
 /**
- * Required ENV:
+ * Required ENV (Vercel + .env.local):
  * EBAY_CLIENT_ID
  * EBAY_CLIENT_SECRET
  * EBAY_SITE=EBAY_US
  *
  * Optional EPN affiliate params (campid is the important one):
- * EPN_CAMPID, EPN_CUSTOMID, EPN_TOOLID, EPN_MKCID, EPN_MKRID, EPN_SITEID, EPN_MKEVT
- *
- * Optional rate control:
- * EBAY_MAX_CONCURRENCY (default 2)
+ * EPN_CAMPID=YOUR_CAMPAIGN_ID
+ * EPN_CUSTOMID=putteriq
+ * EPN_TOOLID=10001
+ * EPN_MKCID=1
+ * EPN_MKRID=711-53200-19255-0
+ * EPN_SITEID=0
+ * EPN_MKEVT=1
  */
 
 const EBAY_BROWSE_URL = "https://api.ebay.com/buy/browse/v1/item_summary/search";
 const EBAY_SITE = process.env.EBAY_SITE || "EBAY_US";
 
-// -------------------- EPN affiliate decorator --------------------
+/** -------------------- Brand & model knowledge -------------------- */
+/** Title must contain these when the user typed a brand */
+const BRAND_SYNONYMS = {
+  "scotty cameron": ["scotty cameron", "cameron"],
+  "titleist": ["titleist", "titleist scotty cameron"],
+  "taylormade": ["taylormade", "taylor made", "tm"],
+  "ping": ["ping"],
+  "odyssey": ["odyssey"],
+  "bettinardi": ["bettinardi", "betti"],
+  "callaway": ["callaway"],
+  "toulon": ["toulon"],
+  "pxg": ["pxg"],
+  "cobra": ["cobra"],
+  "nike": ["nike"],
+  "wilson": ["wilson"],
+  "mizuno": ["mizuno"],
+  "cleveland": ["cleveland"],
+  "srixon": ["srixon"],
+  "seemore": ["seemore", "see more"],
+  "yes": ["yes", "yes!"],
+  "l.a.b.": ["l.a.b.", "lab golf", "lab"],
+  "logan olson": ["logan olson", "olson"],
+  "evnroll": ["evnroll", "evn"],
+};
+
+/** Model/family cues. If the user types one of these phrases, title must include it */
+const MODEL_PHRASES = [
+  // Cameron
+  "newport", "newport 2", "newport 2.5", "del mar", "napa",
+  "fastback", "squareback", "futura", "phantom",
+  "studio select", "special select", "button back", "t22", "tei3", "009", "circle t", "tour rat",
+
+  // TaylorMade
+  "spider", "spider tour", "spider x", "truss", "rossa", "monza", "ghost spider",
+
+  // Ping
+  "anser", "tyne", "fetch", "tomcat", "zing", "pal", "b60", "b61", "karsten",
+
+  // Odyssey
+  "two ball", "2-ball", "white hot", "jailbird", "tri hot", "o-works", "eleven", "seven", "versa",
+
+  // Bettinardi
+  "queen b", "studio stock", "inovai", "bb",
+
+  // L.A.B.
+  "mezz", "df", "link",
+
+  // Evnroll
+  "evnroll", "er1", "er2", "er5",
+];
+
+/** Accessories/parts to exclude (putters only) */
+const ACCESSORY_NEGATIVE = [
+  "headcover", "head cover", "cover only",
+  "grip only", "grips", "superstroke",
+  "weights", "weight kit",
+  "shaft only", "head only",
+  "sole plate", "alignment aid", "hosel only",
+];
+
+/** -------------------- EPN affiliate decorator -------------------- */
 const EPN = {
   campid: process.env.EPN_CAMPID || "",
   customid: process.env.EPN_CUSTOMID || "",
@@ -30,7 +93,7 @@ const EPN = {
 function isEbayHost(hostname) {
   if (!hostname) return false;
   const h = hostname.toLowerCase();
-  if (h.includes("rover.ebay.")) return false;
+  if (h.includes("rover.ebay.")) return false; // we decorate itemWebUrl directly, not rover
   return h.includes(".ebay.");
 }
 
@@ -63,12 +126,12 @@ function decorateEbayUrl(raw, overrides = {}) {
   }
 }
 
-// -------------------- Token (auto-refresh) --------------------
+/** -------------------- Token -------------------- */
 let _tok = { val: null, exp: 0 };
 
-async function getEbayToken(force = false) {
+async function getEbayToken() {
   const now = Date.now();
-  if (!force && _tok.val && now < _tok.exp - 60_000) return _tok.val; // 60s buffer
+  if (_tok.val && now < _tok.exp) return _tok.val;
 
   const id = process.env.EBAY_CLIENT_ID;
   const secret = process.env.EBAY_CLIENT_SECRET;
@@ -84,25 +147,36 @@ async function getEbayToken(force = false) {
     body: new URLSearchParams({
       grant_type: "client_credentials",
       scope: "https://api.ebay.com/oauth/api_scope",
-    }).toString(),
+    }),
   });
 
   if (!res.ok) {
     const txt = await res.text().catch(() => "");
-    console.error("eBay OAuth error:", res.status, txt);
     throw new Error(`eBay OAuth ${res.status}: ${txt}`);
   }
 
   const json = await res.json();
-  const ttlMs = Math.max(30, Number(json.expires_in || 7200)) * 1000;
-  _tok = { val: json.access_token, exp: Date.now() + ttlMs };
+  const ttl = (json.expires_in || 7200) * 1000;
+  _tok = { val: json.access_token, exp: Date.now() + ttl - 10 * 60 * 1000 };
   return _tok.val;
 }
-function invalidateToken() { _tok = { val: null, exp: 0 }; }
 
-// -------------------- Helpers --------------------
-const safeNum = (n) => { const x = Number(n); return Number.isFinite(x) ? x : null; };
+/** -------------------- Helpers -------------------- */
+const safeNum = (n) => {
+  const x = Number(n);
+  return Number.isFinite(x) ? x : null;
+};
+
 const norm = (s) => String(s || "").trim().toLowerCase();
+
+const canon = (s) =>
+  String(s || "")
+    .toLowerCase()
+    .replace(/[#™®]/g, "")
+    .replace(/[\.\,\:\;\(\)\[\]\{\}]/g, "")
+    .replace(/[-_/\\]+/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
 
 function pickCheapestShipping(shippingOptions) {
   if (!Array.isArray(shippingOptions) || shippingOptions.length === 0) return null;
@@ -123,27 +197,28 @@ function pickCheapestShipping(shippingOptions) {
   };
 }
 
+/** Normalize query:
+ *  - don't force-add "putter" (we'll try both with and without in recall variants)
+ *  - tidy spaces/plurals
+ */
 function normalizeSearchQ(q = "") {
   let s = String(q || "").trim();
   if (!s) return s;
-  s = s.replace(/\bputters\b/gi, "putter");
-  if (!/\bputter\b/i.test(s)) s = `${s} putter`;
-  s = s.replace(/\b(putter)(\s+\1)+\b/gi, "putter");
-  return s.replace(/\s+/g, " ").trim();
+  s = s.replace(/\s+/g, " ");
+  return s;
 }
 
+/** Putter recognizer (strict) */
 function isLikelyPutter(item) {
   const title = norm(item?.title);
-  if (/\bputter(s)?\b/.test(title)) return true;
-  const FAMILY_HINTS = [
-    "newport", "phantom", "fastback", "squareback", "futura",
-    "anser", "tyne", "zing", "fetch", "tomcat",
-    "spider", "studio stock", "queen b", "bb", "inovai",
-    "two ball", "2-ball", "jailbird", "versa",
-    "mezz", "df", "link", "evnroll", "er1", "er2", "er5",
-  ];
-  if (FAMILY_HINTS.some(k => title.includes(k))) return true;
 
+  // Exclude obvious accessories/parts
+  if (ACCESSORY_NEGATIVE.some(k => title.includes(k))) return false;
+
+  // Title contains "putter" → very strong signal
+  if (/\bputter\b/.test(title)) return true;
+
+  // Aspects say it's a putter
   const aspects = [
     ...(Array.isArray(item?.itemSpecifics) ? item.itemSpecifics : []),
     ...(Array.isArray(item?.localizedAspects) ? item.localizedAspects : []),
@@ -153,10 +228,11 @@ function isLikelyPutter(item) {
     const n = norm(ent?.name);
     const v = norm(ent?.value ?? (Array.isArray(ent?.values) ? ent.values[0] : ""));
     if (!n) continue;
-    if (n.includes("putter") || v.includes("putter")) return true;
-    if (n.includes("head type") && (v.includes("blade") || v.includes("mallet"))) return true;
+    if (n.includes("putter")) return true;
+    if ((n.includes("head type") || n.includes("putter head")) && v) return true;
   }
 
+  // Category breadcrumb text (when present)
   const cat = item?.categoryPath || item?.categoryPathIds || item?.categories;
   const asString = JSON.stringify(cat || "").toLowerCase();
   if (asString.includes("putter")) return true;
@@ -233,25 +309,13 @@ function parseSpecsFromItem(item) {
   const shaftMatch = /slant|flow|plumber|single bend/i.exec(title);
   const shaft = shaftMatch ? shaftMatch[0] : null;
 
-  const FAMILIES = [
-    "newport 2.5", "newport 2", "newport",
-    "phantom 11.5", "phantom 11", "phantom 7.5", "phantom 7", "phantom 5.5", "phantom 5", "phantom x",
-    "fastback", "squareback", "futura", "select", "special select",
-    "studio select", "studio style", "studio design", "button back",
-    "tei3", "tel3", "pro platinum", "oil can",
-    "newport beach", "beach",
-    "napa", "napa valley",
-    "circle t", "tour rat", "009m", "009h", "009s", "009", "gss", "my girl",
-    "anser", "tyne", "zing", "tomcat", "fetch",
-    "spider", "spider x", "spider tour", "myspider",
-    "two ball", "2-ball", "eleven", "seven", "#7", "#9", "versa", "jailbird",
-    "bb", "queen b", "studio stock", "inovai",
-    "mezz", "df", "link",
-    "evnroll", "er1", "er2", "er5"
-  ];
+  // Coarse family from known phrases
+  const families = [...new Set([...MODEL_PHRASES, "newport 2.5", "newport 2"])];
   let family = null;
   const tl = norm(title);
-  for (const k of FAMILIES) { if (tl.includes(k)) { family = k; break; } }
+  for (const k of families) {
+    if (tl.includes(norm(k))) { family = k; break; }
+  }
 
   return { length, family, headType, dexterity: dex, hasHeadcover, shaft };
 }
@@ -267,211 +331,127 @@ function normalizeModelFromTitle(title = "", fallbackFamily = null) {
   return tokens.length ? tokens.join(" ") : (title || "unknown").slice(0, 50);
 }
 
-// -------------------- Limited / Collectible recall helpers --------------------
-const GLOBAL_LIMITED_TOKENS = [
-  "limited", "limited run", "limited edition", "le",
-  "prototype", "proto", "tour issue", "tour only", "tour use", "tour dept",
-  "japan only", "japan limited", "garage", "custom shop", "player issue",
-  "beryllium", "becu", "copper", "dass", "damascus", "tiffany", "snow"
-];
-
-const BRAND_LIMITED_TOKENS = {
-  "scotty cameron": [
-    "circle t", "tour rat", "009", "009m", "009h", "009s", "gss",
-    "my girl", "button back", "oil can", "pro platinum",
-    "newport beach", "napa", "napa valley", "studio design", "tei3", "tel3"
-  ],
-  "bettinardi": [
-    "hive", "tour stock", "dass", "bb0", "bb8", "bb8 flow", "bb8f",
-    "tiki", "stinger", "damascus", "limited run", "tour dept"
-  ],
-  "taylormade": [
-    "spider limited", "spider tour", "itsy bitsy", "tour issue", "tour only"
-  ],
-  "odyssey": [
-    "tour issue", "tour only", "prototype", "japan limited", "ten limited", "eleven limited"
-  ],
-  "toulon": [
-    "garage", "small batch", "tour issue", "tour only"
-  ],
-  "ping": [
-    "pld limited", "pld milled limited", "scottsdale tr", "anser becu", "anser copper", "vault"
-  ],
-  "l.a.b.": ["limited", "tour issue", "tour only", "df3 limited", "mezz limited"],
-  "lab golf": ["limited", "tour issue", "tour only", "df3 limited", "mezz limited"],
-  "evnroll": ["tour proto", "tour preferred", "v-series tourspec", "limited"],
-  "mizuno": ["m-craft limited", "m craft limited", "copper", "japan limited"],
-  "wilson": ["8802 limited", "8802 copper", "tour issue"],
-  "sik": ["tour issue", "limited", "prototype"],
-};
-
-function hasAnyToken(text, tokens) {
-  const n = norm(text);
-  return tokens.some(t => n.includes(norm(t)));
-}
-
-function detectBrandInText(text) {
-  const n = norm(text);
-  const brandAliases = Object.keys(BRAND_LIMITED_TOKENS).concat(["titleist"]);
-  for (const b of brandAliases) {
-    if (n.includes(norm(b))) return b;
+/** -------------------- Query understanding -------------------- */
+function extractBrandsFromQuery(rawQ) {
+  const q = canon(rawQ);
+  const found = [];
+  for (const [brand, syns] of Object.entries(BRAND_SYNONYMS)) {
+    if (syns.some(s => q.includes(canon(s)))) found.push(brand);
   }
-  return null;
+  return found;
 }
 
-function buildLimitedRecallQueries(rawQ, normalizedQ) {
-  const qset = new Set();
-  if (normalizedQ) qset.add(normalizedQ);
+function extractModelPhrasesFromQuery(rawQ) {
+  const q = canon(rawQ);
+  const found = [];
+  for (const phrase of MODEL_PHRASES) {
+    if (q.includes(canon(phrase))) found.push(phrase);
+  }
+  return found;
+}
 
-  const brandInQ = detectBrandInText(rawQ);
-  const n = norm(rawQ);
+/** Title constraints derived from the user's query:
+ * - If brand typed → title must contain one of that brand's synonyms.
+ * - If model phrase typed → title must contain that phrase.
+ */
+function titleMatchesConstraints(title, required) {
+  const t = canon(title);
 
-  for (const [brand, tokens] of Object.entries(BRAND_LIMITED_TOKENS)) {
-    const brandMentioned = brandInQ && norm(brandInQ) === norm(brand);
-    const tokensPresent = hasAnyToken(n, tokens);
-    if (brandMentioned || tokensPresent) {
-      qset.add(normalizeSearchQ(`${brand} ${rawQ}`));
-      if (!/\bputter\b/i.test(rawQ)) qset.add(normalizeSearchQ(`${brand} ${rawQ} putter`));
+  if (required.brands.length) {
+    const anyBrand = required.brands.some(b =>
+      (BRAND_SYNONYMS[b] || [b]).some(s => t.includes(canon(s)))
+    );
+    if (!anyBrand) return false;
+  }
+
+  if (required.models.length) {
+    const allModelsPresent = required.models.every(m => t.includes(canon(m)));
+    if (!allModelsPresent) return false;
+  }
+
+  return true;
+}
+
+/** Build recall variants to fetch from eBay. We’ll filter locally afterwards. */
+function buildRecallQueries(rawQ, required) {
+  const base = normalizeSearchQ(rawQ);
+  const variants = new Set();
+
+  if (base) variants.add(base);
+
+  // Try with/without "putter"
+  const hasPutter = /\bputter\b/i.test(base || "");
+  if (!hasPutter && base) variants.add(`${base} putter`);
+
+  // Brand + Model combos
+  if (required.brands.length || required.models.length) {
+    const brandPhrases = required.brands.flatMap(b => BRAND_SYNONYMS[b] || [b]);
+    const modelPhrases = required.models.length ? required.models : [];
+    // brand only
+    brandPhrases.forEach(b => {
+      variants.add(`${b} putter`);
+      variants.add(b);
+    });
+    // model only
+    modelPhrases.forEach(m => {
+      variants.add(`${m} putter`);
+      variants.add(m);
+    });
+    // brand + model
+    if (brandPhrases.length && modelPhrases.length) {
+      brandPhrases.forEach(b => {
+        modelPhrases.forEach(m => {
+          variants.add(`${b} ${m}`);
+          variants.add(`${b} ${m} putter`);
+        });
+      });
     }
   }
 
-  if (!brandInQ && hasAnyToken(n, GLOBAL_LIMITED_TOKENS)) {
-    ["scotty cameron", "bettinardi", "odyssey", "ping", "taylormade", "toulon", "evnroll", "lab golf"].forEach(b =>
-      qset.add(normalizeSearchQ(`${b} ${rawQ}`))
-    );
-  }
+  // Safety baseline to catch misspellings via category filter (we’ll still title-filter)
+  variants.add("golf putter");
 
-  const impliesCameron = /\b(newport|phantom|futura|squareback|fastback|napa|tei3|tel3|button back|pro platinum|circle t|tour rat|009|009m|009h|009s|my girl|beach)\b/i.test(rawQ);
-  if (!brandInQ && impliesCameron) {
-    qset.add(normalizeSearchQ(`scotty cameron ${rawQ}`));
-  }
-
-  return Array.from(qset);
+  return Array.from(variants).slice(0, 12);
 }
 
-// -------------------- Rate/Concurrency/Cache utils --------------------
-const sleep = (ms) => new Promise(r => setTimeout(r, ms));
-function calcBackoffMs(attempt, retryAfterSec = 0) {
-  if (retryAfterSec) return Number(retryAfterSec) * 1000;
-  const base = 500 * Math.pow(2, attempt); // 500ms, 1s, 2s
-  const jitter = Math.floor(Math.random() * 250);
-  return base + jitter;
-}
-function bodyShowsTooMany(text) {
-  try {
-    const j = JSON.parse(text);
-    const errs = j?.errors || [];
-    return errs.some(e => Number(e.errorId) === 2001 || /Too many requests/i.test(e.message || ''));
-  } catch {
-    return /Too many requests/i.test(text);
-  }
-}
-const _ebayCache = new Map(); // url -> { data, exp }
-function cacheGet(url) {
-  const hit = _ebayCache.get(url);
-  if (hit && Date.now() < hit.exp) return hit.data;
-  if (hit) _ebayCache.delete(url);
-  return null;
-}
-function cacheSet(url, data, ttlMs = 60_000) {
-  _ebayCache.set(url, { data, exp: Date.now() + ttlMs });
-}
-const MAX_CONCURRENT_EBAY = Math.max(1, Number(process.env.EBAY_MAX_CONCURRENCY || 2));
-let _inFlight = 0;
-const _waiters = [];
-async function withEbaySlot(fn) {
-  while (_inFlight >= MAX_CONCURRENT_EBAY) {
-    await new Promise(res => _waiters.push(res));
-  }
-  _inFlight++;
-  try { return await fn(); }
-  finally {
-    _inFlight--;
-    const next = _waiters.shift();
-    if (next) next();
-  }
-}
+/** -------------------- eBay fetch -------------------- */
+async function fetchEbayBrowse({ q, limit = 50, offset = 0, sort, forceCategory }) {
+  const token = await getEbayToken();
 
-// -------------------- eBay fetch (rate-limit aware) --------------------
-async function fetchEbayBrowse({ q, limit = 50, offset = 0, sort, forceCategory, useExtended = false }) {
   const url = new URL(EBAY_BROWSE_URL);
   url.searchParams.set("q", q || "");
   url.searchParams.set("limit", String(limit));
   url.searchParams.set("offset", String(offset));
-  if (useExtended) url.searchParams.set("fieldgroups", "EXTENDED");
+  url.searchParams.set("fieldgroups", "EXTENDED");
   if (sort === "newlylisted") url.searchParams.set("sort", "newlyListed");
   if (forceCategory) url.searchParams.set("category_ids", "115280"); // Golf Clubs
 
-  const urlStr = url.toString();
-  const cached = cacheGet(urlStr);
-  if (cached) return cached;
-
-  const marketplaceHeaders = {
-    Accept: "application/json",
-    "Content-Type": "application/json",
-    "X-EBAY-C-MARKETPLACE-ID": EBAY_SITE,
-  };
-
-  const MAX_RETRIES = 2;
-
-  async function oneCall(withToken) {
-    return withEbaySlot(() =>
-      fetch(urlStr, {
-        headers: {
-          Authorization: `Bearer ${withToken}`,
-          ...marketplaceHeaders,
-        },
-      })
-    );
+  async function call(bearer) {
+    return fetch(url.toString(), {
+      headers: {
+        Authorization: `Bearer ${bearer}`,
+        Accept: "application/json",
+        "Content-Type": "application/json",
+        "X-EBAY-C-MARKETPLACE-ID": EBAY_SITE,
+        "X-EBAY-C-ENDUSERCTX": `contextualLocation=${EBAY_SITE}`,
+      },
+    });
   }
 
-  let token = await getEbayToken();
-  for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
-    let res = await oneCall(token);
-    let text = await res.text().catch(() => "");
-
-    // Handle invalid/expired token
-    const invalidToken = res.status === 401 || text.includes('"Invalid access token"') || text.includes('"errorId":1001');
-    if (invalidToken) {
-      if (attempt < MAX_RETRIES) {
-        console.warn("[ebay] token invalid; refreshing");
-        invalidateToken();
-        token = await getEbayToken(true);
-        continue; // retry
-      }
-    }
-
-    // Handle rate limiting with backoff
-    const retryAfterSec = Number(res.headers.get("Retry-After") || 0);
-    if (res.status === 429 || bodyShowsTooMany(text)) {
-      if (attempt < MAX_RETRIES) {
-        const waitMs = calcBackoffMs(attempt, retryAfterSec);
-        console.warn(`[ebay] 429/2001; backing off ${waitMs}ms then retrying`);
-        await sleep(waitMs);
-        continue; // retry
-      }
-    }
-
-    if (!res.ok) {
-      throw new Error(`eBay Browse error ${res.status}: ${text}`);
-    }
-
-    // success
-    try {
-      const json = JSON.parse(text);
-      cacheSet(urlStr, json, 60_000);
-      // Optional: introspect limits
-      // console.log('[ebay] limits:', res.headers.get('X-EBAY-C-APICALL-LIMITS'), res.headers.get('X-EBAY-C-REQUEST-ID'));
-      return json;
-    } catch {
-      return { raw: text };
-    }
+  let res = await call(token);
+  if (res.status === 401 || res.status === 403) {
+    _tok = { val: null, exp: 0 };
+    const fresh = await getEbayToken();
+    res = await call(fresh);
   }
-
-  throw new Error("eBay Browse: retries exhausted due to rate limiting or auth errors");
+  if (!res.ok) {
+    const txt = await res.text().catch(() => "");
+    throw new Error(`eBay Browse error ${res.status}: ${txt}`);
+  }
+  return res.json();
 }
 
-// -------------------- API Route --------------------
+/** -------------------- API Route -------------------- */
 export default async function handler(req, res) {
   if (req.method !== "GET") return res.status(405).json({ ok: false, error: "Method Not Allowed" });
 
@@ -496,8 +476,8 @@ export default async function handler(req, res) {
   const page = Math.max(1, Number(sp.page || "1"));
   const perPage = Math.max(1, Math.min(50, Number(sp.perPage || "10")));
 
-  // Keep your existing behavior/param; just lower default fan-out to reduce throttling
-  const samplePages = Math.max(1, Math.min(5, Number(sp.samplePages || 1))); // <= was 4
+  const forceCategory = (sp.forceCategory || "true") !== "false";
+  const samplePages = Math.max(1, Math.min(5, Number(sp.samplePages || 4)));
 
   if (!q) {
     return res.status(200).json({
@@ -516,57 +496,48 @@ export default async function handler(req, res) {
   try {
     const limit = 50;
 
-    // Build jobs (same as before)
+    // Understand user intent (brand + model phrases)
+    const requiredBrands = extractBrandsFromQuery(q);
+    const requiredModels = extractModelPhrasesFromQuery(q);
+
+    const recallQueries = buildRecallQueries(q, { brands: requiredBrands, models: requiredModels });
+
+    // Fan-out across variants & pages
     const calls = [];
-    const recallQs = buildLimitedRecallQueries(rawQ, q);
-    for (const qq of recallQs) {
+    for (const rq of recallQueries) {
       for (let i = 0; i < samplePages; i++) {
-        calls.push(() => fetchEbayBrowse({ q: qq, limit, offset: i * limit, sort, forceCategory: true, useExtended: false }));
+        calls.push(fetchEbayBrowse({ q: rq, limit, offset: i * limit, sort, forceCategory }));
       }
     }
 
-    // Run jobs SEQUENTIALLY to avoid bursts (replaces Promise.allSettled)
-    let responses = [];
-    for (const job of calls) {
-      try {
-        const data = await job();
-        responses.push({ status: "fulfilled", value: data });
-        // tiny pause helps smooth bursts even more
-        await sleep(120);
-      } catch (e) {
-        responses.push({ status: "rejected", reason: e });
-        // optional: small pause on error to avoid hammering
-        await sleep(150);
-      }
-    }
+    const results = await Promise.allSettled(calls);
 
+    // Collect unique raw items
+    const rawSeen = new Set();
     let items = [];
     let totalFromEbay = 0;
-    for (const r of responses) {
-      if (r.status === "fulfilled") {
-        const data = r.value || {};
-        totalFromEbay = Math.max(totalFromEbay, Number(data?.total || 0));
-        const arr = Array.isArray(data?.itemSummaries) ? data.itemSummaries : [];
-        items.push(...arr);
-      } else {
-        console.error("Browse subcall failed:", r.reason?.message || r.reason);
+
+    for (const r of results) {
+      if (r.status !== "fulfilled") continue;
+      const data = r.value || {};
+      totalFromEbay = Math.max(totalFromEbay, Number(data?.total || 0));
+      const arr = Array.isArray(data?.itemSummaries) ? data.itemSummaries : [];
+      for (const it of arr) {
+        const key =
+          (it?.itemId || it?.legacyItemId || "") +
+          "|" + (it?.itemHref || "") +
+          "|" + (it?.title || "");
+        if (rawSeen.has(key)) continue;
+        rawSeen.add(key);
+        items.push(it);
       }
     }
 
-    // Fallback: if still very low recall, do one minimal single-page call
-    if (items.length === 0) {
-      try {
-        const fb = await fetchEbayBrowse({ q: q || "putter", limit: 50, offset: 0, sort, forceCategory: true, useExtended: false });
-        const arr = Array.isArray(fb?.itemSummaries) ? fb.itemSummaries : [];
-        items.push(...arr);
-        totalFromEbay = Math.max(totalFromEbay, Number(fb?.total || 0));
-      } catch (e) {
-        console.error("Fallback fetch failed:", e);
-      }
-    }
+    // Strict putter-only + title constraints (brand/model) + drop accessories
+    items = items.filter(isLikelyPutter).filter((it) =>
+      titleMatchesConstraints(it?.title || "", { brands: requiredBrands, models: requiredModels })
+    );
 
-    // Strict putter filter
-    items = items.filter(isLikelyPutter);
     const fetchedCount = items.length;
 
     // Map → offers
@@ -608,18 +579,23 @@ export default async function handler(req, res) {
 
         totalPrice,
         shipping: shipping
-          ? { cost: shipping.cost, currency: shipping.currency || item?.price?.currency || "USD", free: Boolean(shipping.free), type: shipping.type || null }
+          ? {
+              cost: shipping.cost,
+              currency: shipping.currency || item?.price?.currency || "USD",
+              free: Boolean(shipping.free),
+              type: shipping.type || null,
+            }
           : null,
         seller: { feedbackPct: sellerPct, feedbackScore: sellerScore, username: item?.seller?.username || null },
         location: { country: item?.itemLocation?.country || null, postalCode: item?.itemLocation?.postalCode || null },
         returns: { accepted: returnsAccepted, days: returnDays },
         buying,
-        specs,
+        specs, // { length, family, headType, dexterity, hasHeadcover, shaft }
         __model: modelKey,
       };
     });
 
-    // De-dupe
+    // De-dupe obvious clones (same seller + same title + same price)
     const seen = new Set();
     offers = offers.filter((o) => {
       const key = `${(o.seller?.username || "").toLowerCase()}|${(o.title || "").toLowerCase()}|${o.price ?? "?"}`;
@@ -628,10 +604,10 @@ export default async function handler(req, res) {
       return true;
     });
 
-    // Optional completeness filter
+    // Track drops for debugging
     let droppedNoPrice = 0;
     let droppedNoImage = 0;
-    const onlyComplete = sp.onlyComplete === "true";
+
     if (onlyComplete) {
       offers = offers.filter((o) => {
         const ok = typeof o.price === "number" && o.image;
@@ -643,19 +619,14 @@ export default async function handler(req, res) {
       });
     }
 
-    // Post filters
-    const minPrice = safeNum(sp.minPrice);
-    const maxPrice = safeNum(sp.maxPrice);
     if (minPrice != null) offers = offers.filter((o) => typeof o.price === "number" && o.price >= minPrice);
     if (maxPrice != null) offers = offers.filter((o) => typeof o.price === "number" && o.price <= maxPrice);
 
-    const conds = (sp.conditions || "").toString().split(",").map((s) => s.trim()).filter(Boolean);
     if (conds.length) {
       const set = new Set(conds.map((s) => s.toUpperCase()));
       offers = offers.filter((o) => o?.condition && set.has(String(o.condition).toUpperCase()));
     }
 
-    const buyingOptions = (sp.buyingOptions || "").toString().split(",").map((s) => s.trim()).filter(Boolean);
     if (buyingOptions.length) {
       const set = new Set(buyingOptions.map((s) => s.toUpperCase()));
       offers = offers.filter((o) => {
@@ -664,17 +635,12 @@ export default async function handler(req, res) {
       });
     }
 
-    const dex = (sp.dex || "").toString().toUpperCase();
-    const head = (sp.head || "").toString().toUpperCase();
     if (dex === "LEFT" || dex === "RIGHT") {
       offers = offers.filter((o) => (o?.specs?.dexterity || "").toUpperCase() === dex);
     }
     if (head === "BLADE" || head === "MALLET") {
       offers = offers.filter((o) => (o?.specs?.headType || "").toUpperCase() === head);
     }
-
-    const lengthsParam = (sp.lengths || "").toString().trim();
-    const lengthList = lengthsParam ? lengthsParam.split(",").map(Number).filter(Number.isFinite) : [];
     if (lengthList.length) {
       offers = offers.filter((o) => {
         const L = Number(o?.specs?.length);
@@ -693,7 +659,7 @@ export default async function handler(req, res) {
 
     const keptCount = offers.length;
 
-    // analytics snapshot
+    // lightweight analytics for the snapshot
     const analytics = (() => {
       const byHead = { BLADE: 0, MALLET: 0 };
       const byDex = { LEFT: 0, RIGHT: 0 };
@@ -712,7 +678,7 @@ export default async function handler(req, res) {
       return { snapshot: { byHead, byDex, byLen } };
     })();
 
-    const group = (sp.group || "true") === "true";
+    // Grouping
     if (!group) {
       const start = (page - 1) * perPage;
       const pageOffers = offers.slice(start, start + perPage);
@@ -732,7 +698,15 @@ export default async function handler(req, res) {
           perPage,
           sort: sort || "default",
           source: "ebay-browse",
-          debug: { droppedNoPrice, droppedNoImage, totalFromEbay }
+          debug: {
+            droppedNoPrice, droppedNoImage,
+            totalFromEbay,
+            recallQueries,
+            requiredBrands,
+            requiredModels,
+            forceCategory,
+            samplePages,
+          },
         },
         analytics,
       });
@@ -803,7 +777,15 @@ export default async function handler(req, res) {
         perPage,
         sort: sort || "bestprice",
         source: "ebay-browse",
-        debug: { droppedNoPrice, droppedNoImage, totalFromEbay },
+        debug: {
+          droppedNoPrice, droppedNoImage,
+          totalFromEbay,
+          recallQueries,
+          requiredBrands,
+          requiredModels,
+          forceCategory,
+          samplePages,
+        },
       },
       analytics,
     });
