@@ -66,12 +66,12 @@ function decorateEbayUrl(raw, overrides = {}) {
   }
 }
 
-// -------------------- Token --------------------
-let _tok = { val: null, exp: 0 };
+// -------------------- Token (auto-refresh with explicit retry) --------------------
+let _tok = { val: null, exp: 0 }; // exp = epoch ms
 
-async function getEbayToken() {
+async function getEbayToken(force = false) {
   const now = Date.now();
-  if (_tok.val && now < _tok.exp) return _tok.val;
+  if (!force && _tok.val && now < _tok.exp - 60_000) return _tok.val; // 60s buffer
 
   const id = process.env.EBAY_CLIENT_ID;
   const secret = process.env.EBAY_CLIENT_SECRET;
@@ -86,19 +86,29 @@ async function getEbayToken() {
     },
     body: new URLSearchParams({
       grant_type: "client_credentials",
+      // Minimal scope for Browse
       scope: "https://api.ebay.com/oauth/api_scope",
-    }),
+    }).toString(),
   });
 
   if (!res.ok) {
     const txt = await res.text().catch(() => "");
+    console.error("eBay OAuth error:", res.status, txt);
     throw new Error(`eBay OAuth ${res.status}: ${txt}`);
   }
 
   const json = await res.json();
-  const ttl = (json.expires_in || 7200) * 1000;
-  _tok = { val: json.access_token, exp: Date.now() + ttl - 10 * 60 * 1000 };
+  const ttlMs = Math.max(30, Number(json.expires_in || 7200)) * 1000;
+  _tok = {
+    val: json.access_token,
+    // keep a safety buffer so we never cut it close
+    exp: Date.now() + ttlMs,
+  };
   return _tok.val;
+}
+
+function invalidateToken() {
+  _tok = { val: null, exp: 0 };
 }
 
 // -------------------- Helpers --------------------
@@ -239,9 +249,7 @@ function parseSpecsFromItem(item) {
   const shaftMatch = /slant|flow|plumber|single bend/i.exec(title);
   const shaft = shaftMatch ? shaftMatch[0] : null;
 
-  // coarse family tagging (used for grouping key fallback)
   const FAMILIES = [
-    // Cameron core & collectible
     "newport 2.5", "newport 2", "newport",
     "phantom 11.5", "phantom 11", "phantom 7.5", "phantom 7", "phantom 5.5", "phantom 5", "phantom x",
     "fastback", "squareback", "futura", "select", "special select",
@@ -250,8 +258,6 @@ function parseSpecsFromItem(item) {
     "newport beach", "beach",
     "napa", "napa valley",
     "circle t", "tour rat", "009m", "009h", "009s", "009", "gss", "my girl",
-
-    // TaylorMade / Odyssey / Ping / Bettinardi / LAB / Evnroll
     "anser", "tyne", "zing", "tomcat", "fetch",
     "spider", "spider x", "spider tour", "myspider",
     "two ball", "2-ball", "eleven", "seven", "#7", "#9", "versa", "jailbird",
@@ -286,42 +292,32 @@ const GLOBAL_LIMITED_TOKENS = [
 ];
 
 const BRAND_LIMITED_TOKENS = {
-  // Scotty Cameron
   "scotty cameron": [
     "circle t", "tour rat", "009", "009m", "009h", "009s", "gss",
     "my girl", "button back", "oil can", "pro platinum",
     "newport beach", "napa", "napa valley", "studio design", "tei3", "tel3"
   ],
-  // Bettinardi
   "bettinardi": [
     "hive", "tour stock", "dass", "bb0", "bb8", "bb8 flow", "bb8f",
     "tiki", "stinger", "damascus", "limited run", "tour dept"
   ],
-  // TaylorMade
   "taylormade": [
     "spider limited", "spider tour", "itsy bitsy", "tour issue", "tour only"
   ],
-  // Odyssey / Toulon
   "odyssey": [
     "tour issue", "tour only", "prototype", "japan limited", "ten limited", "eleven limited"
   ],
   "toulon": [
     "garage", "small batch", "tour issue", "tour only"
   ],
-  // PING
   "ping": [
     "pld limited", "pld milled limited", "scottsdale tr", "anser becu", "anser copper", "vault"
   ],
-  // L.A.B. Golf
   "l.a.b.": ["limited", "tour issue", "tour only", "df3 limited", "mezz limited"],
   "lab golf": ["limited", "tour issue", "tour only", "df3 limited", "mezz limited"],
-  // Evnroll
   "evnroll": ["tour proto", "tour preferred", "v-series tourspec", "limited"],
-  // Mizuno
   "mizuno": ["m-craft limited", "m craft limited", "copper", "japan limited"],
-  // Wilson
   "wilson": ["8802 limited", "8802 copper", "tour issue"],
-  // SIK / others
   "sik": ["tour issue", "limited", "prototype"],
 };
 
@@ -346,7 +342,6 @@ function buildLimitedRecallQueries(rawQ, normalizedQ) {
   const brandInQ = detectBrandInText(rawQ);
   const n = norm(rawQ);
 
-  // Brand-specific assists
   for (const [brand, tokens] of Object.entries(BRAND_LIMITED_TOKENS)) {
     const brandMentioned = brandInQ && norm(brandInQ) === norm(brand);
     const tokensPresent = hasAnyToken(n, tokens);
@@ -356,14 +351,12 @@ function buildLimitedRecallQueries(rawQ, normalizedQ) {
     }
   }
 
-  // Global limited words without a brand → add popular brand assists
   if (!brandInQ && hasAnyToken(n, GLOBAL_LIMITED_TOKENS)) {
     ["scotty cameron", "bettinardi", "odyssey", "ping", "taylormade", "toulon", "evnroll", "lab golf"].forEach(b =>
       qset.add(normalizeSearchQ(`${b} ${rawQ}`))
     );
   }
 
-  // Cameron implied brand (user forgot “Scotty Cameron”)
   const impliesCameron = /\b(newport|phantom|futura|squareback|fastback|napa|tei3|tel3|button back|pro platinum|circle t|tour rat|009|009m|009h|009s|my girl|beach)\b/i.test(rawQ);
   if (!brandInQ && impliesCameron) {
     qset.add(normalizeSearchQ(`scotty cameron ${rawQ}`));
@@ -372,41 +365,61 @@ function buildLimitedRecallQueries(rawQ, normalizedQ) {
   return Array.from(qset);
 }
 
-// -------------------- eBay fetch --------------------
+// -------------------- eBay fetch (with robust token retry) --------------------
 async function fetchEbayBrowse({ q, limit = 50, offset = 0, sort, forceCategory }) {
-  const token = await getEbayToken();
-
+  // Build URL first (pure)
   const url = new URL(EBAY_BROWSE_URL);
   url.searchParams.set("q", q || "");
   url.searchParams.set("limit", String(limit));
   url.searchParams.set("offset", String(offset));
   url.searchParams.set("fieldgroups", "EXTENDED");
   if (sort === "newlylisted") url.searchParams.set("sort", "newlyListed");
-  if (forceCategory) url.searchParams.set("category_ids", "115280"); // Golf Clubs (covers putters)
+  if (forceCategory) url.searchParams.set("category_ids", "115280"); // Golf Clubs
 
-  async function call(bearer) {
+  const marketplaceHeaders = {
+    Accept: "application/json",
+    "Content-Type": "application/json",
+    "X-EBAY-C-MARKETPLACE-ID": EBAY_SITE,
+    // enduser ctx is optional; keep minimal
+    "X-EBAY-C-ENDUSERCTX": `contextualLocation=${EBAY_SITE}`,
+  };
+
+  async function call(withToken) {
     return fetch(url.toString(), {
       headers: {
-        Authorization: `Bearer ${bearer}`,
-        Accept: "application/json",
-        "Content-Type": "application/json",
-        "X-EBAY-C-MARKETPLACE-ID": EBAY_SITE,
-        "X-EBAY-C-ENDUSERCTX": `contextualLocation=${EBAY_SITE}`,
+        Authorization: `Bearer ${withToken}`,
+        ...marketplaceHeaders,
       },
     });
   }
 
+  let token = await getEbayToken();             // try cached/fresh
   let res = await call(token);
-  if (res.status === 401 || res.status === 403) {
-    _tok = { val: null, exp: 0 };
-    const fresh = await getEbayToken();
+  let text = await res.text().catch(() => "");
+
+  // If token invalid/expired => force refresh once and retry
+  const bodyIndicatesInvalid =
+    text.includes('"Invalid access token"') ||
+    text.includes('"errorId":1001') ||
+    text.includes('"errorId": 1001');
+
+  if (res.status === 401 || bodyIndicatesInvalid) {
+    invalidateToken();
+    const fresh = await getEbayToken(true);
     res = await call(fresh);
+    text = await res.text().catch(() => "");
   }
+
   if (!res.ok) {
-    const txt = await res.text().catch(() => "");
-    throw new Error(`eBay Browse error ${res.status}: ${txt}`);
+    // Surface useful diagnostics up the stack
+    throw new Error(`eBay Browse error ${res.status}: ${text}`);
   }
-  return res.json();
+
+  try {
+    return JSON.parse(text);
+  } catch {
+    return { raw: text };
+  }
 }
 
 // -------------------- API Route --------------------
@@ -477,6 +490,9 @@ export default async function handler(req, res) {
         totalFromEbay = Math.max(totalFromEbay, Number(data?.total || 0));
         const arr = Array.isArray(data?.itemSummaries) ? data.itemSummaries : [];
         items.push(...arr);
+      } else {
+        // Keep a breadcrumb for debugging if needed (won't leak in UI)
+        console.error("Browse subcall failed:", r.reason);
       }
     }
 
@@ -653,7 +669,6 @@ export default async function handler(req, res) {
           perPage,
           sort: sort || "default",
           source: "ebay-browse",
-          // keep debug minimal to avoid leaking in UI; you can expand if needed
           debug: { droppedNoPrice, droppedNoImage, totalFromEbay }
         },
         analytics,
@@ -698,7 +713,7 @@ export default async function handler(req, res) {
           ? Math.max(...a.offers.map((o) => (o.createdAt ? new Date(o.createdAt).getTime() : 0)))
           : 0;
         const tb = b.offers.length
-          ? Math.max(...b.offers.map((o) => (o.createdAt ? new Date(b.createdAt).getTime() : 0)))
+          ? Math.max(...b.offers.map((o) => (o.createdAt ? new Date(o.createdAt).getTime() : 0)))
           : 0;
         return tb - ta;
       });
