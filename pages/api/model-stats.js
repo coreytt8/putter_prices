@@ -1,7 +1,7 @@
 // pages/api/model-stats.js
-export const runtime = 'nodejs'; // fine to keep
+export const runtime = 'nodejs';
 
-import { getSql } from '../../lib/db'; // <-- fix: import getSql
+import { getSql } from '../../lib/db';
 
 // Keep key normalization aligned with your grouping
 function normalizeModelKey(title = '') {
@@ -20,7 +20,6 @@ export default async function handler(req, res) {
     const modelKey = normalizeModelKey(model);
     if (!modelKey) return res.status(400).json({ ok: false, error: 'Missing model' });
 
-    // Example: 90d median/percentiles for the model
     const [row] = await sql`
       WITH w AS (
         SELECT total
@@ -30,9 +29,9 @@ export default async function handler(req, res) {
           AND total IS NOT NULL
       )
       SELECT
-        percentile_cont(0.1)  WITHIN GROUP (ORDER BY total) AS p10,
-        percentile_cont(0.5)  WITHIN GROUP (ORDER BY total) AS p50,
-        percentile_cont(0.9)  WITHIN GROUP (ORDER BY total) AS p90,
+        percentile_cont(0.1) WITHIN GROUP (ORDER BY total) AS p10,
+        percentile_cont(0.5) WITHIN GROUP (ORDER BY total) AS p50,
+        percentile_cont(0.9) WITHIN GROUP (ORDER BY total) AS p90,
         COUNT(*) AS n
       FROM w
     `;
