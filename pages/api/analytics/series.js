@@ -1,5 +1,5 @@
 export const runtime = 'nodejs';
-import { getSql } from '../../lib/db';
+import { getSql } from '../../../lib/db';
 
 export default async function handler(req, res) {
   try {
