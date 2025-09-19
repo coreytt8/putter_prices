@@ -10,7 +10,9 @@ const QUERIES = [
   'taylormade spider x putter',
   'odyssey seven #7 putter',
   'ping anser putter',
-  'bettinardi queen b putter',
+  'bettinardi queen b putter'
+  'scotty cameron circle t'
+  'logan olson',
 ];
 
 const CRON_SECRET = process.env.CRON_SECRET || '';
