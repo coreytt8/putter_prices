@@ -1,59 +1,73 @@
+// pages/api/cron/collect-prices.js
 import { getSql } from '../../../lib/db';
 import { browseSearch } from '../../../lib/ebay';
-import { normalizeModelKey } from '../../../lib/putter-normalize';
+import { normalizeModelKey } from '../../../lib/putter-normalize'; // or inline if you didn't keep the file
 
 export const runtime = 'nodejs';
 
 const QUERIES = [
   'scotty cameron newport 2 putter',
-  'scotty cameron phantom putter',
+  'scotty cameron phantom 11 putter',
   'taylormade spider x putter',
   'odyssey seven #7 putter',
   'ping anser putter',
-  'bettinardi queen b putter'
-  'scotty cameron circle t'
+  'bettinardi queen b putter',
+  'scotty cameron circle t',
   'logan olson',
 ];
 
 const CRON_SECRET = process.env.CRON_SECRET || '';
 
 export default async function handler(req, res) {
+  // Auth: only enforce if CRON_SECRET is set
   if (CRON_SECRET) {
-    const key = req.headers['x-cron-secret'] || req.query.key;
-    if (key !== CRON_SECRET) return res.status(401).json({ ok: false, error: 'Unauthorized' });
+    const headerKey = req.headers['x-cron-secret'];
+    const queryKey = req.query.key;
+    if (headerKey !== CRON_SECRET && queryKey !== CRON_SECRET) {
+      return res.status(401).json({ ok: false, error: 'Unauthorized' });
+    }
   }
 
   const sql = getSql();
+
+  // Manual single-query run: /api/cron/collect-prices?q=<your search>
+  const manualQ = (req.query.q || '').toString().trim();
+  const queries = manualQ ? [manualQ] : QUERIES;
+
   const results = [];
   let calls = 0;
 
   try {
-    for (const q of QUERIES) {
-      // Keep it to ONE page per query to protect your Browse quota
+    for (const q of queries) {
+      // keep quota-safe: one page per query
       const data = await browseSearch({ q, limit: 50, offset: 0 });
       calls++;
 
       const arr = Array.isArray(data?.itemSummaries) ? data.itemSummaries : [];
+      const upserts = [];
+
       for (const it of arr) {
-        const itemId = it?.itemId || it?.legacyItemId || null;
+        const itemId = it?.itemId || it?.legacyItemId;
         if (!itemId) continue;
 
         const title = it?.title || '';
-        const model_key = normalizeModelKey(title);
+        const model_key = normalizeModelKey ? normalizeModelKey(title) : title.toLowerCase().trim();
 
         const price = Number(it?.price?.value ?? NaN);
         const shipping = Number(it?.shippingOptions?.[0]?.shippingCost?.value ?? NaN);
-        const total = Number.isFinite(price) && Number.isFinite(shipping) ? price + shipping : (Number.isFinite(price) ? price : null);
+        const total = Number.isFinite(price) && Number.isFinite(shipping)
+          ? price + shipping
+          : (Number.isFinite(price) ? price : null);
 
         // UPSERT items
-        await sql`
+        upserts.push(sql`
           INSERT INTO items (item_id, title, brand, model_key, head_type, dexterity, length_in, currency, seller_user, seller_score, seller_pct, url, image_url)
           VALUES (
             ${itemId},
             ${title},
-            ${null},                       -- brand (optional: parse if you want)
+            ${null},
             ${model_key},
-            ${null}, ${null}, ${null},     -- head_type, dexterity, length_in (parse later)
+            ${null}, ${null}, ${null},
             ${it?.price?.currency || 'USD'},
             ${it?.seller?.username || null},
             ${it?.seller?.feedbackScore ? Number(it.seller.feedbackScore) : null},
@@ -70,10 +84,10 @@ export default async function handler(req, res) {
             seller_pct = EXCLUDED.seller_pct,
             url = EXCLUDED.url,
             image_url = EXCLUDED.image_url
-        `;
+        `);
 
-        // Insert price snapshot
-        await sql`
+        // snapshot price
+        upserts.push(sql`
           INSERT INTO item_prices (item_id, price, shipping, total, condition, location_cc)
           VALUES (
             ${itemId},
@@ -83,16 +97,19 @@ export default async function handler(req, res) {
             ${it?.condition || null},
             ${it?.itemLocation?.country || null}
           )
-        `;
+        `);
       }
 
-      // tiny delay between queries (burst safety)
+      // run all db ops for this query
+      if (upserts.length) await Promise.all(upserts);
+
+      // tiny burst protection
       await new Promise(r => setTimeout(r, 150));
       results.push({ q, found: arr.length });
     }
 
-    res.status(200).json({ ok: true, calls, results });
+    return res.status(200).json({ ok: true, calls, manualQ: manualQ || null, results });
   } catch (e) {
-    res.status(500).json({ ok: false, error: e.message, calls, results });
+    return res.status(500).json({ ok: false, error: e.message, calls, manualQ: manualQ || null, results });
   }
 }
