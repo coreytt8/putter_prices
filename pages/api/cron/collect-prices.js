@@ -2,27 +2,23 @@
 export const runtime = 'nodejs';
 
 import { getSql } from '../../../lib/db';
-import { browseSearch } from '../../../lib/ebay'; // must return Browse API JSON
+import { browseSearch } from '../../../lib/ebay';
 
-// Minimal, inline model key cleaner (safe fallback)
+// Minimal normalizer (safe fallback)
 function normalizeModelKey(title = '') {
   return (title || '')
     .toLowerCase()
-    // drop common noise
     .replace(/scotty\s*cameron|titleist|putter|golf|\b(rh|lh)\b|right\s*hand(?:ed)?|left\s*hand(?:ed)?|men'?s|with|w\/|new|brand\s*new/g, ' ')
-    // remove lengths like 34", 35 in
     .replace(/\b(3[2-9]|4[0-2])\s*(?:in|inch|inches|["”]|-?inch)\b/g, ' ')
     .replace(/[’“”]/g, m => (m === '’' ? "'" : '"'))
-    // punctuation & decorators
     .replace(/[*_\-\(\)\[\],.:;#+]/g, ' ')
     .replace(/[^a-z0-9\s]/g, ' ')
     .replace(/\s+/g, ' ')
     .trim();
 }
 
-// Curated list of high-value models (one page per query to stay under Browse limits)
+// Popular models/brands (1 page per query)
 const QUERIES = [
-  // Scotty Cameron
   'scotty cameron newport 2 putter',
   'scotty cameron newport putter',
   'scotty cameron phantom 11 putter',
@@ -36,12 +32,10 @@ const QUERIES = [
   'scotty cameron newport beach putter',
   'scotty cameron napa putter',
 
-  // TaylorMade
   'taylormade spider tour putter',
   'taylormade spider x putter',
   'taylormade spider gt putter',
 
-  // Odyssey / Toulon
   'odyssey seven putter',
   'odyssey #7 putter',
   'odyssey two ball putter',
@@ -49,19 +43,16 @@ const QUERIES = [
   'odyssey jailbird putter',
   'toulon garage putter',
 
-  // Ping
   'ping anser putter',
   'ping tyne putter',
   'ping fetch putter',
   'ping tomcat putter',
 
-  // Bettinardi
   'bettinardi queen b putter',
   'bettinardi studio stock putter',
   'bettinardi bb putter',
   'bettinardi inovai putter',
 
-  // LAB / Evnroll / Mizuno / Wilson / SIK
   'lab golf mezz putter',
   'lab golf df putter',
   'lab golf link putter',
@@ -73,11 +64,11 @@ const QUERIES = [
 ];
 
 const CRON_SECRET = process.env.CRON_SECRET || '';
-const PAUSE_MS = 200; // tiny spacing between queries
+const PAUSE_MS = 200;
 
 export default async function handler(req, res) {
   try {
-    // --- Auth: require header or ?key= if a secret is set ---
+    // Auth (header OR ?key=) — only enforced if CRON_SECRET is set
     if (CRON_SECRET) {
       const headerKey = req.headers['x-cron-secret'];
       const queryKey = (req.query.key || '').toString();
@@ -88,7 +79,7 @@ export default async function handler(req, res) {
 
     const sql = getSql();
 
-    // Manual one-off: /api/cron/collect-prices?q=<your search>
+    // Manual one-off run: /api/cron/collect-prices?q=...
     const manualQ = (req.query.q || '').toString().trim();
     const queries = manualQ ? [manualQ] : QUERIES;
 
@@ -96,22 +87,18 @@ export default async function handler(req, res) {
     let calls = 0;
 
     for (const q of queries) {
-      // 1 page per query to respect Browse limits
       let data;
       try {
         data = await browseSearch({ q, limit: 50, offset: 0 });
         calls++;
       } catch (err) {
-        // surface 429 clearly, but keep loop going for others
-        const msg = String(err?.message || err);
-        results.push({ q, error: msg });
-        // if you want to abort the whole run on 429, uncomment:
-        // if (msg.includes('429') || msg.toLowerCase().includes('too many requests')) break;
+        results.push({ q, error: String(err?.message || err) });
         await wait(PAUSE_MS);
         continue;
       }
 
       const items = Array.isArray(data?.itemSummaries) ? data.itemSummaries : [];
+      // Build two ordered lists of executable functions that accept a runner (tx or sql)
       const parents = [];
       const children = [];
 
@@ -123,7 +110,6 @@ export default async function handler(req, res) {
         const model_key = normalizeModelKey(title);
 
         const price = num(it?.price?.value);
-        // pick cheapest shipping option if available
         const ship = pickCheapestShipping(it?.shippingOptions);
         const shipping = num(ship?.value);
         const total = (isNum(price) && isNum(shipping)) ? price + shipping : (isNum(price) ? price : null);
@@ -137,9 +123,8 @@ export default async function handler(req, res) {
         const condition = it?.condition || null;
         const locationCC = it?.itemLocation?.country || null;
 
-        // Parent upsert
-        parents.push(async (tx) => {
-          await tx`
+        parents.push(async (runner) => {
+          await runner`
             INSERT INTO items (item_id, title, brand, model_key, head_type, dexterity, length_in, currency, seller_user, seller_score, seller_pct, url, image_url)
             VALUES (
               ${itemId}, ${title}, ${null}, ${model_key}, ${null}, ${null}, ${null},
@@ -157,9 +142,8 @@ export default async function handler(req, res) {
           `;
         });
 
-        // Child snapshot (must run after parent)
-        children.push(async (tx) => {
-          await tx`
+        children.push(async (runner) => {
+          await runner`
             INSERT INTO item_prices (item_id, price, shipping, total, condition, location_cc)
             VALUES (
               ${itemId},
@@ -173,12 +157,18 @@ export default async function handler(req, res) {
         });
       }
 
-      // Run parents first, then children — inside a transaction for safety
+      // Execute: transaction if supported, else ordered without transaction
       let inserted = 0;
-      await sql.begin(async (tx) => {
-        for (const fn of parents) { await fn(tx); }
-        for (const fn of children) { await fn(tx); inserted++; }
-      });
+      if (typeof sql.begin === 'function') {
+        await sql.begin(async (tx) => {
+          for (const fn of parents) await fn(tx);
+          for (const fn of children) { await fn(tx); inserted++; }
+        });
+      } else {
+        // No transaction available in your neon client version
+        for (const fn of parents) await fn(sql);
+        for (const fn of children) { await fn(sql); inserted++; }
+      }
 
       results.push({ q, found: items.length, inserted });
       await wait(PAUSE_MS);
@@ -190,11 +180,10 @@ export default async function handler(req, res) {
   }
 }
 
-/* ---------------- helpers ---------------- */
+/* --------------- helpers --------------- */
 function wait(ms) { return new Promise(r => setTimeout(r, ms)); }
 function num(n) { const x = Number(n); return Number.isFinite(x) ? x : null; }
 function isNum(n) { return typeof n === 'number' && Number.isFinite(n); }
-
 function pickCheapestShipping(options) {
   if (!Array.isArray(options) || options.length === 0) return null;
   let best = null;
