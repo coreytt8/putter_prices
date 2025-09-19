@@ -4,8 +4,11 @@ import { useEffect, useMemo, useState } from "react";
 import MarketSnapshot from "@/components/MarketSnapshot";
 import dynamic from "next/dynamic";
 
-// Lazy-load sparkline (renders only if your /api/analytics/series exists)
-const PriceSparkline = dynamic(() => import("@/components/PriceSparkline").catch(() => () => null), { ssr: false });
+// Lazy-load sparkline (no dependency errors if missing; renders nothing if API absent)
+const PriceSparkline = dynamic(
+  () => import("@/components/PriceSparkline").catch(() => () => null),
+  { ssr: false }
+);
 
 const BRANDS = [
   { label: "Scotty Cameron", q: "scotty cameron putter" },
@@ -78,6 +81,198 @@ function useSeries(model) {
     return () => { ok = false; };
   }, [model]);
   return series;
+}
+
+/* ---- summarize specs (shared) ---- */
+function summarizeDexHead(g) {
+  const dexCounts = { LEFT: 0, RIGHT: 0 };
+  const headCounts = { BLADE: 0, MALLET: 0 };
+  const lenCounts = { 33: 0, 34: 0, 35: 0, 36: 0 };
+  for (const o of g.offers || []) {
+    const d = (o?.specs?.dexterity || "").toUpperCase();
+    const h = (o?.specs?.headType || "").toUpperCase();
+    if (d === "LEFT" || d === "RIGHT") dexCounts[d] += 1;
+    if (h === "BLADE" || h === "MALLET") headCounts[h] += 1;
+
+    const L = Number(o?.specs?.length);
+    if (Number.isFinite(L)) {
+      const nearest = [33,34,35,36].reduce((p,c) => Math.abs(c - L) < Math.abs(p - L) ? c : p, 34);
+      if (Math.abs(nearest - L) <= 0.5) lenCounts[nearest]++;
+    }
+  }
+  const domDex = dexCounts.LEFT === 0 && dexCounts.RIGHT === 0
+    ? null
+    : (dexCounts.LEFT >= dexCounts.RIGHT ? "LEFT" : "RIGHT");
+  const domHead = headCounts.BLADE === 0 && headCounts.MALLET === 0
+    ? null
+    : (headCounts.BLADE >= headCounts.MALLET ? "BLADE" : "MALLET");
+  const domLen = Object.entries(lenCounts).sort((a,b)=>b[1]-a[1])[0];
+  const domLenVal = domLen && domLen[1] > 0 ? Number(domLen[0]) : null;
+  return { domDex, domHead, domLen: domLenVal };
+}
+
+/* ---- Child component so hooks aren't inside a loop ---- */
+function ModelCard({
+  g,
+  isOpen,
+  sortBy,
+  showAll,
+  onToggleExpand,
+  onToggleShowAll,
+  retailerLogos
+}) {
+  // Hook at top level (valid)
+  const series = useSeries(g.model);
+
+  const ordered =
+    sortBy === "best_price_desc"
+      ? [...g.offers].sort((a,b) => (b.price ?? -Infinity) - (a.price ?? -Infinity))
+      : [...g.offers].sort((a,b) => (a.price ?? Infinity) - (b.price ?? Infinity));
+
+  const nums = ordered.map(o => o?.price).filter(x => typeof x === "number").sort((a,b)=>a-b);
+  const n = nums.length;
+  const med = n < 2 ? null : (n % 2 ? nums[Math.floor(n/2)] : (nums[n/2-1]+nums[n/2])/2);
+  const bestDelta = (typeof g.bestPrice === "number" && typeof med === "number" && med - g.bestPrice > 0)
+    ? { diff: med - g.bestPrice, pct: ((med - g.bestPrice)/med)*100 }
+    : null;
+
+  const { domDex, domHead, domLen } = summarizeDexHead(g);
+  const list = isOpen ? (showAll ? ordered : ordered.slice(0, 10)) : [];
+
+  return (
+    <article className="overflow-hidden rounded-xl border border-gray-200 bg-white shadow-sm">
+      <div className="relative aspect-[4/3] w-full max-h-48 bg-gray-50">
+        {g.image ? (
+          // eslint-disable-next-line @next/next/no-img-element
+          <img src={g.image} alt={g.model} className="h-full w-full object-contain" loading="lazy" />
+        ) : (
+          <div className="flex h-full w-full items-center justify-center text-xs text-gray-400">
+            No image
+          </div>
+        )}
+      </div>
+
+      <div className="p-4">
+        <div className="flex items-start justify-between gap-3">
+          <div className="min-w-0">
+            <h3 className="text-lg font-semibold leading-tight">{g.model}</h3>
+            <p className="mt-1 text-xs text-gray-500">
+              {g.count} offer{g.count === 1 ? "" : "s"} · {g.retailers.join(", ")}
+            </p>
+
+            {/* Sparkline (renders only if data exists) */}
+            {Array.isArray(series) && series.length > 0 && (
+              <div className="mt-2">
+                <PriceSparkline data={series} />
+              </div>
+            )}
+
+            <div className="mt-2 flex flex-wrap gap-2">
+              {domDex && (
+                <span className="rounded-full bg-slate-100 px-2 py-0.5 text-[11px] font-medium text-slate-700">
+                  {domDex === "LEFT" ? "Left-hand" : "Right-hand"}
+                </span>
+              )}
+              {domHead && (
+                <span className="rounded-full bg-indigo-100 px-2 py-0.5 text-[11px] font-medium text-indigo-700">
+                  {domHead === "MALLET" ? "Mallet" : "Blade"}
+                </span>
+              )}
+              {Number.isFinite(domLen) && (
+                <span className="rounded-full bg-amber-100 px-2 py-0.5 text-[11px] font-medium text-amber-800">
+                  ~{domLen}&quot;
+                </span>
+              )}
+            </div>
+          </div>
+
+          <div className="flex flex-col items-end gap-1">
+            <div className="shrink-0 rounded-full bg-green-100 px-3 py-1 text-xs font-semibold text-green-700">
+              Best: {formatPrice(g.bestPrice, g.bestCurrency)}
+            </div>
+            {bestDelta && (
+              <div
+                className="rounded-full bg-emerald-50 px-3 py-1 text-[11px] font-medium text-emerald-700"
+                title={`Median ${formatPrice(med)} · Save ~${formatPrice(bestDelta.diff)} (~${bestDelta.pct.toFixed(0)}%)`}
+              >
+                Save {formatPrice(bestDelta.diff)} (~{bestDelta.pct.toFixed(0)}%)
+              </div>
+            )}
+          </div>
+        </div>
+
+        <div className="mt-4 flex gap-2">
+          <button
+            onClick={onToggleExpand}
+            className="w-full rounded-md border border-gray-300 px-3 py-2 text-sm hover:bg-gray-50"
+          >
+            {isOpen ? "Hide offers" : `View offers (${g.count})`}
+          </button>
+          {isOpen && g.count > 10 && (
+            <button
+              onClick={onToggleShowAll}
+              className="rounded-md border border-gray-300 px-3 py-2 text-sm hover:bg-gray-50"
+            >
+              {showAll ? "Show top 10" : "Show all"}
+            </button>
+          )}
+        </div>
+
+        {isOpen && (
+          <ul className="mt-3 space-y-2">
+            {list.map((o) => (
+              <li key={o.productId + o.url} className="flex items-center justify-between gap-3 rounded border border-gray-100 p-2">
+                <div className="flex min-w-0 items-center gap-2">
+                  {retailerLogos[o.retailer] && (
+                    // eslint-disable-next-line @next/next/no-img-element
+                    <img src={retailerLogos[o.retailer]} alt={o.retailer} className="h-4 w-12 object-contain" />
+                  )}
+                  <div className="min-w-0">
+                    <div className="truncate text-sm font-medium">
+                      {o.retailer}
+                      {o?.seller?.username && (
+                        <span className="ml-2 text-xs text-gray-500">
+                          @{o.seller.username}
+                        </span>
+                      )}
+                      {typeof o?.seller?.feedbackPct === "number" && (
+                        <span className="ml-2 rounded-full bg-gray-100 px-2 py-[2px] text-[11px] font-medium text-gray-700">
+                          {o.seller.feedbackPct.toFixed(1)}%
+                        </span>
+                      )}
+                    </div>
+                    <div className="mt-0.5 truncate text-xs text-gray-500">
+                      {(o.specs?.dexterity || "").toUpperCase() === "LEFT" ? "LH" :
+                        (o.specs?.dexterity || "").toUpperCase() === "RIGHT" ? "RH" : "—"}
+                      {" · "}
+                      {(o.specs?.headType || "").toUpperCase() || "—"}
+                      {" · "}
+                      {Number.isFinite(Number(o?.specs?.length)) ? `${o.specs.length}"` : "—"}
+                      {o.createdAt && (<> · listed {timeAgo(new Date(o.createdAt).getTime())}</>)}
+                    </div>
+                  </div>
+                </div>
+                <div className="flex items-center gap-3">
+                  <span className="text-sm font-semibold">{formatPrice(o.price, o.currency)}</span>
+                  <a
+                    href={o.url}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="inline-flex items-center rounded-md bg-blue-600 px-3 py-1.5 text-sm font-medium text-white hover:bg-blue-700"
+                  >
+                    View
+                  </a>
+                </div>
+              </li>
+            ))}
+            {!showAll && g.count > 10 && (
+              <li className="px-2 pt-1 text-xs text-gray-500">Showing top 10 offers.</li>
+            )}
+          </ul>
+        )}
+      </div>
+    </article>
+  );
 }
 
 export default function PuttersPage() {
@@ -258,33 +453,6 @@ export default function PuttersPage() {
 
   const canPrev = hasPrev && page > 1 && !loading;
   const canNext = hasNext && !loading;
-
-  function summarizeDexHead(g) {
-    const dexCounts = { LEFT: 0, RIGHT: 0 };
-    const headCounts = { BLADE: 0, MALLET: 0 };
-    const lenCounts = { 33: 0, 34: 0, 35: 0, 36: 0 };
-    for (const o of g.offers || []) {
-      const d = (o?.specs?.dexterity || "").toUpperCase();
-      const h = (o?.specs?.headType || "").toUpperCase();
-      if (d === "LEFT" || d === "RIGHT") dexCounts[d] += 1;
-      if (h === "BLADE" || h === "MALLET") headCounts[h] += 1;
-
-      const L = Number(o?.specs?.length);
-      if (Number.isFinite(L)) {
-        const nearest = [33,34,35,36].reduce((p,c) => Math.abs(c - L) < Math.abs(p - L) ? c : p, 34);
-        if (Math.abs(nearest - L) <= 0.5) lenCounts[nearest]++;
-      }
-    }
-    const domDex = dexCounts.LEFT === 0 && dexCounts.RIGHT === 0
-      ? null
-      : (dexCounts.LEFT >= dexCounts.RIGHT ? "LEFT" : "RIGHT");
-    const domHead = headCounts.BLADE === 0 && headCounts.MALLET === 0
-      ? null
-      : (headCounts.BLADE >= headCounts.MALLET ? "BLADE" : "MALLET");
-    const domLen = Object.entries(lenCounts).sort((a,b)=>b[1]-a[1])[0];
-    const domLenVal = domLen && domLen[1] > 0 ? Number(domLen[0]) : null;
-    return { domDex, domHead, domLen: domLenVal };
-  }
 
   return (
     <main className="mx-auto max-w-6xl px-4 py-8">
@@ -632,162 +800,18 @@ export default function PuttersPage() {
           <section className="mt-6 grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-2">
             {sortedGroups.map((g) => {
               const isOpen = !!expanded[g.model];
-
-              const ordered =
-                sortBy === "best_price_desc"
-                  ? [...g.offers].sort((a,b) => (b.price ?? -Infinity) - (a.price ?? -Infinity))
-                  : [...g.offers].sort((a,b) => (a.price ?? Infinity) - (b.price ?? Infinity));
-
-              const nums = ordered.map(o => o?.price).filter(x => typeof x === "number").sort((a,b)=>a-b);
-              const n = nums.length;
-              const med = n < 2 ? null : (n % 2 ? nums[Math.floor(n/2)] : (nums[n/2-1]+nums[n/2])/2);
-              const bestDelta = (typeof g.bestPrice === "number" && typeof med === "number" && med - g.bestPrice > 0)
-                ? { diff: med - g.bestPrice, pct: ((med - g.bestPrice)/med)*100 }
-                : null;
-
-              const { domDex, domHead, domLen } = summarizeDexHead(g);
-
               const showAll = !!showAllOffersByModel[g.model];
-              const list = isOpen
-                ? (showAll ? ordered : ordered.slice(0, 10))
-                : [];
-
-              // 🔹 NEW: fetch series (safe no-op if API missing)
-              const series = useSeries(g.model);
-
               return (
-                <article key={g.model} className="overflow-hidden rounded-xl border border-gray-200 bg-white shadow-sm">
-                  <div className="relative aspect-[4/3] w-full max-h-48 bg-gray-50">
-                    {g.image ? (
-                      // eslint-disable-next-line @next/next/no-img-element
-                      <img src={g.image} alt={g.model} className="h-full w-full object-contain" loading="lazy" />
-                    ) : (
-                      <div className="flex h-full w-full items-center justify-center text-xs text-gray-400">
-                        No image
-                      </div>
-                    )}
-                  </div>
-
-                  <div className="p-4">
-                    <div className="flex items-start justify-between gap-3">
-                      <div className="min-w-0">
-                        <h3 className="text-lg font-semibold leading-tight">{g.model}</h3>
-                        <p className="mt-1 text-xs text-gray-500">
-                          {g.count} offer{g.count === 1 ? "" : "s"} · {g.retailers.join(", ")}
-                        </p>
-
-                        {/* 🔹 NEW: tiny historical price sparkline (renders only if data exists) */}
-                        {Array.isArray(series) && series.length > 0 && (
-                          <div className="mt-2">
-                            <PriceSparkline data={series} />
-                          </div>
-                        )}
-
-                        <div className="mt-2 flex flex-wrap gap-2">
-                          {domDex && (
-                            <span className="rounded-full bg-slate-100 px-2 py-0.5 text-[11px] font-medium text-slate-700">
-                              {domDex === "LEFT" ? "Left-hand" : "Right-hand"}
-                            </span>
-                          )}
-                          {domHead && (
-                            <span className="rounded-full bg-indigo-100 px-2 py-0.5 text-[11px] font-medium text-indigo-700">
-                              {domHead === "MALLET" ? "Mallet" : "Blade"}
-                            </span>
-                          )}
-                          {Number.isFinite(domLen) && (
-                            <span className="rounded-full bg-amber-100 px-2 py-0.5 text-[11px] font-medium text-amber-800">
-                              ~{domLen}&quot;
-                            </span>
-                          )}
-                        </div>
-                      </div>
-
-                      <div className="flex flex-col items-end gap-1">
-                        <div className="shrink-0 rounded-full bg-green-100 px-3 py-1 text-xs font-semibold text-green-700">
-                          Best: {formatPrice(g.bestPrice, g.bestCurrency)}
-                        </div>
-                        {bestDelta && (
-                          <div
-                            className="rounded-full bg-emerald-50 px-3 py-1 text-[11px] font-medium text-emerald-700"
-                            title={`Median ${formatPrice(med)} · Save ~${formatPrice(bestDelta.diff)} (~${bestDelta.pct.toFixed(0)}%)`}
-                          >
-                            Save {formatPrice(bestDelta.diff)} (~{bestDelta.pct.toFixed(0)}%)
-                          </div>
-                        )}
-                      </div>
-                    </div>
-
-                    <div className="mt-4 flex gap-2">
-                      <button
-                        onClick={() => toggleExpand(g.model)}
-                        className="w-full rounded-md border border-gray-300 px-3 py-2 text-sm hover:bg-gray-50"
-                      >
-                        {isOpen ? "Hide offers" : `View offers (${g.count})`}
-                      </button>
-                      {isOpen && g.count > 10 && (
-                        <button
-                          onClick={() => toggleShowAllOffers(g.model)}
-                          className="rounded-md border border-gray-300 px-3 py-2 text-sm hover:bg-gray-50"
-                        >
-                          {showAll ? "Show top 10" : "Show all"}
-                        </button>
-                      )}
-                    </div>
-
-                    {isOpen && (
-                      <ul className="mt-3 space-y-2">
-                        {list.map((o) => (
-                          <li key={o.productId + o.url} className="flex items-center justify-between gap-3 rounded border border-gray-100 p-2">
-                            <div className="flex min-w-0 items-center gap-2">
-                              {retailerLogos[o.retailer] && (
-                                // eslint-disable-next-line @next/next/no-img-element
-                                <img src={retailerLogos[o.retailer]} alt={o.retailer} className="h-4 w-12 object-contain" />
-                              )}
-                              <div className="min-w-0">
-                                <div className="truncate text-sm font-medium">
-                                  {o.retailer}
-                                  {o?.seller?.username && (
-                                    <span className="ml-2 text-xs text-gray-500">
-                                      @{o.seller.username}
-                                    </span>
-                                  )}
-                                  {typeof o?.seller?.feedbackPct === "number" && (
-                                    <span className="ml-2 rounded-full bg-gray-100 px-2 py-[2px] text-[11px] font-medium text-gray-700">
-                                      {o.seller.feedbackPct.toFixed(1)}%
-                                    </span>
-                                  )}
-                                </div>
-                                <div className="mt-0.5 truncate text-xs text-gray-500">
-                                  {(o.specs?.dexterity || "").toUpperCase() === "LEFT" ? "LH" :
-                                   (o.specs?.dexterity || "").toUpperCase() === "RIGHT" ? "RH" : "—"}
-                                  {" · "}
-                                  {(o.specs?.headType || "").toUpperCase() || "—"}
-                                  {" · "}
-                                  {Number.isFinite(Number(o?.specs?.length)) ? `${o.specs.length}"` : "—"}
-                                  {o.createdAt && (<> · listed {timeAgo(new Date(o.createdAt).getTime())}</>)}
-                                </div>
-                              </div>
-                            </div>
-                            <div className="flex items-center gap-3">
-                              <span className="text-sm font-semibold">{formatPrice(o.price, o.currency)}</span>
-                              <a
-                                href={o.url}
-                                target="_blank"
-                                rel="noopener noreferrer"
-                                className="inline-flex items-center rounded-md bg-blue-600 px-3 py-1.5 text-sm font-medium text-white hover:bg-blue-700"
-                              >
-                                View
-                              </a>
-                            </div>
-                          </li>
-                        ))}
-                        {!showAll && g.count > 10 && (
-                          <li className="px-2 pt-1 text-xs text-gray-500">Showing top 10 offers.</li>
-                        )}
-                      </ul>
-                    )}
-                  </div>
-                </article>
+                <ModelCard
+                  key={g.model}
+                  g={g}
+                  isOpen={isOpen}
+                  sortBy={sortBy}
+                  showAll={showAll}
+                  retailerLogos={retailerLogos}
+                  onToggleExpand={() => toggleExpand(g.model)}
+                  onToggleShowAll={() => toggleShowAllOffers(g.model)}
+                />
               );
             })}
           </section>
