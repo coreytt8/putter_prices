@@ -1,8 +1,8 @@
 {
   "crons": [
     {
-      "path": "/api/compute-model-stats",
-      "schedule": "0 3 * * *"
+      "path": "/api/cron/collect-prices",
+      "schedule": "30 3 * * *"
     }
   ]
 }
