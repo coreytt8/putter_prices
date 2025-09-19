@@ -1,7 +1,7 @@
 {
   "crons": [
     {
-      "path": "/api/cron/collect-prices",
+      "path": "/api/cron/collect-prices?key=12qwaszx!@QWASZX",
       "schedule": "30 3 * * *"
     }
   ]
