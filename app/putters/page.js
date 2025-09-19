@@ -2,6 +2,10 @@
 
 import { useEffect, useMemo, useState } from "react";
 import MarketSnapshot from "@/components/MarketSnapshot";
+import dynamic from "next/dynamic";
+
+// Lazy-load sparkline (renders only if your /api/analytics/series exists)
+const PriceSparkline = dynamic(() => import("@/components/PriceSparkline").catch(() => () => null), { ssr: false });
 
 const BRANDS = [
   { label: "Scotty Cameron", q: "scotty cameron putter" },
@@ -60,64 +64,21 @@ function timeAgo(ts) {
   return days === 1 ? "1 day ago" : `${days} days ago`;
 }
 
-/* ---------------- Fair Price (inline hook + card) ---------------- */
-function useModelStats(model) {
-  const [data, setData] = useState(null);
-  const [state, setState] = useState({ loading: false, error: null });
-
+/* ---- tiny helper to fetch series per model (safe-noop if API missing) ---- */
+function useSeries(model) {
+  const [series, setSeries] = useState(null);
   useEffect(() => {
-    const m = String(model || "").trim();
-    if (!m) { setData(null); setState({ loading: false, error: null }); return; }
-
-    let alive = true;
-    setState({ loading: true, error: null });
-
-    fetch(`/api/model-stats?model=${encodeURIComponent(m)}`, { cache: "no-store" })
-      .then(r => r.json())
-      .then(j => { if (alive) { setData(j); setState({ loading: false, error: null }); }})
-      .catch(e => { if (alive) setState({ loading: false, error: e?.message || "Error" }); });
-
-    return () => { alive = false; };
+    let ok = true;
+    const m = (model || "").trim();
+    if (!m) { setSeries(null); return; }
+    fetch(`/api/analytics/series?model=${encodeURIComponent(m)}`, { cache: "no-store" })
+      .then(r => r.ok ? r.json() : null)
+      .then(j => { if (!ok) return; if (j?.ok) setSeries(j.series || []); else setSeries([]); })
+      .catch(() => { if (ok) setSeries([]); });
+    return () => { ok = false; };
   }, [model]);
-
-  return { data, ...state };
+  return series;
 }
-
-function fmtDollars(n) {
-  if (n == null) return "—";
-  const num = typeof n === "string" ? Number(n) : n;
-  return Number.isFinite(num) ? `$${num.toFixed(0)}` : "—";
-}
-
-function FairPriceCard({ model }) {
-  const { data, loading, error } = useModelStats(model);
-  const stats = data?.stats || {};
-  const n = Number(stats?.n || 0);
-
-  return (
-    <div className="rounded-2xl border border-gray-200 p-4 shadow-sm bg-white">
-      <div className="flex items-center justify-between">
-        <div className="text-sm text-gray-600">Fair Price (90d median)</div>
-        <div className="text-xs text-gray-400">Model: <span className="font-medium">{model || "—"}</span></div>
-      </div>
-
-      {loading ? (
-        <div className="mt-2 h-7 w-24 animate-pulse rounded bg-gray-200" />
-      ) : error ? (
-        <div className="mt-2 text-sm text-red-600">Error: {String(error)}</div>
-      ) : (
-        <>
-          <div className="mt-1 text-2xl font-semibold">{fmtDollars(stats.p50)}</div>
-          <div className="mt-1 text-xs text-gray-600">
-            Range (P10–P90): <span className="font-medium">{fmtDollars(stats.p10)}</span> – <span className="font-medium">{fmtDollars(stats.p90)}</span>
-          </div>
-          <div className="mt-1 text-xs text-gray-400">Sample size (90d): {n}</div>
-        </>
-      )}
-    </div>
-  );
-}
-/* ----------------------------------------------------------------- */
 
 export default function PuttersPage() {
   const [q, setQ] = useState("");
@@ -645,13 +606,6 @@ export default function PuttersPage() {
         query={q}
       />
 
-      {/* NEW: Fair Price card (analytics from Neon) */}
-      {q.trim() && (
-        <section className="mt-6">
-          <FairPriceCard model={q.trim()} />
-        </section>
-      )}
-
       {q.trim() && loading && (
         <div className="mt-6 grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-2">
           {Array.from({ length: Math.min(FIXED_PER_PAGE, 6) }).map((_, i) => (
@@ -698,6 +652,9 @@ export default function PuttersPage() {
                 ? (showAll ? ordered : ordered.slice(0, 10))
                 : [];
 
+              // 🔹 NEW: fetch series (safe no-op if API missing)
+              const series = useSeries(g.model);
+
               return (
                 <article key={g.model} className="overflow-hidden rounded-xl border border-gray-200 bg-white shadow-sm">
                   <div className="relative aspect-[4/3] w-full max-h-48 bg-gray-50">
@@ -718,6 +675,14 @@ export default function PuttersPage() {
                         <p className="mt-1 text-xs text-gray-500">
                           {g.count} offer{g.count === 1 ? "" : "s"} · {g.retailers.join(", ")}
                         </p>
+
+                        {/* 🔹 NEW: tiny historical price sparkline (renders only if data exists) */}
+                        {Array.isArray(series) && series.length > 0 && (
+                          <div className="mt-2">
+                            <PriceSparkline data={series} />
+                          </div>
+                        )}
+
                         <div className="mt-2 flex flex-wrap gap-2">
                           {domDex && (
                             <span className="rounded-full bg-slate-100 px-2 py-0.5 text-[11px] font-medium text-slate-700">
