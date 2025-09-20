@@ -1,6 +1,6 @@
 // pages/api/analytics/series.js
 export const runtime = 'nodejs';
-import { getSql } from '../../lib/db';
+import { getSql } from '../../../lib/db';
 
 // same normalizer as your model-stats route
 function normalizeModelKey(title = '') {
