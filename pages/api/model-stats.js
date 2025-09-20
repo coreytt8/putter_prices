@@ -1,7 +1,7 @@
 // pages/api/model-stats.js
 export const runtime = 'nodejs';
 
-import { getSql } from '../../../lib/db';
+import { getSql } from '../../lib/db';
 import { normalizeModelKey } from '../../lib/normalize';
 
 export default async function handler(req, res) {
