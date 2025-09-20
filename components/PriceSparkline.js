@@ -1,37 +1,197 @@
 'use client';
+import React, { useMemo } from 'react';
+import {
+  ResponsiveContainer,
+  AreaChart,
+  Area,
+  Line,
+  ReferenceLine,
+  ReferenceDot,
+  Tooltip,
+} from 'recharts';
 
-// data: [{ day: '2025-09-01T00:00:00.000Z', median: 299.0 }, ...]
-export default function PriceSparkline({ data }) {
-  if (!Array.isArray(data) || data.length < 2) return null;
+// Accepts data in any of these shapes per point:
+// { ts: number(ms)|string(ISO), total:number }  OR  { t: string|number, price:number }
+export default function PriceSparkline({
+  data,
+  height = 64,
+  showAverage = true,
+  showMedian = true,
+  className = '',
+}) {
+  const series = useMemo(() => {
+    if (!Array.isArray(data)) return [];
+    // normalize -> [{x: Date, y: number}]
+    const norm = data
+      .map(d => {
+        const xRaw = d.ts ?? d.t ?? d.date ?? d.x;
+        const yRaw = d.total ?? d.price ?? d.y ?? d.value;
+        const x =
+          typeof xRaw === 'number'
+            ? new Date(xRaw)
+            : typeof xRaw === 'string'
+            ? new Date(xRaw)
+            : null;
+        const y = Number(yRaw);
+        if (!x || !Number.isFinite(y)) return null;
+        return { x, y };
+      })
+      .filter(Boolean)
+      .sort((a, b) => a.x - b.x);
 
-  // Normalize points to [0..1] box then scale to SVG size
-  const w = 240;   // px
-  const h = 48;    // px
-  const pad = 4;   // inner padding
+    // 7-pt simple moving average (if enough points)
+    const avg = [];
+    const win = 7;
+    for (let i = 0; i < norm.length; i++) {
+      const s = Math.max(0, i - (win - 1) + 1);
+      const start = Math.max(0, i - (win - 1));
+      let sum = 0,
+        n = 0;
+      for (let j = start; j <= i; j++) {
+        sum += norm[j].y;
+        n++;
+      }
+      avg.push(n >= 3 ? sum / n : null); // don’t plot average for very short windows
+    }
 
-  const xs = data.map((_, i) => i);
-  const ys = data.map(d => Number(d.median)).filter(n => Number.isFinite(n));
-  if (ys.length < 2) return null;
+    // stats
+    const ys = norm.map(p => p.y);
+    const min = ys.length ? Math.min(...ys) : null;
+    const max = ys.length ? Math.max(...ys) : null;
+    const median =
+      ys.length
+        ? (() => {
+            const a = [...ys].sort((x, y) => x - y);
+            const mid = Math.floor(a.length / 2);
+            return a.length % 2 ? a[mid] : (a[mid - 1] + a[mid]) / 2;
+          })()
+        : null;
 
-  const minY = Math.min(...ys);
-  const maxY = Math.max(...ys);
-  const spanY = maxY - minY || 1;
-  const maxX = data.length - 1 || 1;
+    // pick first/last min/max positions for dots
+    let minIdx = -1,
+      maxIdx = -1;
+    if (min != null) minIdx = norm.findIndex(p => p.y === min);
+    if (max != null) maxIdx = norm.findIndex(p => p.y === max);
 
-  const toX = (i) => pad + (i / maxX) * (w - pad * 2);
-  const toY = (v) => pad + (1 - (v - minY) / spanY) * (h - pad * 2);
+    // final recharts-friendly
+    const out = norm.map((p, i) => ({
+      x: p.x,
+      y: p.y,
+      avg: avg[i],
+      isMin: i === minIdx,
+      isMax: i === maxIdx,
+    }));
 
-  const points = data.map((d, i) => [toX(i), toY(Number(d.median))]);
-  const dAttr = points
-    .map(([x, y], idx) => (idx === 0 ? `M ${x} ${y}` : `L ${x} ${y}`))
-    .join(' ');
+    return {
+      points: out,
+      min,
+      max,
+      median,
+    };
+  }, [data]);
+
+  if (!series.points?.length) return null;
+
+  // pad Y domain slightly for breathing room
+  const yPad = Math.max(2, Math.round((series.max - series.min) * 0.06) || 4);
+  const yMin = Math.max(0, Math.floor(series.min - yPad));
+  const yMax = Math.ceil(series.max + yPad);
+
+  const dateFmt = (d) =>
+    new Date(d).toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
+
+  const priceFmt = (n) =>
+    Number.isFinite(n) ? new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD' }).format(n) : '—';
+
+  // custom minimal tooltip
+  const CustomTooltip = ({ active, label, payload }) => {
+    if (!active || !payload?.length) return null;
+    const p = payload[0]?.payload;
+    return (
+      <div className="rounded-md border border-gray-200 bg-white px-2 py-1 text-xs shadow-md">
+        <div className="font-medium">{dateFmt(p.x)}</div>
+        <div className="text-gray-700">{priceFmt(p.y)}</div>
+        {Number.isFinite(p.avg) && <div className="text-gray-400">avg {priceFmt(p.avg)}</div>}
+      </div>
+    );
+  };
 
   return (
-    <svg width="100%" height={h} viewBox={`0 0 ${w} ${h}`} aria-label="price trend">
-      {/* baseline */}
-      <line x1={pad} y1={toY(minY)} x2={w - pad} y2={toY(minY)} stroke="#e5e7eb" strokeWidth="1" />
-      {/* sparkline */}
-      <path d={dAttr} fill="none" stroke="#2563eb" strokeWidth="2" strokeLinecap="round" />
-    </svg>
+    <div className={`w-full ${className}`}>
+      <ResponsiveContainer width="100%" height={height}>
+        <AreaChart
+          data={series.points}
+          margin={{ top: 8, right: 8, bottom: 0, left: 8 }}
+        >
+          {/* gradient fill */}
+          <defs>
+            <linearGradient id="sparkFill" x1="0" y1="0" x2="0" y2="1">
+              <stop offset="0%" stopColor="#3b82f6" stopOpacity={0.25} />
+              <stop offset="100%" stopColor="#3b82f6" stopOpacity={0.02} />
+            </linearGradient>
+          </defs>
+
+          {/* area under price */}
+          <Area
+            type="monotone"
+            dataKey="y"
+            stroke="#3b82f6"
+            fill="url(#sparkFill)"
+            strokeWidth={2}
+            dot={false}
+            isAnimationActive={false}
+            connectNulls
+          />
+
+          {/* optional moving average line */}
+          {showAverage && (
+            <Line
+              type="monotone"
+              dataKey="avg"
+              stroke="#64748b"
+              strokeDasharray="4 3"
+              strokeWidth={1.5}
+              dot={false}
+              isAnimationActive={false}
+              connectNulls
+            />
+          )}
+
+          {/* median band */}
+          {showMedian && Number.isFinite(series.median) && (
+            <ReferenceLine
+              y={series.median}
+              stroke="#10b981"
+              strokeDasharray="3 3"
+              strokeOpacity={0.8}
+            />
+          )}
+
+          {/* min/max markers */}
+          {series.points.map((p, i) =>
+            p.isMin || p.isMax ? (
+              <ReferenceDot
+                key={i}
+                x={p.x}
+                y={p.y}
+                r={3.5}
+                fill={p.isMin ? '#10b981' : '#ef4444'}
+                stroke="white"
+                strokeWidth={1}
+                isFront
+              />
+            ) : null
+          )}
+
+          {/* clean tooltip */}
+          <Tooltip
+            content={<CustomTooltip />}
+            labelFormatter={() => ''}
+            cursor={{ stroke: 'rgba(0,0,0,0.08)', strokeWidth: 1 }}
+          />
+          {/* hide axes entirely for a clean sparkline look */}
+        </AreaChart>
+      </ResponsiveContainer>
+    </div>
   );
 }

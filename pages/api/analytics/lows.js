@@ -2,7 +2,7 @@
 export const runtime = 'nodejs';
 
 import { getSql } from '../../lib/db';
-import { normalizeModelKey, degradeKeyForKnownBugs } from '../../lib/normalize';
+import { normalizeModelKey, degradeKeyForKnownBugs } from '../../../lib/normalize';
 
 export default async function handler(req, res) {
   try {
