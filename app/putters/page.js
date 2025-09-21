@@ -910,6 +910,71 @@ const [broaden, setBroaden] = useState(false);
           </div>
         </>
       )}
+	
+	{/* FLAT VIEW (advanced) */}
+{q.trim() && !loading && !err && !groupMode && showAdvanced && (
+  <>
+    <section className="mt-6 grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
+      {offers.map((o) => (
+        <article key={o.productId + o.url} className="overflow-hidden rounded-xl border border-gray-200 bg-white shadow-sm">
+          <div className="relative aspect-[4/3] w-full bg-gray-50">
+            {o.image ? (
+              // eslint-disable-next-line @next/next/no-img-element
+              <img src={o.image} alt={o.title} className="h-full w-full object-contain" loading="lazy" />
+            ) : (
+              <div className="flex h-full w-full items-center justify-center text-xs text-gray-400">No image</div>
+            )}
+          </div>
+          <div className="p-4">
+            <h3 className="line-clamp-2 text-sm font-semibold">{o.title}</h3>
+            <p className="mt-1 text-xs text-gray-500">
+              {o?.seller?.username && <>@{o.seller.username} · </>}
+              {typeof o?.seller?.feedbackPct === "number" && <>{o.seller.feedbackPct.toFixed(1)}% · </>}
+              {(o.specs?.dexterity || "").toUpperCase() || "—"} · {(o.specs?.headType || "").toUpperCase() || "—"} ·
+              {Number.isFinite(Number(o?.specs?.length)) ? `${o.specs.length}"` : "—"}
+              {o?.specs?.shaft && <> · {o.specs.shaft.toLowerCase()}</>}
+              {o?.specs?.hasHeadcover && <> · HC</>}
+              {o.createdAt && (<> · listed {timeAgo(new Date(o.createdAt).getTime())}</>)}
+            </p>
+            <div className="mt-3 flex items-center justify-between">
+              <span className="text-base font-semibold">{formatPrice(o.price, o.currency)}</span>
+              <a
+                href={o.url}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="inline-flex items-center rounded-md bg-blue-600 px-3 py-1.5 text-sm font-medium text-white hover:bg-blue-700"
+              >
+                View
+              </a>
+            </div>
+          </div>
+        </article>
+      ))}
+    </section>
+
+    {/* Pagination (flat) */}
+    <div className="mt-8 flex items-center justify-between">
+      <button
+        disabled={!hasPrev || page <= 1 || loading}
+        onClick={() => setPage((p) => Math.max(1, p - 1))}
+        className={`rounded-md border px-3 py-2 text-sm ${hasPrev && page > 1 && !loading ? "hover:bg-gray-100" : "cursor-not-allowed opacity-50"}`}
+      >
+        ← Prev
+      </button>
+      <div className="text-sm text-gray-600">
+        Page <span className="font-medium">{page}</span> · {FIXED_PER_PAGE} listings per page
+      </div>
+      <button
+        disabled={!hasNext || loading}
+        onClick={() => setPage((p) => p + 1)}
+        className={`rounded-md border px-3 py-2 text-sm ${hasNext && !loading ? "hover:bg-gray-100" : "cursor-not-allowed opacity-50"}`}
+      >
+        Next →
+      </button>
+    </div>
+  </>
+)}
+
 
       {/* FLAT VIEW (advanced) – unchanged */}
       {/* ... your existing flat view block remains as-is ... */}
