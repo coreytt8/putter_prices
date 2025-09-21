@@ -4,11 +4,10 @@ export const runtime = 'nodejs';
 import { getSql } from '../../../lib/db';
 import { normalizeModelKey } from '../../../lib/normalize';
 
-const MAX_QUERIES_PER_RUN = Number(process.env.MAX_COLLECT_QUERIES || 40); // safety cap
+const MAX_QUERIES_PER_RUN = Number(process.env.MAX_COLLECT_QUERIES || 40);
 const SLEEP_MS_BETWEEN_QUERIES = Number(process.env.COLLECT_SLEEP_MS || 350);
 
-// --- MASSIVELY EXPANDED MODEL COVERAGE ---
-// Each entry becomes a query "... putter" (already included below).
+// Expanded seeds across major brands
 const PRESET_QUERIES = [
   // Scotty Cameron (Titleist)
   'scotty cameron newport 2 putter',
@@ -102,14 +101,8 @@ const PRESET_QUERIES = [
   'cleveland huntington beach putter',
 ];
 
-// small sleep to avoid bursty calls
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
-/**
- * Pulls one page from your own /api/putters (group=false) so we reuse the same
- * eBay token handling, filtering, and rate-limit backoff you already ship.
- * This minimizes Browse API exposure during collection.
- */
 async function fetchListingsForQuery(baseUrl, q) {
   const u = new URL('/api/putters', baseUrl);
   u.searchParams.set('q', q);
@@ -120,9 +113,7 @@ async function fetchListingsForQuery(baseUrl, q) {
   u.searchParams.set('samplePages', '1'); // gentle on rate limits
   u.searchParams.set('_ts', String(Date.now()));
 
-  const res = await fetch(u.toString(), {
-    headers: { 'cache-control': 'no-cache' },
-  });
+  const res = await fetch(u.toString(), { headers: { 'cache-control': 'no-cache' } });
   if (!res.ok) {
     const txt = await res.text().catch(() => '');
     throw new Error(`/api/putters ${res.status}: ${txt}`);
@@ -133,7 +124,7 @@ async function fetchListingsForQuery(baseUrl, q) {
 
 export default async function handler(req, res) {
   try {
-    // --- Auth (cron secret) ---
+    // auth: allow ?key= / header X-Cron-Secret / Bearer
     const provided =
       req.headers['x-cron-secret'] ||
       req.query.key ||
@@ -144,12 +135,11 @@ export default async function handler(req, res) {
 
     const sql = getSql();
 
-    // Figure out our base URL (works in Vercel + local dev)
     const host = req.headers['x-forwarded-host'] || req.headers.host || 'localhost:3000';
     const proto = (req.headers['x-forwarded-proto'] || 'https').split(',')[0];
     const baseUrl = `${proto}://${host}`;
 
-    // Allow manual single-model run: ?model=newport%202
+    // Optional single-model run
     const manualQ = (req.query.model || req.query.q || '').toString().trim();
     const queries = manualQ
       ? [manualQ.toLowerCase().includes('putter') ? manualQ : `${manualQ} putter`]
@@ -172,16 +162,23 @@ export default async function handler(req, res) {
         offers = await fetchListingsForQuery(baseUrl, q);
         found = offers.length;
 
-        // Upsert items, then price snapshots
         for (const o of offers) {
           const itemId = String(o.productId || o.url).slice(0, 255);
           const modelKey = normalizeModelKey(o.__model || o.title || '');
 
-          // items first (to satisfy FK)
+          // build listing-level spec bag from what you already parse
+          const specJson = {
+            hosel: o?.specs?.shaft || null,                 // "plumber", "single bend", "slant", "flow"
+            headcover: Boolean(o?.specs?.hasHeadcover),     // true/false
+            // add more later: toe_hang, loft_deg, lie_deg, headweight_g, grip, finish...
+          };
+
+          // items first (FK safe) – UPSERT and merge spec_json
           await sql`
             INSERT INTO items (
               item_id, title, brand, model_key, head_type, dexterity, length_in,
-              currency, seller_user, seller_score, seller_pct, url, image_url
+              currency, seller_user, seller_score, seller_pct, url, image_url,
+              spec_json
             )
             VALUES (
               ${itemId},
@@ -196,7 +193,8 @@ export default async function handler(req, res) {
               ${Number.isFinite(Number(o?.seller?.feedbackScore)) ? Number(o.seller.feedbackScore) : null},
               ${Number.isFinite(Number(o?.seller?.feedbackPct)) ? Number(o.seller.feedbackPct) : null},
               ${o?.url || null},
-              ${o?.image || null}
+              ${o?.image || null},
+              ${sql.json(specJson)}
             )
             ON CONFLICT (item_id) DO UPDATE
             SET
@@ -210,7 +208,8 @@ export default async function handler(req, res) {
               seller_score = EXCLUDED.seller_score,
               seller_pct = EXCLUDED.seller_pct,
               url = EXCLUDED.url,
-              image_url = EXCLUDED.image_url
+              image_url = EXCLUDED.image_url,
+              spec_json = COALESCE(items.spec_json, '{}'::jsonb) || EXCLUDED.spec_json
           `;
 
           const price = Number.isFinite(Number(o?.price)) ? Number(o.price) : null;
@@ -238,8 +237,6 @@ export default async function handler(req, res) {
       }
 
       results.push({ q, found, inserted, error: errMsg });
-
-      // light pacing between queries to be kind to rate limits
       await sleep(SLEEP_MS_BETWEEN_QUERIES);
     }
 

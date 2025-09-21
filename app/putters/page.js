@@ -105,19 +105,17 @@ function useRecentModels() {
 // ---------- component ----------
 export default function PuttersPage() {
   // filters/state
-  const [q, setQ] = useState("");
   const [onlyComplete, setOnlyComplete] = useState(true);
-  const [minPrice, setMinPrice] = useState("");
-  const [maxPrice, setMaxPrice] = useState("");
-  const [conds, setConds] = useState([]);
-  const [buying, setBuying] = useState([]);
-  const [broaden, setBroaden] = useState(false);
-
-  const [groupMode, setGroupMode] = useState(true);
-  const [showAdvanced, setShowAdvanced] = useState(false);
-  const [sortBy, setSortBy] = useState("best_price_asc");
-
-  const [page, setPage] = useState(1);
+const [minPrice, setMinPrice] = useState("");
+const [maxPrice, setMaxPrice] = useState("");
+const [conds, setConds] = useState([]);
+const [buying, setBuying] = useState([]);
+const [dex, setDex] = useState("");
+const [head, setHead] = useState("");
+const [lengths, setLengths] = useState([]);
+const [showAdvanced, setShowAdvanced] = useState(false);
+const [groupMode, setGroupMode] = useState(true);
+const [page, setPage] = useState(1);
 
   // NEW filters
   const [dex, setDex] = useState("");            // "", "LEFT", "RIGHT"
@@ -450,6 +448,217 @@ export default function PuttersPage() {
           </button>
         </div>
       </section>
+	{/* Filters */}
+<section className="mt-4 grid grid-cols-1 gap-4 md:grid-cols-5">
+  {/* Quality */}
+  <div className="rounded-lg border border-gray-200 p-4">
+    <h3 className="mb-3 text-xs font-semibold uppercase tracking-wide text-gray-600">
+      Quality
+    </h3>
+    <label className="flex items-center gap-2 text-sm">
+      <input
+        type="checkbox"
+        checked={onlyComplete}
+        onChange={(e) => setOnlyComplete(e.target.checked)}
+      />
+      Only show listings with price & image
+    </label>
+  </div>
+
+  {/* Price */}
+  <div className="rounded-lg border border-gray-200 p-4">
+    <h3 className="mb-3 text-xs font-semibold uppercase tracking-wide text-gray-600">
+      Price
+    </h3>
+    <div className="flex items-center gap-2">
+      <input
+        type="number"
+        min="0"
+        placeholder="Min"
+        value={minPrice}
+        onChange={(e) => setMinPrice(e.target.value)}
+        className="w-full rounded-md border border-gray-300 px-2 py-1"
+      />
+      <span className="text-gray-400">—</span>
+      <input
+        type="number"
+        min="0"
+        placeholder="Max"
+        value={maxPrice}
+        onChange={(e) => setMaxPrice(e.target.value)}
+        className="w-full rounded-md border border-gray-300 px-2 py-1"
+      />
+    </div>
+  </div>
+
+  {/* Condition */}
+  <div className="rounded-lg border border-gray-200 p-4">
+    <h3 className="mb-3 text-xs font-semibold uppercase tracking-wide text-gray-600">
+      Condition
+    </h3>
+    <div className="flex flex-col gap-2">
+      {CONDITION_OPTIONS.map((c) => (
+        <label key={c.value} className="flex items-center gap-2 text-sm">
+          <input
+            type="checkbox"
+            checked={conds.includes(c.value)}
+            onChange={() =>
+              setConds((prev) =>
+                prev.includes(c.value)
+                  ? prev.filter((v) => v !== c.value)
+                  : [...prev, c.value]
+              )
+            }
+          />
+          {c.label}
+        </label>
+      ))}
+    </div>
+  </div>
+
+  {/* Dexterity */}
+  <div className="rounded-lg border border-gray-200 p-4">
+    <h3 className="mb-3 text-xs font-semibold uppercase tracking-wide text-gray-600">
+      Dexterity
+    </h3>
+    <div className="flex flex-col gap-2 text-sm">
+      <label className="flex items-center gap-2">
+        <input
+          type="radio"
+          name="dex"
+          checked={dex === ""}
+          onChange={() => setDex("")}
+        />
+        Any
+      </label>
+      <label className="flex items-center gap-2">
+        <input
+          type="radio"
+          name="dex"
+          checked={dex === "RIGHT"}
+          onChange={() => setDex("RIGHT")}
+        />
+        Right-handed
+      </label>
+      <label className="flex items-center gap-2">
+        <input
+          type="radio"
+          name="dex"
+          checked={dex === "LEFT"}
+          onChange={() => setDex("LEFT")}
+        />
+        Left-handed
+      </label>
+    </div>
+  </div>
+
+  {/* Head Type */}
+  <div className="rounded-lg border border-gray-200 p-4">
+    <h3 className="mb-3 text-xs font-semibold uppercase tracking-wide text-gray-600">
+      Head Type
+    </h3>
+    <div className="flex flex-col gap-2 text-sm">
+      <label className="flex items-center gap-2">
+        <input
+          type="radio"
+          name="head"
+          checked={head === ""}
+          onChange={() => setHead("")}
+        />
+        Any
+      </label>
+      <label className="flex items-center gap-2">
+        <input
+          type="radio"
+          name="head"
+          checked={head === "BLADE"}
+          onChange={() => setHead("BLADE")}
+        />
+        Blade
+      </label>
+      <label className="flex items-center gap-2">
+        <input
+          type="radio"
+          name="head"
+          checked={head === "MALLET"}
+          onChange={() => setHead("MALLET")}
+        />
+        Mallet
+      </label>
+    </div>
+  </div>
+
+  {/* Length (common) */}
+  <div className="rounded-lg border border-gray-200 p-4 md:col-span-2">
+    <h3 className="mb-3 text-xs font-semibold uppercase tracking-wide text-gray-600">
+      Length (common)
+    </h3>
+    <div className="flex flex-wrap gap-3 text-sm">
+      {[33,34,35,36].map(L => (
+        <label key={L} className="flex items-center gap-2">
+          <input
+            type="checkbox"
+            checked={lengths.includes(L)}
+            onChange={() => {
+              setLengths(prev => prev.includes(L) ? prev.filter(x => x !== L) : [...prev, L]);
+            }}
+          />
+          {L}&quot;
+        </label>
+      ))}
+      <div className="text-xs text-gray-500 basis-full">
+        We match titles within ±0.5&quot; of the selected length(s).
+      </div>
+    </div>
+  </div>
+
+  {/* Buying Options */}
+  <div className="rounded-lg border border-gray-200 p-4 md:col-span-3">
+    <h3 className="mb-3 text-xs font-semibold uppercase tracking-wide text-gray-600">
+      Buying Options
+    </h3>
+    <div className="flex flex-wrap gap-3">
+      {BUYING_OPTIONS.map((b) => (
+        <label key={b.value} className="flex items-center gap-2 text-sm">
+          <input
+            type="checkbox"
+            checked={buying.includes(b.value)}
+            onChange={() =>
+              setBuying((prev) =>
+                prev.includes(b.value)
+                  ? prev.filter((v) => v !== b.value)
+                  : [...prev, b.value]
+              )
+            }
+          />
+          {b.label}
+        </label>
+      ))}
+    </div>
+
+    <div className="mt-4">
+      <label className="flex items-center gap-2 text-sm">
+        <input
+          type="checkbox"
+          checked={showAdvanced}
+          onChange={(e) => setShowAdvanced(e.target.checked)}
+        />
+        Show advanced options
+      </label>
+
+      {showAdvanced && (
+        <label className="mt-3 flex items-center gap-2 text-sm">
+          <input
+            type="checkbox"
+            checked={groupMode}
+            onChange={(e) => setGroupMode(e.target.checked)}
+          />
+          Group similar listings (model cards)
+        </label>
+      )}
+    </div>
+  </div>
+</section>
 
       {/* Filters (UNCHANGED) */}
       {/* ... your existing filters block stays exactly as-is ... */}
@@ -650,6 +859,8 @@ export default function PuttersPage() {
                                   {(o.specs?.headType || "").toUpperCase() || "—"}
                                   {" · "}
                                   {Number.isFinite(Number(o?.specs?.length)) ? `${o.specs.length}"` : "—"}
+				  {o?.specs?.shaft && <> · {o.specs.shaft.toLowerCase()}</>}
+ 				  {o?.specs?.hasHeadcover && <> · HC</>}
                                   {o.createdAt && (<> · listed {timeAgo(new Date(o.createdAt).getTime())}</>)}
                                 </div>
                               </div>
