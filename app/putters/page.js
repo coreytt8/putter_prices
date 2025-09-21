@@ -105,7 +105,7 @@ function useRecentModels() {
 // ---------- component ----------
 export default function PuttersPage() {
   // filters/state
-  const [onlyComplete, setOnlyComplete] = useState(true);
+const [onlyComplete, setOnlyComplete] = useState(true);
 const [minPrice, setMinPrice] = useState("");
 const [maxPrice, setMaxPrice] = useState("");
 const [conds, setConds] = useState([]);
@@ -115,12 +115,11 @@ const [head, setHead] = useState("");
 const [lengths, setLengths] = useState([]);
 const [showAdvanced, setShowAdvanced] = useState(false);
 const [groupMode, setGroupMode] = useState(true);
+const [sortBy, setSortBy] = useState("best_price_asc");
 const [page, setPage] = useState(1);
+const [q, setQ] = useState("");
+const [broaden, setBroaden] = useState(false);
 
-  // NEW filters
-  const [dex, setDex] = useState("");            // "", "LEFT", "RIGHT"
-  const [head, setHead] = useState("");          // "", "BLADE", "MALLET"
-  const [lengths, setLengths] = useState([]);    // [] or [33,34,35,36]
 
   // data
   const [groups, setGroups] = useState([]);
