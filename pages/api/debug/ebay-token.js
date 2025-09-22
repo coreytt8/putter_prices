@@ -1,6 +1,6 @@
 // pages/api/debug/ebay-token.js
 export const runtime = "nodejs";
-import { getEbayToken, getCachedEbayTokenMeta } from "../../lib/ebayauth";
+import { getEbayToken, getCachedEbayTokenMeta } from "../../../lib/ebayAuth";
 
 export default async function handler(req, res) {
   try {
