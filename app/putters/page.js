@@ -2,6 +2,7 @@
 
 import { useEffect, useMemo, useState } from "react";
 import MarketSnapshot from "@/components/MarketSnapshot";
+import PriceSparkline from "@/components/PriceSparkline";
 
 // ---------- helpers ----------
 function formatPrice(value, currency = "USD") {
@@ -39,6 +40,22 @@ async function copyToClipboard(text) {
     document.body.removeChild(ta);
     return true;
   }
+}
+
+// Fair-price badge helper
+function dealBadge(price, stats) {
+  if (!stats || typeof price !== "number") return null;
+  const p10 = Number(stats.p10);
+  const p90 = Number(stats.p90);
+  if (!isFinite(p10) || !isFinite(p90)) return null;
+
+  if (price < p10) {
+    return { label: "Great deal", className: "bg-emerald-100 text-emerald-700" };
+  }
+  if (price <= p90) {
+    return { label: "Fair", className: "bg-amber-100 text-amber-800" };
+  }
+  return { label: "High", className: "bg-rose-100 text-rose-700" };
 }
 
 // ---------- constants ----------
@@ -105,21 +122,24 @@ function useRecentModels() {
 // ---------- component ----------
 export default function PuttersPage() {
   // filters/state
-const [onlyComplete, setOnlyComplete] = useState(true);
-const [minPrice, setMinPrice] = useState("");
-const [maxPrice, setMaxPrice] = useState("");
-const [conds, setConds] = useState([]);
-const [buying, setBuying] = useState([]);
-const [dex, setDex] = useState("");
-const [head, setHead] = useState("");
-const [lengths, setLengths] = useState([]);
-const [showAdvanced, setShowAdvanced] = useState(false);
-const [groupMode, setGroupMode] = useState(true);
-const [sortBy, setSortBy] = useState("best_price_asc");
-const [page, setPage] = useState(1);
-const [q, setQ] = useState("");
-const [broaden, setBroaden] = useState(false);
+  const [onlyComplete, setOnlyComplete] = useState(true);
+  const [minPrice, setMinPrice] = useState("");
+  const [maxPrice, setMaxPrice] = useState("");
+  const [conds, setConds] = useState([]);
+  const [buying, setBuying] = useState([]);
+  const [dex, setDex] = useState("");
+  const [head, setHead] = useState("");
+  const [lengths, setLengths] = useState([]);
+  const [showAdvanced, setShowAdvanced] = useState(false);
+  const [groupMode, setGroupMode] = useState(true);
+  const [sortBy, setSortBy] = useState("best_price_asc");
+  const [page, setPage] = useState(1);
+  const [q, setQ] = useState("");
+  const [broaden, setBroaden] = useState(false);
 
+  // series & stats for sparkline + fair price
+  const [seriesByModel, setSeriesByModel] = useState({});
+  const [statsByModel, setStatsByModel] = useState({});
 
   // data
   const [groups, setGroups] = useState([]);
@@ -137,16 +157,15 @@ const [broaden, setBroaden] = useState(false);
   const [showAllOffersByModel, setShowAllOffersByModel] = useState({});
   const [copiedFor, setCopiedFor] = useState(""); // which model we copied
 
-  // NEW: per-model lows cache
+  // per-model lows cache
   const [lowsByModel, setLowsByModel] = useState({});
 
-  // NEW: recent models
+  // recent models
   const { recent, push: pushRecent, clear: clearRecent } = useRecentModels();
 
-  // --- NEW: read URL params on first load (shareable links) ---
+  // --- read URL params on first load (shareable links) ---
   useEffect(() => {
     const sp = new URLSearchParams(window.location.search);
-    const g = (name, fallback) => sp.get(name) ?? fallback;
     const gList = (name) => (sp.get(name)?.split(",").filter(Boolean)) || [];
     const gNumList = (name) => gList(name).map((x) => Number(x)).filter(Number.isFinite);
 
@@ -165,7 +184,7 @@ const [broaden, setBroaden] = useState(false);
     if (sp.has("page")) setPage(Math.max(1, Number(sp.get("page") || "1")));
   }, []);
 
-  // --- NEW: reflect state → URL (shareable links) ---
+  // --- reflect state → URL (shareable links) ---
   useEffect(() => {
     const params = new URLSearchParams();
     if (q.trim()) params.set("q", q.trim());
@@ -259,12 +278,14 @@ const [broaden, setBroaden] = useState(false);
         setKeptCount(typeof data.keptCount === "number" ? data.keptCount : null);
         setApiData(data);
 
-        // reset per-model show-all + lows cache for fresh groups
+        // reset per-model caches for fresh groups
         const nextShowAll = {};
         const nextLows = {};
         nextGroups.forEach(g => { nextShowAll[g.model] = false; nextLows[g.model] = null; });
         setShowAllOffersByModel(nextShowAll);
-        setLowsByModel((prev) => ({ ...nextLows })); // clear per new search
+        setLowsByModel((prev) => ({ ...nextLows }));
+        setSeriesByModel({});           // NEW
+        setStatsByModel({});            // NEW
       } catch (e) {
         if (!ignore && e.name !== "AbortError") setErr("Failed to load results. Please try again.");
       } finally {
@@ -298,9 +319,9 @@ const [broaden, setBroaden] = useState(false);
   const toggleExpand = async (model, offersForModel = []) => {
     setExpanded((prev) => ({ ...prev, [model]: !prev[model] }));
     if (!expanded[model]) {
-      // mark as recently viewed when opening
+      // mark as recent, load lows
       pushRecent(model);
-      // lazy-load lows the first time we expand
+
       if (!lowsByModel[model]) {
         try {
           const r = await fetch(`/api/analytics/lows?model=${encodeURIComponent(model)}`, { cache: "no-store" });
@@ -308,6 +329,28 @@ const [broaden, setBroaden] = useState(false);
           setLowsByModel((prev) => ({ ...prev, [model]: j?.lows || null }));
         } catch {
           setLowsByModel((prev) => ({ ...prev, [model]: { low1d: null, low7d: null, low30d: null } }));
+        }
+      }
+
+      // fetch series (for sparkline)
+      if (!seriesByModel[model]) {
+        try {
+          const r = await fetch(`/api/analytics/series?model=${encodeURIComponent(model)}`, { cache: "no-store" });
+          const j = await r.json();
+          setSeriesByModel((prev) => ({ ...prev, [model]: j?.series || [] }));
+        } catch {
+          setSeriesByModel((prev) => ({ ...prev, [model]: [] }));
+        }
+      }
+
+      // fetch fair-price stats (p10/p50/p90)
+      if (!statsByModel[model]) {
+        try {
+          const r = await fetch(`/api/model-stats?model=${encodeURIComponent(model)}`, { cache: "no-store" });
+          const j = await r.json();
+          setStatsByModel((prev) => ({ ...prev, [model]: j?.stats || null }));
+        } catch {
+          setStatsByModel((prev) => ({ ...prev, [model]: null }));
         }
       }
     }
@@ -405,7 +448,6 @@ const [broaden, setBroaden] = useState(false);
       </section>
 
       {/* Controls */}
-      {/* (UNCHANGED UI CONTENT BELOW, trimmed for brevity except where modified) */}
       <section className="mt-6 grid grid-cols-1 gap-3 md:grid-cols-5">
         <div className="md:col-span-2">
           <label className="mb-1 block text-sm font-medium">Search</label>
@@ -447,220 +489,170 @@ const [broaden, setBroaden] = useState(false);
           </button>
         </div>
       </section>
-	{/* Filters */}
-<section className="mt-4 grid grid-cols-1 gap-4 md:grid-cols-5">
-  {/* Quality */}
-  <div className="rounded-lg border border-gray-200 p-4">
-    <h3 className="mb-3 text-xs font-semibold uppercase tracking-wide text-gray-600">
-      Quality
-    </h3>
-    <label className="flex items-center gap-2 text-sm">
-      <input
-        type="checkbox"
-        checked={onlyComplete}
-        onChange={(e) => setOnlyComplete(e.target.checked)}
-      />
-      Only show listings with price & image
-    </label>
-  </div>
 
-  {/* Price */}
-  <div className="rounded-lg border border-gray-200 p-4">
-    <h3 className="mb-3 text-xs font-semibold uppercase tracking-wide text-gray-600">
-      Price
-    </h3>
-    <div className="flex items-center gap-2">
-      <input
-        type="number"
-        min="0"
-        placeholder="Min"
-        value={minPrice}
-        onChange={(e) => setMinPrice(e.target.value)}
-        className="w-full rounded-md border border-gray-300 px-2 py-1"
-      />
-      <span className="text-gray-400">—</span>
-      <input
-        type="number"
-        min="0"
-        placeholder="Max"
-        value={maxPrice}
-        onChange={(e) => setMaxPrice(e.target.value)}
-        className="w-full rounded-md border border-gray-300 px-2 py-1"
-      />
-    </div>
-  </div>
+      {/* Filters */}
+      <section className="mt-4 grid grid-cols-1 gap-4 md:grid-cols-5">
+        {/* Quality */}
+        <div className="rounded-lg border border-gray-200 p-4">
+          <h3 className="mb-3 text-xs font-semibold uppercase tracking-wide text-gray-600">Quality</h3>
+          <label className="flex items-center gap-2 text-sm">
+            <input type="checkbox" checked={onlyComplete} onChange={(e) => setOnlyComplete(e.target.checked)} />
+            Only show listings with price & image
+          </label>
+        </div>
 
-  {/* Condition */}
-  <div className="rounded-lg border border-gray-200 p-4">
-    <h3 className="mb-3 text-xs font-semibold uppercase tracking-wide text-gray-600">
-      Condition
-    </h3>
-    <div className="flex flex-col gap-2">
-      {CONDITION_OPTIONS.map((c) => (
-        <label key={c.value} className="flex items-center gap-2 text-sm">
-          <input
-            type="checkbox"
-            checked={conds.includes(c.value)}
-            onChange={() =>
-              setConds((prev) =>
-                prev.includes(c.value)
-                  ? prev.filter((v) => v !== c.value)
-                  : [...prev, c.value]
-              )
-            }
-          />
-          {c.label}
-        </label>
-      ))}
-    </div>
-  </div>
+        {/* Price */}
+        <div className="rounded-lg border border-gray-200 p-4">
+          <h3 className="mb-3 text-xs font-semibold uppercase tracking-wide text-gray-600">Price</h3>
+          <div className="flex items-center gap-2">
+            <input
+              type="number"
+              min="0"
+              placeholder="Min"
+              value={minPrice}
+              onChange={(e) => setMinPrice(e.target.value)}
+              className="w-full rounded-md border border-gray-300 px-2 py-1"
+            />
+            <span className="text-gray-400">—</span>
+            <input
+              type="number"
+              min="0"
+              placeholder="Max"
+              value={maxPrice}
+              onChange={(e) => setMaxPrice(e.target.value)}
+              className="w-full rounded-md border border-gray-300 px-2 py-1"
+            />
+          </div>
+        </div>
 
-  {/* Dexterity */}
-  <div className="rounded-lg border border-gray-200 p-4">
-    <h3 className="mb-3 text-xs font-semibold uppercase tracking-wide text-gray-600">
-      Dexterity
-    </h3>
-    <div className="flex flex-col gap-2 text-sm">
-      <label className="flex items-center gap-2">
-        <input
-          type="radio"
-          name="dex"
-          checked={dex === ""}
-          onChange={() => setDex("")}
-        />
-        Any
-      </label>
-      <label className="flex items-center gap-2">
-        <input
-          type="radio"
-          name="dex"
-          checked={dex === "RIGHT"}
-          onChange={() => setDex("RIGHT")}
-        />
-        Right-handed
-      </label>
-      <label className="flex items-center gap-2">
-        <input
-          type="radio"
-          name="dex"
-          checked={dex === "LEFT"}
-          onChange={() => setDex("LEFT")}
-        />
-        Left-handed
-      </label>
-    </div>
-  </div>
+        {/* Condition */}
+        <div className="rounded-lg border border-gray-200 p-4">
+          <h3 className="mb-3 text-xs font-semibold uppercase tracking-wide text-gray-600">Condition</h3>
+          <div className="flex flex-col gap-2">
+            {CONDITION_OPTIONS.map((c) => (
+              <label key={c.value} className="flex items-center gap-2 text-sm">
+                <input
+                  type="checkbox"
+                  checked={conds.includes(c.value)}
+                  onChange={() =>
+                    setConds((prev) =>
+                      prev.includes(c.value)
+                        ? prev.filter((v) => v !== c.value)
+                        : [...prev, c.value]
+                    )
+                  }
+                />
+                {c.label}
+              </label>
+            ))}
+          </div>
+        </div>
 
-  {/* Head Type */}
-  <div className="rounded-lg border border-gray-200 p-4">
-    <h3 className="mb-3 text-xs font-semibold uppercase tracking-wide text-gray-600">
-      Head Type
-    </h3>
-    <div className="flex flex-col gap-2 text-sm">
-      <label className="flex items-center gap-2">
-        <input
-          type="radio"
-          name="head"
-          checked={head === ""}
-          onChange={() => setHead("")}
-        />
-        Any
-      </label>
-      <label className="flex items-center gap-2">
-        <input
-          type="radio"
-          name="head"
-          checked={head === "BLADE"}
-          onChange={() => setHead("BLADE")}
-        />
-        Blade
-      </label>
-      <label className="flex items-center gap-2">
-        <input
-          type="radio"
-          name="head"
-          checked={head === "MALLET"}
-          onChange={() => setHead("MALLET")}
-        />
-        Mallet
-      </label>
-    </div>
-  </div>
+        {/* Dexterity */}
+        <div className="rounded-lg border border-gray-200 p-4">
+          <h3 className="mb-3 text-xs font-semibold uppercase tracking-wide text-gray-600">Dexterity</h3>
+          <div className="flex flex-col gap-2 text-sm">
+            <label className="flex items-center gap-2">
+              <input type="radio" name="dex" checked={dex === ""} onChange={() => setDex("")} />
+              Any
+            </label>
+            <label className="flex items-center gap-2">
+              <input type="radio" name="dex" checked={dex === "RIGHT"} onChange={() => setDex("RIGHT")} />
+              Right-handed
+            </label>
+            <label className="flex items-center gap-2">
+              <input type="radio" name="dex" checked={dex === "LEFT"} onChange={() => setDex("LEFT")} />
+              Left-handed
+            </label>
+          </div>
+        </div>
 
-  {/* Length (common) */}
-  <div className="rounded-lg border border-gray-200 p-4 md:col-span-2">
-    <h3 className="mb-3 text-xs font-semibold uppercase tracking-wide text-gray-600">
-      Length (common)
-    </h3>
-    <div className="flex flex-wrap gap-3 text-sm">
-      {[33,34,35,36].map(L => (
-        <label key={L} className="flex items-center gap-2">
-          <input
-            type="checkbox"
-            checked={lengths.includes(L)}
-            onChange={() => {
-              setLengths(prev => prev.includes(L) ? prev.filter(x => x !== L) : [...prev, L]);
-            }}
-          />
-          {L}&quot;
-        </label>
-      ))}
-      <div className="text-xs text-gray-500 basis-full">
-        We match titles within ±0.5&quot; of the selected length(s).
-      </div>
-    </div>
-  </div>
+        {/* Head Type */}
+        <div className="rounded-lg border border-gray-200 p-4">
+          <h3 className="mb-3 text-xs font-semibold uppercase tracking-wide text-gray-600">Head Type</h3>
+          <div className="flex flex-col gap-2 text-sm">
+            <label className="flex items-center gap-2">
+              <input type="radio" name="head" checked={head === ""} onChange={() => setHead("")} />
+              Any
+            </label>
+            <label className="flex items-center gap-2">
+              <input type="radio" name="head" checked={head === "BLADE"} onChange={() => setHead("BLADE")} />
+              Blade
+            </label>
+            <label className="flex items-center gap-2">
+              <input type="radio" name="head" checked={head === "MALLET"} onChange={() => setHead("MALLET")} />
+              Mallet
+            </label>
+          </div>
+        </div>
 
-  {/* Buying Options */}
-  <div className="rounded-lg border border-gray-200 p-4 md:col-span-3">
-    <h3 className="mb-3 text-xs font-semibold uppercase tracking-wide text-gray-600">
-      Buying Options
-    </h3>
-    <div className="flex flex-wrap gap-3">
-      {BUYING_OPTIONS.map((b) => (
-        <label key={b.value} className="flex items-center gap-2 text-sm">
-          <input
-            type="checkbox"
-            checked={buying.includes(b.value)}
-            onChange={() =>
-              setBuying((prev) =>
-                prev.includes(b.value)
-                  ? prev.filter((v) => v !== b.value)
-                  : [...prev, b.value]
-              )
-            }
-          />
-          {b.label}
-        </label>
-      ))}
-    </div>
+        {/* Length (common) */}
+        <div className="rounded-lg border border-gray-200 p-4 md:col-span-2">
+          <h3 className="mb-3 text-xs font-semibold uppercase tracking-wide text-gray-600">Length (common)</h3>
+          <div className="flex flex-wrap gap-3 text-sm">
+            {[33,34,35,36].map(L => (
+              <label key={L} className="flex items-center gap-2">
+                <input
+                  type="checkbox"
+                  checked={lengths.includes(L)}
+                  onChange={() => {
+                    setLengths(prev => prev.includes(L) ? prev.filter(x => x !== L) : [...prev, L]);
+                  }}
+                />
+                {L}&quot;
+              </label>
+            ))}
+            <div className="text-xs text-gray-500 basis-full">
+              We match titles within ±0.5&quot; of the selected length(s).
+            </div>
+          </div>
+        </div>
 
-    <div className="mt-4">
-      <label className="flex items-center gap-2 text-sm">
-        <input
-          type="checkbox"
-          checked={showAdvanced}
-          onChange={(e) => setShowAdvanced(e.target.checked)}
-        />
-        Show advanced options
-      </label>
+        {/* Buying Options */}
+        <div className="rounded-lg border border-gray-200 p-4 md:col-span-3">
+          <h3 className="mb-3 text-xs font-semibold uppercase tracking-wide text-gray-600">Buying Options</h3>
+          <div className="flex flex-wrap gap-3">
+            {BUYING_OPTIONS.map((b) => (
+              <label key={b.value} className="flex items-center gap-2 text-sm">
+                <input
+                  type="checkbox"
+                  checked={buying.includes(b.value)}
+                  onChange={() =>
+                    setBuying((prev) =>
+                      prev.includes(b.value)
+                        ? prev.filter((v) => v !== b.value)
+                        : [...prev, b.value]
+                    )
+                  }
+                />
+                {b.label}
+              </label>
+            ))}
+          </div>
 
-      {showAdvanced && (
-        <label className="mt-3 flex items-center gap-2 text-sm">
-          <input
-            type="checkbox"
-            checked={groupMode}
-            onChange={(e) => setGroupMode(e.target.checked)}
-          />
-          Group similar listings (model cards)
-        </label>
-      )}
-    </div>
-  </div>
-</section>
+          <div className="mt-4">
+            <label className="flex items-center gap-2 text-sm">
+              <input
+                type="checkbox"
+                checked={showAdvanced}
+                onChange={(e) => setShowAdvanced(e.target.checked)}
+              />
+              Show advanced options
+            </label>
 
-      {/* Filters (UNCHANGED) */}
-      {/* ... your existing filters block stays exactly as-is ... */}
+            {showAdvanced && (
+              <label className="mt-3 flex items-center gap-2 text-sm">
+                <input
+                  type="checkbox"
+                  checked={groupMode}
+                  onChange={(e) => setGroupMode(e.target.checked)}
+                />
+                Group similar listings (model cards)
+              </label>
+            )}
+          </div>
+        </div>
+      </section>
 
       {!q.trim() && (
         <div className="mt-8 rounded-md border border-gray-200 bg-white p-6 text-center text-sm text-gray-600">
@@ -682,7 +674,7 @@ const [broaden, setBroaden] = useState(false);
       {/* LIVE analytics snapshot */}
       <MarketSnapshot snapshot={apiData?.analytics?.snapshot} meta={apiData?.meta} query={q} />
 
-      {/* Loading & error UI (UNCHANGED) */}
+      {/* Loading & error UI */}
       {q.trim() && loading && (
         <div className="mt-6 grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-2">
           {Array.from({ length: Math.min(FIXED_PER_PAGE, 6) }).map((_, i) => (
@@ -728,8 +720,6 @@ const [broaden, setBroaden] = useState(false);
               const list = isOpen ? (showAll ? ordered : ordered.slice(0, 10)) : [];
 
               const lows = lowsByModel[g.model];
-
-              // pick best listing url for copy
               const bestUrl = ordered.length ? ordered[0]?.url : null;
 
               return (
@@ -753,7 +743,6 @@ const [broaden, setBroaden] = useState(false);
                           {g.count} offer{g.count === 1 ? "" : "s"} · {g.retailers.join(", ")}
                         </p>
 
-                        {/* NEW: dex/head/len chips (unchanged) */}
                         <div className="mt-2 flex flex-wrap gap-2">
                           {domDex && (
                             <span className="rounded-full bg-slate-100 px-2 py-0.5 text-[11px] font-medium text-slate-700">
@@ -772,13 +761,20 @@ const [broaden, setBroaden] = useState(false);
                           )}
                         </div>
 
-                        {/* NEW: Lows row */}
+                        {/* Lows row */}
                         {isOpen && (
                           <div className="mt-2 text-xs text-gray-600">
                             <span className="mr-2">Lows:</span>
                             <span className="mr-3">1d {formatPrice(Number(lows?.low1d))}</span>
                             <span className="mr-3">7d {formatPrice(Number(lows?.low7d))}</span>
                             <span>30d {formatPrice(Number(lows?.low30d))}</span>
+                          </div>
+                        )}
+
+                        {/* NEW: Sparkline */}
+                        {isOpen && (seriesByModel[g.model]?.length > 1) && (
+                          <div className="mt-3">
+                            <PriceSparkline data={seriesByModel[g.model]} height={72} />
                           </div>
                         )}
                       </div>
@@ -796,7 +792,7 @@ const [broaden, setBroaden] = useState(false);
                           </div>
                         )}
 
-                        {/* NEW: Copy Best button */}
+                        {/* Copy Best button */}
                         <button
                           disabled={!bestUrl}
                           onClick={async () => {
@@ -858,13 +854,23 @@ const [broaden, setBroaden] = useState(false);
                                   {(o.specs?.headType || "").toUpperCase() || "—"}
                                   {" · "}
                                   {Number.isFinite(Number(o?.specs?.length)) ? `${o.specs.length}"` : "—"}
-				  {o?.specs?.shaft && <> · {o.specs.shaft.toLowerCase()}</>}
- 				  {o?.specs?.hasHeadcover && <> · HC</>}
+                                  {o?.specs?.shaft && <> · {o.specs.shaft.toLowerCase()}</>}
+                                  {o?.specs?.hasHeadcover && <> · HC</>}
                                   {o.createdAt && (<> · listed {timeAgo(new Date(o.createdAt).getTime())}</>)}
                                 </div>
                               </div>
                             </div>
                             <div className="flex items-center gap-3">
+                              {/* Fair price badge */}
+                              {(() => {
+                                const stats = statsByModel[g.model];
+                                const badge = dealBadge(o.price, stats);
+                                return badge ? (
+                                  <span className={`rounded-full px-2 py-[2px] text-[11px] font-medium ${badge.className}`}>
+                                    {badge.label}
+                                  </span>
+                                ) : null;
+                              })()}
                               <span className="text-sm font-semibold">{formatPrice(o.price, o.currency)}</span>
                               <a
                                 href={o.url}
@@ -910,74 +916,69 @@ const [broaden, setBroaden] = useState(false);
           </div>
         </>
       )}
-	
-	{/* FLAT VIEW (advanced) */}
-{q.trim() && !loading && !err && !groupMode && showAdvanced && (
-  <>
-    <section className="mt-6 grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
-      {offers.map((o) => (
-        <article key={o.productId + o.url} className="overflow-hidden rounded-xl border border-gray-200 bg-white shadow-sm">
-          <div className="relative aspect-[4/3] w-full bg-gray-50">
-            {o.image ? (
-              // eslint-disable-next-line @next/next/no-img-element
-              <img src={o.image} alt={o.title} className="h-full w-full object-contain" loading="lazy" />
-            ) : (
-              <div className="flex h-full w-full items-center justify-center text-xs text-gray-400">No image</div>
-            )}
-          </div>
-          <div className="p-4">
-            <h3 className="line-clamp-2 text-sm font-semibold">{o.title}</h3>
-            <p className="mt-1 text-xs text-gray-500">
-              {o?.seller?.username && <>@{o.seller.username} · </>}
-              {typeof o?.seller?.feedbackPct === "number" && <>{o.seller.feedbackPct.toFixed(1)}% · </>}
-              {(o.specs?.dexterity || "").toUpperCase() || "—"} · {(o.specs?.headType || "").toUpperCase() || "—"} ·
-              {Number.isFinite(Number(o?.specs?.length)) ? `${o.specs.length}"` : "—"}
-              {o?.specs?.shaft && <> · {o.specs.shaft.toLowerCase()}</>}
-              {o?.specs?.hasHeadcover && <> · HC</>}
-              {o.createdAt && (<> · listed {timeAgo(new Date(o.createdAt).getTime())}</>)}
-            </p>
-            <div className="mt-3 flex items-center justify-between">
-              <span className="text-base font-semibold">{formatPrice(o.price, o.currency)}</span>
-              <a
-                href={o.url}
-                target="_blank"
-                rel="noopener noreferrer"
-                className="inline-flex items-center rounded-md bg-blue-600 px-3 py-1.5 text-sm font-medium text-white hover:bg-blue-700"
-              >
-                View
-              </a>
+
+      {/* FLAT VIEW (advanced) */}
+      {q.trim() && !loading && !err && !groupMode && showAdvanced && (
+        <>
+          <section className="mt-6 grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
+            {offers.map((o) => (
+              <article key={o.productId + o.url} className="overflow-hidden rounded-xl border border-gray-200 bg-white shadow-sm">
+                <div className="relative aspect-[4/3] w-full bg-gray-50">
+                  {o.image ? (
+                    // eslint-disable-next-line @next/next/no-img-element
+                    <img src={o.image} alt={o.title} className="h-full w-full object-contain" loading="lazy" />
+                  ) : (
+                    <div className="flex h-full w-full items-center justify-center text-xs text-gray-400">No image</div>
+                  )}
+                </div>
+                <div className="p-4">
+                  <h3 className="line-clamp-2 text-sm font-semibold">{o.title}</h3>
+                  <p className="mt-1 text-xs text-gray-500">
+                    {o?.seller?.username && <>@{o.seller.username} · </>}
+                    {typeof o?.seller?.feedbackPct === "number" && <>{o.seller.feedbackPct.toFixed(1)}% · </>}
+                    {(o.specs?.dexterity || "").toUpperCase() || "—"} · {(o.specs?.headType || "").toUpperCase() || "—"} · {Number.isFinite(Number(o?.specs?.length)) ? `${o.specs.length}"` : "—"}
+                    {o?.specs?.shaft && <> · {o.specs.shaft.toLowerCase()}</>}
+                    {o?.specs?.hasHeadcover && <> · HC</>}
+                    {o.createdAt && (<> · listed {timeAgo(new Date(o.createdAt).getTime())}</>)}
+                  </p>
+                  <div className="mt-3 flex items-center justify-between">
+                    <span className="text-base font-semibold">{formatPrice(o.price, o.currency)}</span>
+                    <a
+                      href={o.url}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="inline-flex items-center rounded-md bg-blue-600 px-3 py-1.5 text-sm font-medium text-white hover:bg-blue-700"
+                    >
+                      View
+                    </a>
+                  </div>
+                </div>
+              </article>
+            ))}
+          </section>
+
+          {/* Pagination (flat) */}
+          <div className="mt-8 flex items-center justify-between">
+            <button
+              disabled={!hasPrev || page <= 1 || loading}
+              onClick={() => setPage((p) => Math.max(1, p - 1))}
+              className={`rounded-md border px-3 py-2 text-sm ${hasPrev && page > 1 && !loading ? "hover:bg-gray-100" : "cursor-not-allowed opacity-50"}`}
+            >
+              ← Prev
+            </button>
+            <div className="text-sm text-gray-600">
+              Page <span className="font-medium">{page}</span> · {FIXED_PER_PAGE} listings per page
             </div>
+            <button
+              disabled={!hasNext || loading}
+              onClick={() => setPage((p) => p + 1)}
+              className={`rounded-md border px-3 py-2 text-sm ${hasNext && !loading ? "hover:bg-gray-100" : "cursor-not-allowed opacity-50"}`}
+            >
+              Next →
+            </button>
           </div>
-        </article>
-      ))}
-    </section>
-
-    {/* Pagination (flat) */}
-    <div className="mt-8 flex items-center justify-between">
-      <button
-        disabled={!hasPrev || page <= 1 || loading}
-        onClick={() => setPage((p) => Math.max(1, p - 1))}
-        className={`rounded-md border px-3 py-2 text-sm ${hasPrev && page > 1 && !loading ? "hover:bg-gray-100" : "cursor-not-allowed opacity-50"}`}
-      >
-        ← Prev
-      </button>
-      <div className="text-sm text-gray-600">
-        Page <span className="font-medium">{page}</span> · {FIXED_PER_PAGE} listings per page
-      </div>
-      <button
-        disabled={!hasNext || loading}
-        onClick={() => setPage((p) => p + 1)}
-        className={`rounded-md border px-3 py-2 text-sm ${hasNext && !loading ? "hover:bg-gray-100" : "cursor-not-allowed opacity-50"}`}
-      >
-        Next →
-      </button>
-    </div>
-  </>
-)}
-
-
-      {/* FLAT VIEW (advanced) – unchanged */}
-      {/* ... your existing flat view block remains as-is ... */}
+        </>
+      )}
     </main>
   );
 }
