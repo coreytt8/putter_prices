@@ -50,13 +50,10 @@ const DEFAULT_QUERIES = [
 ];
 
 const EBAY_ENDPOINT = 'https://api.ebay.com/buy/browse/v1/item_summary/search';
-
-// Optional: throttle between eBay calls to play nice
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 export default async function handler(req, res) {
   try {
-    // Protected cron (optional): allow manual test via ?key=... or header
     const needAuth = process.env.CRON_SECRET;
     const provided =
       req.headers['x-cron-secret'] ||
@@ -68,22 +65,18 @@ export default async function handler(req, res) {
     }
 
     const sql = getSql();
-    const token = await getEbayToken(); // from lib/ebayauth.js (client credentials)
-    if (!token) {
-      return res.status(500).json({ ok: false, error: 'Could not obtain eBay token' });
-    }
+    const token = await getEbayToken();
+    if (!token) return res.status(500).json({ ok: false, error: 'Could not obtain eBay token' });
 
-    const queries = DEFAULT_QUERIES;
     const results = [];
     let calls = 0;
 
-    for (const q of queries) {
+    for (const q of DEFAULT_QUERIES) {
       try {
         const url = new URL(EBAY_ENDPOINT);
         url.searchParams.set('q', q);
         url.searchParams.set('limit', '50');
-        url.searchParams.set('fieldgroups', 'ASPECTS'); // try to get item specifics when available
-        // prefer BIN + auctions; you can add filters here if desired
+        url.searchParams.set('fieldgroups', 'ASPECTS');
 
         const r = await fetch(url.toString(), {
           headers: {
@@ -96,14 +89,12 @@ export default async function handler(req, res) {
         if (!r.ok) {
           const msg = `${r.status} ${r.statusText}`;
           results.push({ q, found: 0, inserted: 0, error: `eBay ${msg}` });
-          // modest pause if 429/5xx
           if (r.status >= 429) await sleep(800);
           continue;
         }
 
         const j = await r.json();
         const items = Array.isArray(j.itemSummaries) ? j.itemSummaries : [];
-
         let inserted = 0;
 
         for (const it of items) {
@@ -119,7 +110,7 @@ export default async function handler(req, res) {
           const seller_score = Number(it?.seller?.feedbackScore) || null;
           const seller_pct = Number(it?.seller?.feedbackPercentage) || null;
 
-          // try to extract aspects map
+          // Build aspects map if present
           const aspects = {};
           if (Array.isArray(it?.localizedAspects)) {
             for (const a of it.localizedAspects) {
@@ -127,26 +118,34 @@ export default async function handler(req, res) {
             }
           }
 
-          // specs enrichment
+          // Enrich specs
           const specs = parseSpecs({ title, specifics: aspects });
-          const { dexterity, head_type, length_in, has_headcover, shaft } = specs;
+          const {
+            dexterity,
+            head_type,
+            length_in,
+            has_headcover,
+            shaft,
+            hosel,
+            head_weight_g,
+            finish,
+          } = specs;
 
-          // normalize -> model_key
           const model_key = normalizeModelKey(title);
-
-          // prices (shipping not provided in Browse summaries; keep null if unknown)
           const shipping = null;
           const total = Number.isFinite(price) ? price : null;
 
-          // UPSERT items
+          // UPSERT items with the new columns
           await sql`
             INSERT INTO items (
               item_id, title, brand, model_key, head_type, dexterity, length_in,
-              currency, seller_user, seller_score, seller_pct, url, image_url
+              currency, seller_user, seller_score, seller_pct, url, image_url,
+              has_headcover, shaft, hosel, head_weight_g, finish
             )
             VALUES (
               ${item_id}, ${title}, ${null}, ${model_key}, ${head_type}, ${dexterity}, ${length_in},
-              ${currency}, ${seller_user}, ${seller_score}, ${seller_pct}, ${url}, ${image_url}
+              ${currency}, ${seller_user}, ${seller_score}, ${seller_pct}, ${url}, ${image_url},
+              ${has_headcover}, ${shaft}, ${hosel}, ${head_weight_g}, ${finish}
             )
             ON CONFLICT (item_id) DO UPDATE SET
               title = EXCLUDED.title,
@@ -159,10 +158,14 @@ export default async function handler(req, res) {
               seller_score = EXCLUDED.seller_score,
               seller_pct = EXCLUDED.seller_pct,
               url = EXCLUDED.url,
-              image_url = COALESCE(EXCLUDED.image_url, items.image_url)
+              image_url = COALESCE(EXCLUDED.image_url, items.image_url),
+              has_headcover = COALESCE(EXCLUDED.has_headcover, items.has_headcover),
+              shaft = COALESCE(EXCLUDED.shaft, items.shaft),
+              hosel = COALESCE(EXCLUDED.hosel, items.hosel),
+              head_weight_g = COALESCE(EXCLUDED.head_weight_g, items.head_weight_g),
+              finish = COALESCE(EXCLUDED.finish, items.finish)
           `;
 
-          // SNAPSHOT price
           if (total != null) {
             await sql`
               INSERT INTO item_prices (
@@ -178,8 +181,6 @@ export default async function handler(req, res) {
         }
 
         results.push({ q, found: items.length, inserted, error: null });
-
-        // friendly pacing
         await sleep(250);
       } catch (e) {
         results.push({ q, found: 0, inserted: 0, error: e.message });

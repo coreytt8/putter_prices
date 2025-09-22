@@ -848,17 +848,24 @@ export default function PuttersPage() {
                                   )}
                                 </div>
                                 <div className="mt-0.5 truncate text-xs text-gray-500">
-                                  {(o.specs?.dexterity || "").toUpperCase() === "LEFT" ? "LH" :
-                                   (o.specs?.dexterity || "").toUpperCase() === "RIGHT" ? "RH" : "—"}
-                                  {" · "}
-                                  {(o.specs?.headType || "").toUpperCase() || "—"}
-                                  {" · "}
-                                  {Number.isFinite(Number(o?.specs?.length)) ? `${o.specs.length}"` : "—"}
-                                  {o?.specs?.shaft && <> · {o.specs.shaft.toLowerCase()}</>}
-                                  {o?.specs?.hasHeadcover && <> · HC</>}
-                                  {o.createdAt && (<> · listed {timeAgo(new Date(o.createdAt).getTime())}</>)}
-                                </div>
-                              </div>
+  				{(o.specs?.dexterity || "").toUpperCase() === "LEFT" ? "LH" :
+   				(o.specs?.dexterity || "").toUpperCase() === "RIGHT" ? "RH" : "—"}
+  				{" · "}
+				  {(o.specs?.headType || "").toUpperCase() || "—"}
+				  {" · "}
+  				{Number.isFinite(Number(o?.specs?.length)) ? `${o.specs.length}"` : "—"}
+
+  				{/* NEW bits */}
+  				{o?.specs?.hosel && <> · {o.specs.hosel}</>}
+ 				 {Number.isFinite(Number(o?.specs?.headWeightG)) && <> · {Number(o.specs.headWeightG)}g</>}
+  				{o?.specs?.finish && <> · {o.specs.finish}</>}
+
+  				{o?.specs?.shaft && <> · {o.specs.shaft.toLowerCase()}</>}
+				  {o?.specs?.hasHeadcover && <> · HC</>}
+
+  				{o.createdAt && (<> · listed {timeAgo(new Date(o.createdAt).getTime())}</>)}
+				</div>
+				div>
                             </div>
                             <div className="flex items-center gap-3">
                               {/* Fair price badge */}
