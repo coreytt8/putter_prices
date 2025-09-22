@@ -8,10 +8,13 @@ import {
   ReferenceLine,
   ReferenceDot,
   Tooltip,
+  XAxis,
+  YAxis,
 } from 'recharts';
 
-// Accepts data in any of these shapes per point:
-// { ts: number(ms)|string(ISO), total:number }  OR  { t: string|number, price:number }
+// Accepts per-point shapes like:
+// { ts:number(ms)|string(ISO), total:number } OR { t:string|number, price:number }
+// ...also supports { date, x } and { value, y }
 export default function PriceSparkline({
   data,
   height = 64,
@@ -20,7 +23,8 @@ export default function PriceSparkline({
   className = '',
 }) {
   const series = useMemo(() => {
-    if (!Array.isArray(data)) return [];
+    if (!Array.isArray(data)) return { points: [], min: null, max: null, median: null };
+
     // normalize -> [{x: Date, y: number}]
     const norm = data
       .map(d => {
@@ -30,8 +34,8 @@ export default function PriceSparkline({
           typeof xRaw === 'number'
             ? new Date(xRaw)
             : typeof xRaw === 'string'
-            ? new Date(xRaw)
-            : null;
+              ? new Date(xRaw)
+              : null;
         const y = Number(yRaw);
         if (!x || !Number.isFinite(y)) return null;
         return { x, y };
@@ -39,131 +43,140 @@ export default function PriceSparkline({
       .filter(Boolean)
       .sort((a, b) => a.x - b.x);
 
-    // 7-pt simple moving average (if enough points)
+    // simple moving average (window=7)
     const avg = [];
     const win = 7;
     for (let i = 0; i < norm.length; i++) {
-      const s = Math.max(0, i - (win - 1) + 1);
       const start = Math.max(0, i - (win - 1));
-      let sum = 0,
-        n = 0;
-      for (let j = start; j <= i; j++) {
-        sum += norm[j].y;
-        n++;
-      }
-      avg.push(n >= 3 ? sum / n : null); // don’t plot average for very short windows
+      let sum = 0, n = 0;
+      for (let j = start; j <= i; j++) { sum += norm[j].y; n++; }
+      avg.push(n >= 3 ? sum / n : null);
     }
 
-    // stats
     const ys = norm.map(p => p.y);
     const min = ys.length ? Math.min(...ys) : null;
     const max = ys.length ? Math.max(...ys) : null;
-    const median =
-      ys.length
-        ? (() => {
-            const a = [...ys].sort((x, y) => x - y);
-            const mid = Math.floor(a.length / 2);
-            return a.length % 2 ? a[mid] : (a[mid - 1] + a[mid]) / 2;
-          })()
-        : null;
+    const median = ys.length
+      ? (() => {
+          const a = [...ys].sort((x, y) => x - y);
+          const mid = Math.floor(a.length / 2);
+          return a.length % 2 ? a[mid] : (a[mid - 1] + a[mid]) / 2;
+        })()
+      : null;
 
-    // pick first/last min/max positions for dots
-    let minIdx = -1,
-      maxIdx = -1;
+    let minIdx = -1, maxIdx = -1;
     if (min != null) minIdx = norm.findIndex(p => p.y === min);
     if (max != null) maxIdx = norm.findIndex(p => p.y === max);
 
-    // final recharts-friendly
     const out = norm.map((p, i) => ({
-      x: p.x,
+      x: p.x.getTime(), // Recharts prefers number for X when using numeric axis
       y: p.y,
       avg: avg[i],
       isMin: i === minIdx,
       isMax: i === maxIdx,
     }));
 
-    return {
-      points: out,
-      min,
-      max,
-      median,
-    };
+    return { points: out, min, max, median };
   }, [data]);
 
-  if (!series.points?.length) return null;
+  if (!series.points.length) return null;
 
-  // pad Y domain slightly for breathing room
-  const yPad = Math.max(2, Math.round((series.max - series.min) * 0.06) || 4);
-  const yMin = Math.max(0, Math.floor(series.min - yPad));
-  const yMax = Math.ceil(series.max + yPad);
+  // y-domain padding for breathing room
+  const span = Math.max(1, (series.max ?? 0) - (series.min ?? 0));
+  const yMin = Math.max(0, Math.floor((series.min ?? 0) - span * 0.08));
+  const yMax = Math.ceil((series.max ?? 0) + span * 0.08);
 
-  const dateFmt = (d) =>
-    new Date(d).toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
+  const dateFmt = (ts) =>
+    new Date(ts).toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
 
   const priceFmt = (n) =>
-    Number.isFinite(n) ? new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD' }).format(n) : '—';
+    Number.isFinite(n)
+      ? new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD' }).format(n)
+      : '—';
 
-  // custom minimal tooltip
-  const CustomTooltip = ({ active, label, payload }) => {
+  // minimal tooltip
+  const CustomTooltip = ({ active, payload }) => {
     if (!active || !payload?.length) return null;
     const p = payload[0]?.payload;
     return (
-      <div className="rounded-md border border-gray-200 bg-white px-2 py-1 text-xs shadow-md">
-        <div className="font-medium">{dateFmt(p.x)}</div>
-        <div className="text-gray-700">{priceFmt(p.y)}</div>
+      <div className="rounded-md border border-gray-200 bg-white px-2 py-1 text-[11px] shadow-sm">
+        <div className="font-medium">{priceFmt(p.y)}</div>
+        <div className="text-gray-500">{dateFmt(p.x)}</div>
         {Number.isFinite(p.avg) && <div className="text-gray-400">avg {priceFmt(p.avg)}</div>}
       </div>
     );
   };
 
+  // unique gradient id so multiple charts on page don't clash
+  const gradId = useMemo(
+    () => `sparkFill-${Math.random().toString(36).slice(2)}`,
+    []
+  );
+
+  // Use currentColor for themeable stroke/fill; parent sets color.
+  // Example parent wrappers: "text-sky-600" or "text-emerald-600"
   return (
-    <div className={`w-full ${className}`}>
+    <div className={`w-full text-sky-600 ${className}`}>
       <ResponsiveContainer width="100%" height={height}>
         <AreaChart
           data={series.points}
           margin={{ top: 8, right: 8, bottom: 0, left: 8 }}
         >
-          {/* gradient fill */}
           <defs>
-            <linearGradient id="sparkFill" x1="0" y1="0" x2="0" y2="1">
-              <stop offset="0%" stopColor="#3b82f6" stopOpacity={0.25} />
-              <stop offset="100%" stopColor="#3b82f6" stopOpacity={0.02} />
+            <linearGradient id={gradId} x1="0" y1="0" x2="0" y2="1">
+              <stop offset="0%" stopColor="currentColor" stopOpacity={0.18} />
+              <stop offset="100%" stopColor="currentColor" stopOpacity={0.02} />
             </linearGradient>
           </defs>
 
-          {/* area under price */}
+          {/* area under price (subtle, professional look) */}
           <Area
             type="monotone"
             dataKey="y"
-            stroke="#3b82f6"
-            fill="url(#sparkFill)"
-            strokeWidth={2}
-            dot={false}
+            stroke="none"
+            fill={`url(#${gradId})`}
             isAnimationActive={false}
             connectNulls
+            yAxisId="y"
           />
 
-          {/* optional moving average line */}
+          {/* crisp line */}
+          <Line
+            type="monotone"
+            dataKey="y"
+            stroke="currentColor"
+            strokeWidth={2}
+            dot={false}
+            activeDot={{ r: 3 }}
+            isAnimationActive={false}
+            connectNulls
+            yAxisId="y"
+          />
+
+          {/* optional moving average */}
           {showAverage && (
             <Line
               type="monotone"
               dataKey="avg"
-              stroke="#64748b"
+              stroke="currentColor"
+              strokeOpacity={0.55}
               strokeDasharray="4 3"
               strokeWidth={1.5}
               dot={false}
               isAnimationActive={false}
               connectNulls
+              yAxisId="y"
             />
           )}
 
-          {/* median band */}
+          {/* median guide */}
           {showMedian && Number.isFinite(series.median) && (
             <ReferenceLine
               y={series.median}
-              stroke="#10b981"
+              yAxisId="y"
+              stroke="currentColor"
+              strokeOpacity={0.6}
               strokeDasharray="3 3"
-              strokeOpacity={0.8}
             />
           )}
 
@@ -175,21 +188,26 @@ export default function PriceSparkline({
                 x={p.x}
                 y={p.y}
                 r={3.5}
-                fill={p.isMin ? '#10b981' : '#ef4444'}
-                stroke="white"
+                fill="currentColor"
+                fillOpacity={0.9}
+                stroke="#fff"
                 strokeWidth={1}
                 isFront
+                yAxisId="y"
               />
             ) : null
           )}
 
-          {/* clean tooltip */}
           <Tooltip
             content={<CustomTooltip />}
             labelFormatter={() => ''}
+            wrapperStyle={{ outline: 'none' }}
             cursor={{ stroke: 'rgba(0,0,0,0.08)', strokeWidth: 1 }}
           />
-          {/* hide axes entirely for a clean sparkline look */}
+
+          {/* hidden axes; YAxis enforces padded domain */}
+          <YAxis yAxisId="y" domain={[yMin, yMax]} hide />
+          <XAxis dataKey="x" type="number" domain={['dataMin', 'dataMax']} hide />
         </AreaChart>
       </ResponsiveContainer>
     </div>
