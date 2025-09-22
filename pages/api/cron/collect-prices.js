@@ -2,7 +2,7 @@
 export const runtime = 'nodejs';
 
 import { getSql } from '../../../lib/db';
-import { getEbayToken } from '../../../lib/ebayauth';
+import { getEbayToken } from '../../../lib/ebayAuth';
 import { normalizeModelKey } from '../../../lib/normalize';
 import { parseSpecs } from '../../../lib/specs';
 
