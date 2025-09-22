@@ -824,77 +824,77 @@ export default function PuttersPage() {
                           {showAll ? "Show top 10" : "Show all"}
                         </button>
                       )}
-                    </div>
+	                    </div>
+				{isOpen && (
+				  <ul className="mt-3 space-y-2">
+				    {list.map((o) => (
+				      <li
+				        key={(o.productId ?? o.url) + String(o.price ?? "")}
+				        className="flex items-center justify-between gap-3 rounded border border-gray-100 p-2"
+				      >
+				        <div className="flex min-w-0 items-center gap-2">
+				          {retailerLogos[o.retailer] && (
+				            // eslint-disable-next-line @next/next/no-img-element
+				            <img
+				              src={retailerLogos[o.retailer]}
+				              alt={o.retailer}
+				              className="h-4 w-12 object-contain"
+				            />
+				          )}
+				          <div className="min-w-0">
+				            <div className="truncate text-sm font-medium">
+				              {o.retailer}
+				              {o?.seller?.username && (
+				                <span className="ml-2 text-xs text-gray-500">@{o.seller.username}</span>
+				              )}
+				              {typeof o?.seller?.feedbackPct === "number" && (
+				                <span className="ml-2 rounded-full bg-gray-100 px-2 py-[2px] text-[11px] font-medium text-gray-700">
+				                  {o.seller.feedbackPct.toFixed(1)}%
+				                </span>
+				              )}
+				            </div>
 
-                    {isOpen && (
-                      <ul className="mt-3 space-y-2">
-                        {list.map((o) => (
-                          <li key={o.productId + o.url} className="flex items-center justify-between gap-3 rounded border border-gray-100 p-2">
-                            <div className="flex min-w-0 items-center gap-2">
-                              {retailerLogos[o.retailer] && (
-                                // eslint-disable-next-line @next/next/no-img-element
-                                <img src={retailerLogos[o.retailer]} alt={o.retailer} className="h-4 w-12 object-contain" />
-                              )}
-                              <div className="min-w-0">
-                                <div className="truncate text-sm font-medium">
-                                  {o.retailer}
-                                  {o?.seller?.username && (
-                                    <span className="ml-2 text-xs text-gray-500">@{o.seller.username}</span>
-                                  )}
-                                  {typeof o?.seller?.feedbackPct === "number" && (
-                                    <span className="ml-2 rounded-full bg-gray-100 px-2 py-[2px] text-[11px] font-medium text-gray-700">
-                                      {o.seller.feedbackPct.toFixed(1)}%
-                                    </span>
-                                  )}
-                                </div>
-                                <div className="mt-0.5 truncate text-xs text-gray-500">
-  				{(o.specs?.dexterity || "").toUpperCase() === "LEFT" ? "LH" :
-   				(o.specs?.dexterity || "").toUpperCase() === "RIGHT" ? "RH" : "—"}
-  				{" · "}
-				  {(o.specs?.headType || "").toUpperCase() || "—"}
-				  {" · "}
-  				{Number.isFinite(Number(o?.specs?.length)) ? `${o.specs.length}"` : "—"}
+				            {/* specs line */}
+				            <div className="mt-0.5 truncate text-xs text-gray-500">
+				              {(o.specs?.dexterity || "").toUpperCase() === "LEFT" ? "LH" :
+				               (o.specs?.dexterity || "").toUpperCase() === "RIGHT" ? "RH" : "—"}
+				              {" · "}
+				              {(o.specs?.headType || "").toUpperCase() || "—"}
+				              {" · "}
+				              {Number.isFinite(Number(o?.specs?.length)) ? `${o.specs.length}"` : "—"}
+				              {o?.specs?.hosel && <> · {o.specs.hosel}</>}
+				              {Number.isFinite(Number(o?.specs?.headWeightG)) && <> · {Number(o.specs.headWeightG)}g</>}
+				              {o?.specs?.finish && <> · {o.specs.finish}</>}
+				              {o?.specs?.shaft && <> · {o.specs.shaft.toLowerCase()}</>}
+				              {o?.specs?.hasHeadcover && <> · HC</>}
+				              {o.createdAt && (<> · listed {timeAgo(new Date(o.createdAt).getTime())}</>)}
+				            </div>
+				          </div>
+				        </div>
+	        <div className="flex items-center gap-3">
+	          <span className="text-sm font-semibold">
+			            {formatPrice(o.price, o.currency)}
+			          </span>
+			          <a
+			            href={o.url}
+			            target="_blank"
+			            rel="noopener noreferrer"
+			            className="inline-flex items-center rounded-md bg-blue-600 px-3 py-1.5 text-sm font-medium text-white hover:bg-blue-700"
+			         >
+           		 View
+          		</a>
+        		</div>
+      			</li>
+    			))}
 
-  				{/* NEW bits */}
-  				{o?.specs?.hosel && <> · {o.specs.hosel}</>}
- 				 {Number.isFinite(Number(o?.specs?.headWeightG)) && <> · {Number(o.specs.headWeightG)}g</>}
-  				{o?.specs?.finish && <> · {o.specs.finish}</>}
+   			{!showAll && g.count > 10 && (
+      			<li className="px-2 pt-1 text-xs text-gray-500">
+        		Showing top 10 offers.
+      			</li>
+			)}
+  			</ul>
+			)}
 
-  				{o?.specs?.shaft && <> · {o.specs.shaft.toLowerCase()}</>}
-				  {o?.specs?.hasHeadcover && <> · HC</>}
-
-  				{o.createdAt && (<> · listed {timeAgo(new Date(o.createdAt).getTime())}</>)}
-				</div>
-				div>
-                            </div>
-                            <div className="flex items-center gap-3">
-                              {/* Fair price badge */}
-                              {(() => {
-                                const stats = statsByModel[g.model];
-                                const badge = dealBadge(o.price, stats);
-                                return badge ? (
-                                  <span className={`rounded-full px-2 py-[2px] text-[11px] font-medium ${badge.className}`}>
-                                    {badge.label}
-                                  </span>
-                                ) : null;
-                              })()}
-                              <span className="text-sm font-semibold">{formatPrice(o.price, o.currency)}</span>
-                              <a
-                                href={o.url}
-                                target="_blank"
-                                rel="noopener noreferrer"
-                                className="inline-flex items-center rounded-md bg-blue-600 px-3 py-1.5 text-sm font-medium text-white hover:bg-blue-700"
-                              >
-                                View
-                              </a>
-                            </div>
-                          </li>
-                        ))}
-                        {!showAll && g.count > 10 && (
-                          <li className="px-2 pt-1 text-xs text-gray-500">Showing top 10 offers.</li>
-                        )}
-                      </ul>
-                    )}
                   </div>
                 </article>
               );
