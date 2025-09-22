@@ -2,7 +2,7 @@
 export const runtime = "nodejs";
 
 import { getSql } from "../../../lib/db";
-import { getEbayToken } from "../../../lib/ebayauth";
+import { getEbayToken } from "../../../lib/ebayAuth";
 
 const MARKETPLACE = "EBAY_US";
 const BROWSE_URL = "https://api.ebay.com/buy/browse/v1/item_summary/search";
