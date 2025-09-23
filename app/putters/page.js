@@ -1107,7 +1107,9 @@ export default function PuttersPage() {
   className="mr-2"
 />
 
-                                      <span className="ml-2 text-xs text-gray-500">@{o.seller.username}</span>
+                                      <span className="ml-2 text-xs text-gray-500">
+					@{o.seller.username}
+					</span>
                                     )}
                                     {typeof o?.seller?.feedbackPct === "number" && (
                                       <span className="ml-2 rounded-full bg-gray-100 px-2 py-[2px] text-[11px] font-medium text-gray-700">
