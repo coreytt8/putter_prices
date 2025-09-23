@@ -1097,6 +1097,16 @@ export default function PuttersPage() {
                                   <div className="truncate text-sm font-medium">
                                     {o.retailer}
                                     {o?.seller?.username && (
+					<SmartPriceBadge
+  price={Number(o.price)}
+  baseStats={statsByModel[g.model] || null}
+  variantStats={null}
+  title={o.title}
+  specs={o.specs}
+  brand={g?.brand}
+  className="mr-2"
+/>
+
                                       <span className="ml-2 text-xs text-gray-500">@{o.seller.username}</span>
                                     )}
                                     {typeof o?.seller?.feedbackPct === "number" && (
@@ -1226,11 +1236,11 @@ export default function PuttersPage() {
                         {/* Flat-view badge: uses prefetched (model, condition) stats */}
                       <SmartPriceBadge
   		price={Number(o.price)}
- 		 baseStats={statsByModel[g.model] || null}
+ 		 baseStats={statsByModel[o.model] || null}
   		variantStats={null}
  		 title={o.title}
   		specs={o.specs}
- 			 brand={g?.brand}
+ 			 brand={o.brand || ""}
   		className="mr-2"
 			/>
 
