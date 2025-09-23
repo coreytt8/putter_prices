@@ -104,21 +104,7 @@ function makeSmartBadge({ listingPrice, stats, windowDays = 60 }) {
     tooltip,
   };
 }
-function SmartPriceBadge({ price, stats, windowDays = 60, className = "" }) {
-  const badge = useMemo(() => makeSmartBadge({ listingPrice: price, stats, windowDays }), [price, stats, windowDays]);
-  if (!badge) return null;
-  return (
-    <span
-      className={`inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[11px] font-medium ring-1 ${badge.color} ${className}`}
-      title={badge.tooltip}
-      aria-label={`Price badge: ${badge.label}. Score ${badge.score}. ${badge.tooltip}`}
-    >
-      <span aria-hidden="true">{badge.icon}</span>
-      <span>{badge.label}</span>
-      {badge.tier !== "insufficient" && <span className="opacity-70">• {badge.score}</span>}
-    </span>
-  );
-}
+
 
 /* ============================
    ORIGINAL HELPERS
