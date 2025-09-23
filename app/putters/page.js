@@ -5,7 +5,7 @@ import MarketSnapshot from "@/components/MarketSnapshot";
 import PriceSparkline from "@/components/PriceSparkline";
 
 /* ============================
-   SMART FAIR-PRICE BADGE (inline)
+   SMART FAIR-PRICE BADGE (inline, JS/JSX)
    ============================ */
 
 // Confidence from sample size + dispersion (IQR/median or approx)
@@ -85,9 +85,10 @@ function makeSmartBadge({ listingPrice, stats, windowDays = 60 }) {
                : deltaPct > 0 ? `~${pctAbs.toFixed(0)}% above`
                : "near";
   const nText = n ? `${n}` : "—";
+  const condLabel = stats?.condition ? ` (${String(stats.condition).replace(/_/g," ").toLowerCase()})` : "";
   const tooltip = tier === "insufficient"
     ? "Not enough comparable sales to estimate a fair market price confidently."
-    : `Based on ${nText} comparable sales in ~${windowDays} days. This listing is ${vsText} expected (median). Confidence: ${confidence}.`;
+    : `Based on ${nText} comparable sales${condLabel} in ~${windowDays} days. This listing is ${vsText} expected (median). Confidence: ${confidence}.`;
 
   return {
     tier,
@@ -170,6 +171,10 @@ const BRANDS = [
 
 const CONDITION_OPTIONS = [
   { label: "New", value: "NEW" },
+  { label: "Like-New", value: "LIKE_NEW" },
+  { label: "Good", value: "GOOD" },
+  { label: "Fair", value: "FAIR" },
+  // Keep your original values too if you rely on eBay condition codes:
   { label: "Used", value: "USED" },
   { label: "Certified Refurbished", value: "CERTIFIED_REFURBISHED" },
   { label: "Seller Refurbished", value: "SELLER_REFURBISHED" },
@@ -223,7 +228,7 @@ function useRecentModels() {
 }
 
 /* ============================
-   EXTRA HELPERS (for flat view stats)
+   EXTRA HELPERS (for flat view stats & condition awareness)
    ============================ */
 
 // Derive a model key for stats lookup in flat view.
@@ -231,11 +236,29 @@ function getModelKey(o) {
   if (typeof o?.model === "string" && o.model.trim()) return o.model.trim();
   if (typeof o?.groupModel === "string" && o.groupModel.trim()) return o.groupModel.trim();
   if (typeof o?.title === "string" && o.title.trim()) {
-    const t = o.title.replace(/\s+/g, " ").trim();
+    const t = o.title.replace(/\\s+/g, " ").trim();
     const first = t.split(" - ")[0] || t;
     return first.slice(0, 120);
   }
   return "";
+}
+
+function selectedConditionBand(conds) {
+  return Array.isArray(conds) && conds.length === 1 ? conds[0] : "";
+}
+function inferConditionBandFromOffers(offers = []) {
+  const counts = new Map();
+  for (const o of offers) {
+    const c = (o?.conditionBand || o?.condition || "").toUpperCase();
+    if (!c) continue;
+    counts.set(c, (counts.get(c) || 0) + 1);
+  }
+  let best = ""; let max = 0;
+  for (const [k,v] of counts.entries()) { if (v > max) { max = v; best = k; } }
+  return best;
+}
+function getStatsKey(model, cond) {
+  return `${model}::${cond || "ANY"}`;
 }
 
 /* ============================
@@ -275,9 +298,9 @@ export default function PuttersPage() {
   const [copiedFor, setCopiedFor] = useState("");
 
   // Per-model caches
-  // NOTE: we store stats object directly as value: statsByModel[model] = {p10,p50,p90,...} or null
-  const [lowsByModel, setLowsByModel] = useState({});
-  const [seriesByModel, setSeriesByModel] = useState({});
+  const [lowsByModel, setLowsByModel] = useState({});   // model -> lows
+  const [seriesByModel, setSeriesByModel] = useState({}); // model -> series
+  // IMPORTANT: stats cache is keyed by `${model}::${condition||ANY}`
   const [statsByModel, setStatsByModel] = useState({});
 
   // recent models
@@ -398,14 +421,14 @@ export default function PuttersPage() {
         setKeptCount(typeof data.keptCount === "number" ? data.keptCount : null);
         setApiData(data);
 
-        // reset per-model show-all + lows/series/stats cache for fresh groups
+        // reset per-model show-all + lows/series cache for fresh groups
         const nextShowAll = {};
         const resetNulls = {};
         nextGroups.forEach(g => { nextShowAll[g.model] = false; resetNulls[g.model] = null; });
         setShowAllOffersByModel(nextShowAll);
         setLowsByModel((prev) => ({ ...resetNulls }));
         setSeriesByModel((prev) => ({ ...resetNulls }));
-        setStatsByModel((prev) => ({ ...resetNulls }));
+        // DO NOT reset statsByModel here; we keep cache (condition-aware)
       } catch (e) {
         if (!ignore && e.name !== "AbortError") setErr("Failed to load results. Please try again.");
       } finally {
@@ -438,7 +461,9 @@ export default function PuttersPage() {
 
   const toggleExpand = async (model) => {
     setExpanded((prev) => ({ ...prev, [model]: !prev[model] }));
-    if (!expanded[model]) {
+    // When opening, load per-model analytics and stats if missing
+    const willOpen = !expanded[model];
+    if (willOpen) {
       // mark as recently viewed when opening
       pushRecent(model);
 
@@ -461,14 +486,19 @@ export default function PuttersPage() {
           setSeriesByModel((prev) => ({ ...prev, [model]: [] }));
         }
       }
-      if (!statsByModel[model]) {
-        try {
-          const r = await fetch(`/api/model-stats?model=${encodeURIComponent(model)}`, { cache: "no-store" });
+      // Stats (condition-aware)
+      try {
+        const groupObj = groups.find((x) => x.model === model) || null;
+        const condParam = selectedConditionBand(conds) || inferConditionBandFromOffers(groupObj?.offers || []) || "";
+        const url = `/api/model-stats?model=${encodeURIComponent(model)}${condParam ? `&condition=${encodeURIComponent(condParam)}` : ""}`;
+        const statsKey = getStatsKey(model, condParam);
+        if (statsByModel[statsKey] === undefined) {
+          const r = await fetch(url, { cache: "no-store" });
           const j = await r.json();
-          setStatsByModel((prev) => ({ ...prev, [model]: j?.stats || null }));
-        } catch {
-          setStatsByModel((prev) => ({ ...prev, [model]: null }));
+          setStatsByModel((prev) => ({ ...prev, [statsKey]: j?.stats || null }));
         }
+      } catch {
+        // ignore
       }
     }
   };
@@ -519,7 +549,7 @@ export default function PuttersPage() {
   };
 
   /* ============================
-     FLAT VIEW: prefetch stats for visible items
+     FLAT VIEW: prefetch stats for visible items (condition-aware)
      ============================ */
   useEffect(() => {
     if (!q.trim() || loading || err || groupMode || !showAdvanced) return;
@@ -527,47 +557,36 @@ export default function PuttersPage() {
 
     let abort = false;
     (async () => {
-      const needed = [];
+      const fetchJobs = [];
       for (const o of offers) {
-        const key = getModelKey(o);
-        if (!key) continue;
-        if (statsByModel[key] === undefined || statsByModel[key] === null) {
-          needed.push(key);
+        const modelKey = getModelKey(o);
+        if (!modelKey) continue;
+        const condParam = (o?.conditionBand || o?.condition || "").toUpperCase() || selectedConditionBand(conds) || "";
+        const statsKey = getStatsKey(modelKey, condParam);
+        if (statsByModel[statsKey] === undefined) {
+          const url = `/api/model-stats?model=${encodeURIComponent(modelKey)}${condParam ? `&condition=${encodeURIComponent(condParam)}` : ""}`;
+          fetchJobs.push(
+            fetch(url, { cache: "no-store" })
+              .then(r => r.json())
+              .then(j => ({ statsKey, stats: j?.stats || null }))
+              .catch(() => ({ statsKey, stats: null }))
+          );
         }
       }
-      if (needed.length === 0) return;
-
-      const unique = Array.from(new Set(needed)).slice(0, 20); // safety cap
-      try {
-        const results = await Promise.all(
-          unique.map(async (model) => {
-            try {
-              const r = await fetch(`/api/model-stats?model=${encodeURIComponent(model)}`, { cache: "no-store" });
-              const j = await r.json();
-              return { model, stats: j?.stats || null };
-            } catch {
-              return { model, stats: null };
-            }
-          })
-        );
-        if (abort) return;
-
-        setStatsByModel((prev) => {
-          const next = { ...prev };
-          for (const { model, stats } of results) {
-            if (next[model] === undefined || next[model] === null) {
-              next[model] = stats; // store stats object directly
-            }
-          }
-          return next;
-        });
-      } catch {
-        // ignore; badges will fall back to "Not enough data"
-      }
+      if (fetchJobs.length === 0) return;
+      const results = await Promise.all(fetchJobs);
+      if (abort) return;
+      setStatsByModel((prev) => {
+        const next = { ...prev };
+        for (const { statsKey, stats } of results) {
+          if (next[statsKey] === undefined) next[statsKey] = stats;
+        }
+        return next;
+      });
     })();
 
     return () => { abort = true; };
-  }, [q, loading, err, groupMode, showAdvanced, offers, statsByModel]);
+  }, [q, loading, err, groupMode, showAdvanced, offers, conds, statsByModel]);
 
   return (
     <main className="mx-auto max-w-6xl px-4 py-8">
@@ -576,6 +595,9 @@ export default function PuttersPage() {
           <h1 className="text-3xl font-semibold tracking-tight">Compare Putter Prices</h1>
           <p className="mt-1 text-sm text-gray-500">
             Type a model (e.g., <em>“scotty cameron newport”</em>) or pick a brand.
+          </p>
+          <p className="mt-1 text-xs text-gray-500">
+            Badges based on recent comps. <a className="text-blue-600 underline" href="/methodology">See methodology</a>.
           </p>
         </div>
         {q.trim() && (
@@ -933,7 +955,10 @@ export default function PuttersPage() {
 
               const lows = lowsByModel[g.model];
               const series = seriesByModel[g.model] || [];
-              const stats = statsByModel[g.model] || null;
+              // Stats lookup with condition
+              const groupCond = selectedConditionBand(conds) || inferConditionBandFromOffers(g?.offers || []) || "";
+              const statsKey = getStatsKey(g.model, groupCond);
+              const stats = statsByModel[statsKey] || null;
 
               const bestUrl = ordered.length ? ordered[0]?.url : null;
 
@@ -1056,60 +1081,66 @@ export default function PuttersPage() {
 
                     {isOpen && (
                       <ul className="mt-3 space-y-2">
-                        {list.map((o) => (
-                          <li key={o.productId + o.url} className="flex items-center justify-between gap-3 rounded border border-gray-100 p-2">
-                            <div className="flex min-w-0 items-center gap-2">
-                              {retailerLogos[o.retailer] && (
-                                // eslint-disable-next-line @next/next/no-img-element
-                                <img src={retailerLogos[o.retailer]} alt={o.retailer} className="h-4 w-12 object-contain" />
-                              )}
-                              <div className="min-w-0">
-                                <div className="truncate text-sm font-medium">
-                                  {o.retailer}
-                                  {o?.seller?.username && (
-                                    <span className="ml-2 text-xs text-gray-500">@{o.seller.username}</span>
-                                  )}
-                                  {typeof o?.seller?.feedbackPct === "number" && (
-                                    <span className="ml-2 rounded-full bg-gray-100 px-2 py-[2px] text-[11px] font-medium text-gray-700">
-                                      {o.seller.feedbackPct.toFixed(1)}%
-                                    </span>
-                                  )}
-                                </div>
-                                {/* Enhanced spec line */}
-                                <div className="mt-0.5 truncate text-xs text-gray-500">
-                                  {(o.specs?.dexterity || "").toUpperCase() === "LEFT" ? "LH" :
-                                   (o.specs?.dexterity || "").toUpperCase() === "RIGHT" ? "RH" : "—"}
-                                  {" · "}
-                                  {(o.specs?.headType || "").toUpperCase() || "—"}
-                                  {" · "}
-                                  {Number.isFinite(Number(o?.specs?.length)) ? `${o.specs.length}"` : "—"}
-                                  {o?.specs?.shaft && <> · {String(o.specs.shaft).toLowerCase()}</>}
-                                  {o?.specs?.hosel && <> · {o.specs.hosel}</>}
-                                  {o?.specs?.face && <> · {o.specs.face}</>}
-                                  {o?.specs?.grip && <> · {o.specs.grip}</>}
-                                  {o?.specs?.hasHeadcover && <> · HC</>}
-                                  {o?.specs?.toeHang && <> · {o.specs.toeHang} toe</>}
-                                  {Number.isFinite(Number(o?.specs?.loft)) && <> · {o.specs.loft}° loft</>}
-                                  {Number.isFinite(Number(o?.specs?.lie)) && <> · {o.specs.lie}° lie</>}
-                                  {o.createdAt && (<> · listed {timeAgo(new Date(o.createdAt).getTime())}</>)}
+                        {list.map((o) => {
+                          const condParam = (o?.conditionBand || o?.condition || "").toUpperCase() || selectedConditionBand(conds) || "";
+                          const perOfferStatsKey = getStatsKey(g.model, condParam);
+                          const perOfferStats = statsByModel[perOfferStatsKey] || stats; // fallback to group's stats
+
+                          return (
+                            <li key={o.productId + o.url} className="flex items-center justify-between gap-3 rounded border border-gray-100 p-2">
+                              <div className="flex min-w-0 items-center gap-2">
+                                {retailerLogos[o.retailer] && (
+                                  // eslint-disable-next-line @next/next/no-img-element
+                                  <img src={retailerLogos[o.retailer]} alt={o.retailer} className="h-4 w-12 object-contain" />
+                                )}
+                                <div className="min-w-0">
+                                  <div className="truncate text-sm font-medium">
+                                    {o.retailer}
+                                    {o?.seller?.username && (
+                                      <span className="ml-2 text-xs text-gray-500">@{o.seller.username}</span>
+                                    )}
+                                    {typeof o?.seller?.feedbackPct === "number" && (
+                                      <span className="ml-2 rounded-full bg-gray-100 px-2 py-[2px] text-[11px] font-medium text-gray-700">
+                                        {o.seller.feedbackPct.toFixed(1)}%
+                                      </span>
+                                    )}
+                                  </div>
+                                  {/* Enhanced spec line */}
+                                  <div className="mt-0.5 truncate text-xs text-gray-500">
+                                    {(o.specs?.dexterity || "").toUpperCase() === "LEFT" ? "LH" :
+                                     (o.specs?.dexterity || "").toUpperCase() === "RIGHT" ? "RH" : "—"}
+                                    {" · "}
+                                    {(o.specs?.headType || "").toUpperCase() || "—"}
+                                    {" · "}
+                                    {Number.isFinite(Number(o?.specs?.length)) ? `${o.specs.length}"` : "—"}
+                                    {o?.specs?.shaft && <> · {String(o.specs.shaft).toLowerCase()}</>}
+                                    {o?.specs?.hosel && <> · {o.specs.hosel}</>}
+                                    {o?.specs?.face && <> · {o.specs.face}</>}
+                                    {o?.specs?.grip && <> · {o.specs.grip}</>}
+                                    {o?.specs?.hasHeadcover && <> · HC</>}
+                                    {o?.specs?.toeHang && <> · {o.specs.toeHang} toe</>}
+                                    {Number.isFinite(Number(o?.specs?.loft)) && <> · {o.specs.loft}° loft</>}
+                                    {Number.isFinite(Number(o?.specs?.lie)) && <> · {o.specs.lie}° lie</>}
+                                    {o.createdAt && (<> · listed {timeAgo(new Date(o.createdAt).getTime())}</>)}
+                                  </div>
                                 </div>
                               </div>
-                            </div>
-                            <div className="flex items-center gap-3">
-                              {/* Per-listing badge using group's stats */}
-                              <SmartPriceBadge price={o.price} stats={stats} />
-                              <span className="text-sm font-semibold">{formatPrice(o.price, o.currency)}</span>
-                              <a
-                                href={o.url}
-                                target="_blank"
-                                rel="noopener noreferrer"
-                                className="inline-flex items-center rounded-md bg-blue-600 px-3 py-1.5 text-sm font-medium text-white hover:bg-blue-700"
-                              >
-                                View
-                              </a>
-                            </div>
-                          </li>
-                        ))}
+                              <div className="flex items-center gap-3">
+                                {/* Per-listing badge using (model,condition) stats */}
+                                <SmartPriceBadge price={o.price} stats={perOfferStats} />
+                                <span className="text-sm font-semibold">{formatPrice(o.price, o.currency)}</span>
+                                <a
+                                  href={o.url}
+                                  target="_blank"
+                                  rel="noopener noreferrer"
+                                  className="inline-flex items-center rounded-md bg-blue-600 px-3 py-1.5 text-sm font-medium text-white hover:bg-blue-700"
+                                >
+                                  View
+                                </a>
+                              </div>
+                            </li>
+                          );
+                        })}
                         {!showAll && g.count > 10 && (
                           <li className="px-2 pt-1 text-xs text-gray-500">Showing top 10 offers.</li>
                         )}
@@ -1148,77 +1179,79 @@ export default function PuttersPage() {
       {q.trim() && !loading && !err && !groupMode && showAdvanced && (
         <>
           <section className="mt-6 grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
-            {offers.map((o) => (
-              <article key={o.productId + o.url} className="overflow-hidden rounded-xl border border-gray-200 bg-white shadow-sm">
-                <div className="relative aspect-[4/3] w-full bg-gray-50">
-                  {o.image ? (
-                    // eslint-disable-next-line @next/next/no-img-element
-                    <img src={o.image} alt={o.title} className="h-full w-full object-contain" loading="lazy" />
-                  ) : (
-                    <div className="flex h-full w-full items-center justify-center text-xs text-gray-400">No image</div>
-                  )}
-                </div>
-                <div className="p-4">
-                  <h3 className="line-clamp-2 text-sm font-semibold">{o.title}</h3>
-                  <p className="mt-1 text-xs text-gray-500">
-                    {o?.seller?.username && <>@{o.seller.username} · </>}
-                    {typeof o?.seller?.feedbackPct === "number" && <>{o.seller.feedbackPct.toFixed(1)}% · </>}
-                    {(o.specs?.dexterity || "").toUpperCase() || "—"} · {(o.specs?.headType || "").toUpperCase() || "—"} ·
-                    {Number.isFinite(Number(o?.specs?.length)) ? `${o.specs.length}"` : "—"}
-                    {o?.specs?.shaft && <> · {String(o.specs.shaft).toLowerCase()}</>}
-                    {o?.specs?.hosel && <> · {o.specs.hosel}</>}
-                    {o?.specs?.face && <> · {o.specs.face}</>}
-                    {o?.specs?.grip && <> · {o.specs.grip}</>}
-                    {o?.specs?.hasHeadcover && <> · HC</>}
-                    {o?.specs?.toeHang && <> · {o.specs.toeHang} toe</>}
-                    {Number.isFinite(Number(o?.specs?.loft)) && <> · {o.specs.loft}° loft</>}
-                    {Number.isFinite(Number(o?.specs?.lie)) && <> · {o.specs.lie}° lie</>}
-                    {o.createdAt && (<> · listed {timeAgo(new Date(o.createdAt).getTime())}</>)}
-                  </p>
+            {offers.map((o) => {
+              const modelKey = getModelKey(o);
+              const condParam = (o?.conditionBand || o?.condition || "").toUpperCase() || selectedConditionBand(conds) || "";
+              const statsKey = getStatsKey(modelKey, condParam);
+              const stats = statsByModel[statsKey] || null;
 
-                  <div className="mt-3 flex items-center justify-between">
-                    <div className="flex items-center gap-2">
-                      {/* Flat-view badge: uses prefetched statsByModel via derived key */}
-                      {(() => {
-                        const key = getModelKey(o);
-                        const stats = key ? statsByModel[key] || null : null;
-                        return <SmartPriceBadge price={o.price} stats={stats} />;
-                      })()}
-                      <span className="text-base font-semibold">{formatPrice(o.price, o.currency)}</span>
-
-                      {/* Optional Save $ chip if below median */}
-                      {(() => {
-                        const key = getModelKey(o);
-                        const p50 = key && statsByModel[key]?.p50;
-                        if (Number.isFinite(Number(p50)) && typeof o.price === "number" && o.price < Number(p50)) {
-                          const save = Number(p50) - o.price;
-                          const pct = Math.round((save / Number(p50)) * 100);
-                          return (
-                            <span
-                              className="rounded-full bg-emerald-50 px-2 py-0.5 text-[11px] font-medium text-emerald-700"
-                              title={`Median ${formatPrice(Number(p50))} · Save ~${formatPrice(save)} (~${pct}%)`}
-                            >
-                              Save {formatPrice(save)}
-                            </span>
-                          );
-                        }
-                        return null;
-                      })()}
-                    </div>
-
-                    {/* Affiliate/outbound link UNCHANGED */}
-                    <a
-                      href={o.url}
-                      target="_blank"
-                      rel="noopener noreferrer"
-                      className="inline-flex items-center rounded-md bg-blue-600 px-3 py-1.5 text-sm font-medium text-white hover:bg-blue-700"
-                    >
-                      View
-                    </a>
+              return (
+                <article key={o.productId + o.url} className="overflow-hidden rounded-xl border border-gray-200 bg-white shadow-sm">
+                  <div className="relative aspect-[4/3] w-full bg-gray-50">
+                    {o.image ? (
+                      // eslint-disable-next-line @next/next/no-img-element
+                      <img src={o.image} alt={o.title} className="h-full w-full object-contain" loading="lazy" />
+                    ) : (
+                      <div className="flex h-full w-full items-center justify-center text-xs text-gray-400">No image</div>
+                    )}
                   </div>
-                </div>
-              </article>
-            ))}
+                  <div className="p-4">
+                    <h3 className="line-clamp-2 text-sm font-semibold">{o.title}</h3>
+                    <p className="mt-1 text-xs text-gray-500">
+                      {o?.seller?.username && <>@{o.seller.username} · </>}
+                      {typeof o?.seller?.feedbackPct === "number" && <>{o.seller.feedbackPct.toFixed(1)}% · </>}
+                      {(o.specs?.dexterity || "").toUpperCase() || "—"} · {(o.specs?.headType || "").toUpperCase() || "—"} ·
+                      {Number.isFinite(Number(o?.specs?.length)) ? `${o.specs.length}"` : "—"}
+                      {o?.specs?.shaft && <> · {String(o.specs.shaft).toLowerCase()}</>}
+                      {o?.specs?.hosel && <> · {o.specs.hosel}</>}
+                      {o?.specs?.face && <> · {o.specs.face}</>}
+                      {o?.specs?.grip && <> · {o.specs.grip}</>}
+                      {o?.specs?.hasHeadcover && <> · HC</>}
+                      {o?.specs?.toeHang && <> · {o.specs.toeHang} toe</>}
+                      {Number.isFinite(Number(o?.specs?.loft)) && <> · {o.specs.loft}° loft</>}
+                      {Number.isFinite(Number(o?.specs?.lie)) && <> · {o.specs.lie}° lie</>}
+                      {o.createdAt && (<> · listed {timeAgo(new Date(o.createdAt).getTime())}</>)}
+                    </p>
+
+                    <div className="mt-3 flex items-center justify-between">
+                      <div className="flex items-center gap-2">
+                        {/* Flat-view badge: uses prefetched (model, condition) stats */}
+                        <SmartPriceBadge price={o.price} stats={stats} />
+                        <span className="text-base font-semibold">{formatPrice(o.price, o.currency)}</span>
+
+                        {/* Optional Save $ chip if below median */}
+                        {(() => {
+                          const p50 = stats?.p50;
+                          if (Number.isFinite(Number(p50)) && typeof o.price === "number" && o.price < Number(p50)) {
+                            const save = Number(p50) - o.price;
+                            const pct = Math.round((save / Number(p50)) * 100);
+                            return (
+                              <span
+                                className="rounded-full bg-emerald-50 px-2 py-0.5 text-[11px] font-medium text-emerald-700"
+                                title={`Median ${formatPrice(Number(p50))} · Save ~${formatPrice(save)} (~${pct}%)`}
+                              >
+                                Save {formatPrice(save)}
+                              </span>
+                            );
+                          }
+                          return null;
+                        })()}
+                      </div>
+
+                      {/* Affiliate/outbound link UNCHANGED */}
+                      <a
+                        href={o.url}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="inline-flex items-center rounded-md bg-blue-600 px-3 py-1.5 text-sm font-medium text-white hover:bg-blue-700"
+                      >
+                        View
+                      </a>
+                    </div>
+                  </div>
+                </article>
+              );
+            })}
           </section>
 
           {/* Pagination (flat) */}
