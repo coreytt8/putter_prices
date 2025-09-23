@@ -4,7 +4,7 @@ import { useEffect, useMemo, useState } from "react";
 import MarketSnapshot from "@/components/MarketSnapshot";
 import PriceSparkline from "@/components/PriceSparkline";
 
-/* ---------------- helpers ---------------- */
+// ---------- helpers ----------
 function formatPrice(value, currency = "USD") {
   if (typeof value !== "number" || !isFinite(value)) return "—";
   try {
@@ -41,23 +41,8 @@ async function copyToClipboard(text) {
     return true;
   }
 }
-function idForOffer(o) {
-  return `${o.productId || ""}|${o.url || ""}`;
-}
-function shortDex(d) {
-  const u = (d || "").toUpperCase();
-  return u === "LEFT" ? "LH" : u === "RIGHT" ? "RH" : "—";
-}
-function headTxt(h) {
-  const u = (h || "").toUpperCase();
-  return u || "—";
-}
-function lenTxt(l) {
-  const n = Number(l);
-  return Number.isFinite(n) ? `${n}"` : "—";
-}
 
-/* ---------------- constants ---------------- */
+// ---------- constants ----------
 const BRANDS = [
   { label: "Scotty Cameron", q: "scotty cameron putter" },
   { label: "TaylorMade", q: "taylormade putter" },
@@ -88,13 +73,12 @@ const SORT_OPTIONS = [
 ];
 
 const FIXED_PER_PAGE = 10;
-const MAX_COMPARE = 4;
 
 const retailerLogos = {
   eBay: "https://upload.wikimedia.org/wikipedia/commons/1/1b/EBay_logo.svg",
 };
 
-/* -------- recent models (localStorage) -------- */
+// ---------- NEW: recent models hook ----------
 const RECENT_KEY = "putteriq_recent_models";
 function useRecentModels() {
   const [recent, setRecent] = useState([]);
@@ -119,22 +103,22 @@ function useRecentModels() {
   return { recent, push, clear };
 }
 
-/* ---------------- main component ---------------- */
+// ---------- component ----------
 export default function PuttersPage() {
   // filters/state
-  const [q, setQ] = useState("");
   const [onlyComplete, setOnlyComplete] = useState(true);
   const [minPrice, setMinPrice] = useState("");
   const [maxPrice, setMaxPrice] = useState("");
   const [conds, setConds] = useState([]);
   const [buying, setBuying] = useState([]);
-  const [dex, setDex] = useState("");                 // "", "LEFT", "RIGHT"
-  const [head, setHead] = useState("");               // "", "BLADE", "MALLET"
-  const [lengths, setLengths] = useState([]);         // [], or [33,34,35,36]
+  const [dex, setDex] = useState("");            // "", "LEFT", "RIGHT"
+  const [head, setHead] = useState("");          // "", "BLADE", "MALLET"
+  const [lengths, setLengths] = useState([]);    // [] or [33,34,35,36]
   const [showAdvanced, setShowAdvanced] = useState(false);
   const [groupMode, setGroupMode] = useState(true);
   const [sortBy, setSortBy] = useState("best_price_asc");
   const [page, setPage] = useState(1);
+  const [q, setQ] = useState("");
   const [broaden, setBroaden] = useState(false);
 
   // data
@@ -151,21 +135,17 @@ export default function PuttersPage() {
   // UI state
   const [expanded, setExpanded] = useState({});
   const [showAllOffersByModel, setShowAllOffersByModel] = useState({});
-  const [copiedFor, setCopiedFor] = useState(""); // which model we copied
+  const [copiedFor, setCopiedFor] = useState("");
 
-  // analytics caches
+  // Per-model caches
   const [lowsByModel, setLowsByModel] = useState({});
   const [seriesByModel, setSeriesByModel] = useState({});
   const [statsByModel, setStatsByModel] = useState({});
 
-  // compare state
-  const [selectedOffers, setSelectedOffers] = useState([]); // array of offer objects
-  const [compareOpen, setCompareOpen] = useState(false);
-
   // recent models
   const { recent, push: pushRecent, clear: clearRecent } = useRecentModels();
 
-  /* --- read shareable URL on mount --- */
+  // --- read URL params on first load ---
   useEffect(() => {
     const sp = new URLSearchParams(window.location.search);
     const gList = (name) => (sp.get(name)?.split(",").filter(Boolean)) || [];
@@ -186,7 +166,7 @@ export default function PuttersPage() {
     if (sp.has("page")) setPage(Math.max(1, Number(sp.get("page") || "1")));
   }, []);
 
-  /* --- reflect state → URL --- */
+  // reflect state → URL
   useEffect(() => {
     const params = new URLSearchParams();
     if (q.trim()) params.set("q", q.trim());
@@ -208,7 +188,7 @@ export default function PuttersPage() {
     window.history.replaceState({}, "", url);
   }, [q, onlyComplete, minPrice, maxPrice, conds, buying, sortBy, page, groupMode, broaden, dex, head, lengths]);
 
-  /* --- API URL (server data) --- */
+  // API URL
   const apiUrl = useMemo(() => {
     const params = new URLSearchParams();
     if (q.trim()) params.set("q", q.trim());
@@ -230,12 +210,12 @@ export default function PuttersPage() {
     return `/api/putters?${params.toString()}`;
   }, [q, onlyComplete, minPrice, maxPrice, conds, buying, sortBy, page, groupMode, broaden, dex, head, lengths]);
 
-  /* --- reset to page 1 on input change --- */
+  // Reset to page 1 when inputs change
   useEffect(() => {
     setPage(1);
   }, [q, onlyComplete, minPrice, maxPrice, conds, buying, sortBy, groupMode, broaden, dex, head, lengths]);
 
-  /* --- fetch results --- */
+  // Fetch results
   useEffect(() => {
     if (!q.trim()) {
       setGroups([]); setOffers([]);
@@ -254,7 +234,7 @@ export default function PuttersPage() {
         const res = await fetch(apiUrl, {
           cache: "no-store",
           signal: ctrl.signal,
-          headers: { pragma: "no-cache", "cache-control": "no-cache" }
+          headers: { pragma: "no-cache", "cache-control": "no-cache" },
         });
         const data = await res.json();
         if (ignore) return;
@@ -280,14 +260,14 @@ export default function PuttersPage() {
         setKeptCount(typeof data.keptCount === "number" ? data.keptCount : null);
         setApiData(data);
 
-        // reset per-model UI + analytics caches for fresh groups
+        // reset per-model show-all + lows/series/stats cache for fresh groups
         const nextShowAll = {};
-        const nextLows = {};
-        nextGroups.forEach(g => { nextShowAll[g.model] = false; nextLows[g.model] = null; });
+        const resetNulls = {};
+        nextGroups.forEach(g => { nextShowAll[g.model] = false; resetNulls[g.model] = null; });
         setShowAllOffersByModel(nextShowAll);
-        setLowsByModel(() => ({ ...nextLows }));
-        setSeriesByModel(() => ({}));
-        setStatsByModel(() => ({}));
+        setLowsByModel((prev) => ({ ...resetNulls }));
+        setSeriesByModel((prev) => ({ ...resetNulls }));
+        setStatsByModel((prev) => ({ ...resetNulls }));
       } catch (e) {
         if (!ignore && e.name !== "AbortError") setErr("Failed to load results. Please try again.");
       } finally {
@@ -298,7 +278,6 @@ export default function PuttersPage() {
     return () => { ignore = true; clearTimeout(t); ctrl.abort(); };
   }, [apiUrl, groupMode, sortBy, q]);
 
-  /* --- sorted groups --- */
   const sortedGroups = useMemo(() => {
     const arr = [...groups];
     if (sortBy === "best_price_asc") {
@@ -313,20 +292,19 @@ export default function PuttersPage() {
     return arr;
   }, [groups, sortBy]);
 
-  // close all when list changes
   useEffect(() => {
     const next = {};
     sortedGroups.forEach((g) => { next[g.model] = false; });
     setExpanded(next);
   }, [sortedGroups.map((g) => g.model).join("|")]);
 
-  /* --- expand handler: lazy load lows, series, stats --- */
   const toggleExpand = async (model) => {
     setExpanded((prev) => ({ ...prev, [model]: !prev[model] }));
-    const willOpen = !expanded[model];
-    if (willOpen) {
+    if (!expanded[model]) {
+      // mark as recently viewed when opening
       pushRecent(model);
 
+      // lazily load lows/series/stats
       if (!lowsByModel[model]) {
         try {
           const r = await fetch(`/api/analytics/lows?model=${encodeURIComponent(model)}`, { cache: "no-store" });
@@ -336,17 +314,15 @@ export default function PuttersPage() {
           setLowsByModel((prev) => ({ ...prev, [model]: { low1d: null, low7d: null, low30d: null } }));
         }
       }
-
       if (!seriesByModel[model]) {
         try {
           const r = await fetch(`/api/analytics/series?model=${encodeURIComponent(model)}`, { cache: "no-store" });
           const j = await r.json();
-          setSeriesByModel((prev) => ({ ...prev, [model]: Array.isArray(j?.series) ? j.series : [] }));
+          setSeriesByModel((prev) => ({ ...prev, [model]: j?.series || [] }));
         } catch {
           setSeriesByModel((prev) => ({ ...prev, [model]: [] }));
         }
       }
-
       if (!statsByModel[model]) {
         try {
           const r = await fetch(`/api/model-stats?model=${encodeURIComponent(model)}`, { cache: "no-store" });
@@ -385,6 +361,16 @@ export default function PuttersPage() {
     return { domDex, domHead, domLen: domLenVal };
   }
 
+  function fairPriceBadge(best, stats) {
+    if (!best || !stats) return null;
+    const p10 = Number(stats.p10), p50 = Number(stats.p50), p90 = Number(stats.p90);
+    if (!isFinite(p10) && !isFinite(p50)) return null;
+    if (isFinite(p10) && best <= p10) return { label: "Great deal", tone: "emerald" };
+    if (isFinite(p50) && best <= p50) return { label: "Good deal", tone: "green" };
+    return null;
+    // (You can extend with p90 → “Above market” etc.)
+  }
+
   const clearAll = () => {
     setQ(""); setOnlyComplete(true);
     setMinPrice(""); setMaxPrice("");
@@ -394,31 +380,6 @@ export default function PuttersPage() {
     setPage(1); setGroupMode(true); setBroaden(false);
   };
 
-  /* ---------------- compare actions ---------------- */
-  const isSelected = (offer) => {
-    const id = idForOffer(offer);
-    return selectedOffers.some((x) => idForOffer(x) === id);
-  };
-
-  const toggleSelectOffer = (offer) => {
-    setSelectedOffers((prev) => {
-      const id = idForOffer(offer);
-      const exists = prev.some((x) => idForOffer(x) === id);
-      if (exists) {
-        return prev.filter((x) => idForOffer(x) !== id);
-      }
-      // add; cap at MAX_COMPARE (drop oldest)
-      const next = [...prev, offer];
-      if (next.length > MAX_COMPARE) next.shift();
-      return next;
-    });
-  };
-
-  const removeSelected = (id) => {
-    setSelectedOffers((prev) => prev.filter((x) => idForOffer(x) !== id));
-  };
-
-  /* ---------------- render ---------------- */
   return (
     <main className="mx-auto max-w-6xl px-4 py-8">
       <header className="flex flex-col gap-2 sm:flex-row sm:items-end sm:justify-between">
@@ -475,7 +436,7 @@ export default function PuttersPage() {
         ))}
       </section>
 
-      {/* Controls */}
+      {/* Top controls */}
       <section className="mt-6 grid grid-cols-1 gap-3 md:grid-cols-5">
         <div className="md:col-span-2">
           <label className="mb-1 block text-sm font-medium">Search</label>
@@ -585,15 +546,30 @@ export default function PuttersPage() {
           <h3 className="mb-3 text-xs font-semibold uppercase tracking-wide text-gray-600">Dexterity</h3>
           <div className="flex flex-col gap-2 text-sm">
             <label className="flex items-center gap-2">
-              <input type="radio" name="dex" checked={dex === ""} onChange={() => setDex("")} />
+              <input
+                type="radio"
+                name="dex"
+                checked={dex === ""}
+                onChange={() => setDex("")}
+              />
               Any
             </label>
             <label className="flex items-center gap-2">
-              <input type="radio" name="dex" checked={dex === "RIGHT"} onChange={() => setDex("RIGHT")} />
+              <input
+                type="radio"
+                name="dex"
+                checked={dex === "RIGHT"}
+                onChange={() => setDex("RIGHT")}
+              />
               Right-handed
             </label>
             <label className="flex items-center gap-2">
-              <input type="radio" name="dex" checked={dex === "LEFT"} onChange={() => setDex("LEFT")} />
+              <input
+                type="radio"
+                name="dex"
+                checked={dex === "LEFT"}
+                onChange={() => setDex("LEFT")}
+              />
               Left-handed
             </label>
           </div>
@@ -604,15 +580,30 @@ export default function PuttersPage() {
           <h3 className="mb-3 text-xs font-semibold uppercase tracking-wide text-gray-600">Head Type</h3>
           <div className="flex flex-col gap-2 text-sm">
             <label className="flex items-center gap-2">
-              <input type="radio" name="head" checked={head === ""} onChange={() => setHead("")} />
+              <input
+                type="radio"
+                name="head"
+                checked={head === ""}
+                onChange={() => setHead("")}
+              />
               Any
             </label>
             <label className="flex items-center gap-2">
-              <input type="radio" name="head" checked={head === "BLADE"} onChange={() => setHead("BLADE")} />
+              <input
+                type="radio"
+                name="head"
+                checked={head === "BLADE"}
+                onChange={() => setHead("BLADE")}
+              />
               Blade
             </label>
             <label className="flex items-center gap-2">
-              <input type="radio" name="head" checked={head === "MALLET"} onChange={() => setHead("MALLET")} />
+              <input
+                type="radio"
+                name="head"
+                checked={head === "MALLET"}
+                onChange={() => setHead("MALLET")}
+              />
               Mallet
             </label>
           </div>
@@ -627,7 +618,9 @@ export default function PuttersPage() {
                 <input
                   type="checkbox"
                   checked={lengths.includes(L)}
-                  onChange={() => setLengths(prev => prev.includes(L) ? prev.filter(x => x !== L) : [...prev, L])}
+                  onChange={() => {
+                    setLengths(prev => prev.includes(L) ? prev.filter(x => x !== L) : [...prev, L]);
+                  }}
                 />
                 {L}&quot;
               </label>
@@ -638,7 +631,7 @@ export default function PuttersPage() {
           </div>
         </div>
 
-        {/* Buying Options */}
+        {/* Buying Options + Advanced */}
         <div className="rounded-lg border border-gray-200 p-4 md:col-span-3">
           <h3 className="mb-3 text-xs font-semibold uppercase tracking-wide text-gray-600">Buying Options</h3>
           <div className="flex flex-wrap gap-3">
@@ -662,13 +655,21 @@ export default function PuttersPage() {
 
           <div className="mt-4">
             <label className="flex items-center gap-2 text-sm">
-              <input type="checkbox" checked={showAdvanced} onChange={(e) => setShowAdvanced(e.target.checked)} />
+              <input
+                type="checkbox"
+                checked={showAdvanced}
+                onChange={(e) => setShowAdvanced(e.target.checked)}
+              />
               Show advanced options
             </label>
 
             {showAdvanced && (
               <label className="mt-3 flex items-center gap-2 text-sm">
-                <input type="checkbox" checked={groupMode} onChange={(e) => setGroupMode(e.target.checked)} />
+                <input
+                  type="checkbox"
+                  checked={groupMode}
+                  onChange={(e) => setGroupMode(e.target.checked)}
+                />
                 Group similar listings (model cards)
               </label>
             )}
@@ -696,7 +697,7 @@ export default function PuttersPage() {
       {/* LIVE analytics snapshot */}
       <MarketSnapshot snapshot={apiData?.analytics?.snapshot} meta={apiData?.meta} query={q} />
 
-      {/* Loading / Error */}
+      {/* Loading & error UI */}
       {q.trim() && loading && (
         <div className="mt-6 grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-2">
           {Array.from({ length: Math.min(FIXED_PER_PAGE, 6) }).map((_, i) => (
@@ -737,6 +738,7 @@ export default function PuttersPage() {
                 : null;
 
               const { domDex, domHead, domLen } = summarizeDexHead(g);
+
               const showAll = !!showAllOffersByModel[g.model];
               const list = isOpen ? (showAll ? ordered : ordered.slice(0, 10)) : [];
 
@@ -744,20 +746,8 @@ export default function PuttersPage() {
               const series = seriesByModel[g.model] || [];
               const stats = statsByModel[g.model] || null;
 
-              // fair price classification
-              let dealBadge = null;
-              if (stats && typeof g.bestPrice === "number") {
-                const p10 = Number(stats.p10);
-                const p50 = Number(stats.p50);
-                const p90 = Number(stats.p90);
-                if (isFinite(p10) && isFinite(p50) && isFinite(p90)) {
-                  if (g.bestPrice <= p10) dealBadge = { label: "Steal", cls: "bg-emerald-100 text-emerald-700", title: `≤ P10 (${formatPrice(p10)})` };
-                  else if (g.bestPrice <= p50) dealBadge = { label: "Good", cls: "bg-green-100 text-green-700", title: `≤ Median (${formatPrice(p50)})` };
-                  else if (g.bestPrice >= p90) dealBadge = { label: "High", cls: "bg-rose-100 text-rose-700", title: `≥ P90 (${formatPrice(p90)})` };
-                }
-              }
-
               const bestUrl = ordered.length ? ordered[0]?.url : null;
+              const fair = fairPriceBadge(g.bestPrice, stats);
 
               return (
                 <article key={g.model} className="overflow-hidden rounded-xl border border-gray-200 bg-white shadow-sm">
@@ -780,7 +770,7 @@ export default function PuttersPage() {
                           {g.count} offer{g.count === 1 ? "" : "s"} · {g.retailers.join(", ")}
                         </p>
 
-                        {/* chips */}
+                        {/* Dominant chips */}
                         <div className="mt-2 flex flex-wrap gap-2">
                           {domDex && (
                             <span className="rounded-full bg-slate-100 px-2 py-0.5 text-[11px] font-medium text-slate-700">
@@ -797,9 +787,14 @@ export default function PuttersPage() {
                               ~{domLen}&quot;
                             </span>
                           )}
+                          {fair && (
+                            <span className={`rounded-full px-2 py-0.5 text-[11px] font-medium text-white ${fair.tone === "emerald" ? "bg-emerald-600" : "bg-green-600"}`}>
+                              {fair.label}
+                            </span>
+                          )}
                         </div>
 
-                        {/* lows inline when open */}
+                        {/* Lows row (on expand) */}
                         {isOpen && (
                           <div className="mt-2 text-xs text-gray-600">
                             <span className="mr-2">Lows:</span>
@@ -808,32 +803,12 @@ export default function PuttersPage() {
                             <span>30d {formatPrice(Number(lows?.low30d))}</span>
                           </div>
                         )}
-
-                        {/* sparkline */}
-                        {isOpen && series.length > 1 && (
-                          <div className="mt-3">
-                            <PriceSparkline
-                              data={series}
-                              height={64}
-                              showAverage
-                              showMedian
-                            />
-                          </div>
-                        )}
                       </div>
 
                       <div className="flex flex-col items-end gap-1">
                         <div className="shrink-0 rounded-full bg-green-100 px-3 py-1 text-xs font-semibold text-green-700">
                           Best: {formatPrice(g.bestPrice, g.bestCurrency)}
                         </div>
-                        {dealBadge && (
-                          <div
-                            className={`rounded-full px-3 py-1 text-[11px] font-medium ${dealBadge.cls}`}
-                            title={dealBadge.title}
-                          >
-                            {dealBadge.label}
-                          </div>
-                        )}
                         {bestDelta && (
                           <div
                             className="rounded-full bg-emerald-50 px-3 py-1 text-[11px] font-medium text-emerald-700"
@@ -843,6 +818,7 @@ export default function PuttersPage() {
                           </div>
                         )}
 
+                        {/* Copy best link */}
                         <button
                           disabled={!bestUrl}
                           onClick={async () => {
@@ -858,6 +834,13 @@ export default function PuttersPage() {
                         </button>
                       </div>
                     </div>
+
+                    {/* Sparkline */}
+                    {isOpen && Array.isArray(series) && series.length > 1 && (
+                      <div className="mt-3">
+                        <PriceSparkline data={series} height={70} showAverage showMedian className="h-[70px]" />
+                      </div>
+                    )}
 
                     <div className="mt-4 flex gap-2">
                       <button
@@ -878,55 +861,58 @@ export default function PuttersPage() {
 
                     {isOpen && (
                       <ul className="mt-3 space-y-2">
-                        {list.map((o) => {
-                          const sel = isSelected(o);
-                          return (
-                            <li key={o.productId + o.url} className="flex items-center justify-between gap-3 rounded border border-gray-100 p-2">
-                              <div className="flex min-w-0 items-center gap-2">
-                                <input
-                                  type="checkbox"
-                                  checked={sel}
-                                  onChange={() => toggleSelectOffer(o)}
-                                  title={sel ? "Remove from compare" : "Add to compare"}
-                                />
-                                {retailerLogos[o.retailer] && (
-                                  // eslint-disable-next-line @next/next/no-img-element
-                                  <img src={retailerLogos[o.retailer]} alt={o.retailer} className="h-4 w-12 object-contain" />
-                                )}
-                                <div className="min-w-0">
-                                  <div className="truncate text-sm font-medium">
-                                    {o.retailer}
-                                    {o?.seller?.username && (
-                                      <span className="ml-2 text-xs text-gray-500">@{o.seller.username}</span>
-                                    )}
-                                    {typeof o?.seller?.feedbackPct === "number" && (
-                                      <span className="ml-2 rounded-full bg-gray-100 px-2 py-[2px] text-[11px] font-medium text-gray-700">
-                                        {o.seller.feedbackPct.toFixed(1)}%
-                                      </span>
-                                    )}
-                                  </div>
-                                  <div className="mt-0.5 truncate text-xs text-gray-500">
-                                    {shortDex(o?.specs?.dexterity)} · {headTxt(o?.specs?.headType)} · {lenTxt(o?.specs?.length)}
-                                    {o?.specs?.shaft && <> · {o.specs.shaft.toLowerCase()}</>}
-                                    {o?.specs?.hasHeadcover && <> · HC</>}
-                                    {o.createdAt && (<> · listed {timeAgo(new Date(o.createdAt).getTime())}</>)}
-                                  </div>
+                        {list.map((o) => (
+                          <li key={o.productId + o.url} className="flex items-center justify-between gap-3 rounded border border-gray-100 p-2">
+                            <div className="flex min-w-0 items-center gap-2">
+                              {retailerLogos[o.retailer] && (
+                                // eslint-disable-next-line @next/next/no-img-element
+                                <img src={retailerLogos[o.retailer]} alt={o.retailer} className="h-4 w-12 object-contain" />
+                              )}
+                              <div className="min-w-0">
+                                <div className="truncate text-sm font-medium">
+                                  {o.retailer}
+                                  {o?.seller?.username && (
+                                    <span className="ml-2 text-xs text-gray-500">@{o.seller.username}</span>
+                                  )}
+                                  {typeof o?.seller?.feedbackPct === "number" && (
+                                    <span className="ml-2 rounded-full bg-gray-100 px-2 py-[2px] text-[11px] font-medium text-gray-700">
+                                      {o.seller.feedbackPct.toFixed(1)}%
+                                    </span>
+                                  )}
+                                </div>
+                                {/* Enhanced spec line */}
+                                <div className="mt-0.5 truncate text-xs text-gray-500">
+                                  {(o.specs?.dexterity || "").toUpperCase() === "LEFT" ? "LH" :
+                                   (o.specs?.dexterity || "").toUpperCase() === "RIGHT" ? "RH" : "—"}
+                                  {" · "}
+                                  {(o.specs?.headType || "").toUpperCase() || "—"}
+                                  {" · "}
+                                  {Number.isFinite(Number(o?.specs?.length)) ? `${o.specs.length}"` : "—"}
+                                  {o?.specs?.shaft && <> · {String(o.specs.shaft).toLowerCase()}</>}
+                                  {o?.specs?.hosel && <> · {o.specs.hosel}</>}
+                                  {o?.specs?.face && <> · {o.specs.face}</>}
+                                  {o?.specs?.grip && <> · {o.specs.grip}</>}
+                                  {o?.specs?.hasHeadcover && <> · HC</>}
+                                  {o?.specs?.toeHang && <> · {o.specs.toeHang} toe</>}
+                                  {Number.isFinite(Number(o?.specs?.loft)) && <> · {o.specs.loft}° loft</>}
+                                  {Number.isFinite(Number(o?.specs?.lie)) && <> · {o.specs.lie}° lie</>}
+                                  {o.createdAt && (<> · listed {timeAgo(new Date(o.createdAt).getTime())}</>)}
                                 </div>
                               </div>
-                              <div className="flex items-center gap-3">
-                                <span className="text-sm font-semibold">{formatPrice(o.price, o.currency)}</span>
-                                <a
-                                  href={o.url}
-                                  target="_blank"
-                                  rel="noopener noreferrer"
-                                  className="inline-flex items-center rounded-md bg-blue-600 px-3 py-1.5 text-sm font-medium text-white hover:bg-blue-700"
-                                >
-                                  View
-                                </a>
-                              </div>
-                            </li>
-                          );
-                        })}
+                            </div>
+                            <div className="flex items-center gap-3">
+                              <span className="text-sm font-semibold">{formatPrice(o.price, o.currency)}</span>
+                              <a
+                                href={o.url}
+                                target="_blank"
+                                rel="noopener noreferrer"
+                                className="inline-flex items-center rounded-md bg-blue-600 px-3 py-1.5 text-sm font-medium text-white hover:bg-blue-700"
+                              >
+                                View
+                              </a>
+                            </div>
+                          </li>
+                        ))}
                         {!showAll && g.count > 10 && (
                           <li className="px-2 pt-1 text-xs text-gray-500">Showing top 10 offers.</li>
                         )}
@@ -965,51 +951,47 @@ export default function PuttersPage() {
       {q.trim() && !loading && !err && !groupMode && showAdvanced && (
         <>
           <section className="mt-6 grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
-            {offers.map((o) => {
-              const sel = isSelected(o);
-              return (
-                <article key={o.productId + o.url} className="overflow-hidden rounded-xl border border-gray-200 bg-white shadow-sm">
-                  <div className="relative aspect-[4/3] w-full bg-gray-50">
-                    {o.image ? (
-                      // eslint-disable-next-line @next/next/no-img-element
-                      <img src={o.image} alt={o.title} className="h-full w-full object-contain" loading="lazy" />
-                    ) : (
-                      <div className="flex h-full w-full items-center justify-center text-xs text-gray-400">No image</div>
-                    )}
+            {offers.map((o) => (
+              <article key={o.productId + o.url} className="overflow-hidden rounded-xl border border-gray-200 bg-white shadow-sm">
+                <div className="relative aspect-[4/3] w-full bg-gray-50">
+                  {o.image ? (
+                    // eslint-disable-next-line @next/next/no-img-element
+                    <img src={o.image} alt={o.title} className="h-full w-full object-contain" loading="lazy" />
+                  ) : (
+                    <div className="flex h-full w-full items-center justify-center text-xs text-gray-400">No image</div>
+                  )}
+                </div>
+                <div className="p-4">
+                  <h3 className="line-clamp-2 text-sm font-semibold">{o.title}</h3>
+                  <p className="mt-1 text-xs text-gray-500">
+                    {o?.seller?.username && <>@{o.seller.username} · </>}
+                    {typeof o?.seller?.feedbackPct === "number" && <>{o.seller.feedbackPct.toFixed(1)}% · </>}
+                    {(o.specs?.dexterity || "").toUpperCase() || "—"} · {(o.specs?.headType || "").toUpperCase() || "—"} ·
+                    {Number.isFinite(Number(o?.specs?.length)) ? `${o.specs.length}"` : "—"}
+                    {o?.specs?.shaft && <> · {String(o.specs.shaft).toLowerCase()}</>}
+                    {o?.specs?.hosel && <> · {o.specs.hosel}</>}
+                    {o?.specs?.face && <> · {o.specs.face}</>}
+                    {o?.specs?.grip && <> · {o.specs.grip}</>}
+                    {o?.specs?.hasHeadcover && <> · HC</>}
+                    {o?.specs?.toeHang && <> · {o.specs.toeHang} toe</>}
+                    {Number.isFinite(Number(o?.specs?.loft)) && <> · {o.specs.loft}° loft</>}
+                    {Number.isFinite(Number(o?.specs?.lie)) && <> · {o.specs.lie}° lie</>}
+                    {o.createdAt && (<> · listed {timeAgo(new Date(o.createdAt).getTime())}</>)}
+                  </p>
+                  <div className="mt-3 flex items-center justify-between">
+                    <span className="text-base font-semibold">{formatPrice(o.price, o.currency)}</span>
+                    <a
+                      href={o.url}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="inline-flex items-center rounded-md bg-blue-600 px-3 py-1.5 text-sm font-medium text-white hover:bg-blue-700"
+                    >
+                      View
+                    </a>
                   </div>
-                  <div className="p-4">
-                    <div className="flex items-start justify-between gap-2">
-                      <h3 className="line-clamp-2 text-sm font-semibold">{o.title}</h3>
-                      <input
-                        type="checkbox"
-                        checked={sel}
-                        onChange={() => toggleSelectOffer(o)}
-                        title={sel ? "Remove from compare" : "Add to compare"}
-                      />
-                    </div>
-                    <p className="mt-1 text-xs text-gray-500">
-                      {o?.seller?.username && <>@{o.seller.username} · </>}
-                      {typeof o?.seller?.feedbackPct === "number" && <>{o.seller.feedbackPct.toFixed(1)}% · </>}
-                      {shortDex(o?.specs?.dexterity)} · {headTxt(o?.specs?.headType)} · {lenTxt(o?.specs?.length)}
-                      {o?.specs?.shaft && <> · {o.specs.shaft.toLowerCase()}</>}
-                      {o?.specs?.hasHeadcover && <> · HC</>}
-                      {o.createdAt && (<> · listed {timeAgo(new Date(o.createdAt).getTime())}</>)}
-                    </p>
-                    <div className="mt-3 flex items-center justify-between">
-                      <span className="text-base font-semibold">{formatPrice(o.price, o.currency)}</span>
-                      <a
-                        href={o.url}
-                        target="_blank"
-                        rel="noopener noreferrer"
-                        className="inline-flex items-center rounded-md bg-blue-600 px-3 py-1.5 text-sm font-medium text-white hover:bg-blue-700"
-                      >
-                        View
-                      </a>
-                    </div>
-                  </div>
-                </article>
-              );
-            })}
+                </div>
+              </article>
+            ))}
           </section>
 
           {/* Pagination (flat) */}
@@ -1033,191 +1015,6 @@ export default function PuttersPage() {
             </button>
           </div>
         </>
-      )}
-
-      {/* -------- Compare tray (floating) -------- */}
-      {selectedOffers.length > 0 && (
-        <div className="fixed inset-x-0 bottom-4 z-[60] mx-auto w-full max-w-6xl px-4">
-          <div className="rounded-xl border border-gray-300 bg-white/95 backdrop-blur p-3 shadow-lg">
-            <div className="flex items-center justify-between gap-3">
-              <div className="flex items-center gap-2 text-sm">
-                <span className="rounded-md bg-gray-100 px-2 py-1 font-medium">
-                  Compare ({selectedOffers.length}/{MAX_COMPARE})
-                </span>
-                <span className="text-gray-500">Select up to {MAX_COMPARE} listings.</span>
-              </div>
-              <div className="flex items-center gap-2">
-                <button
-                  onClick={() => setCompareOpen(true)}
-                  className="rounded-md bg-blue-600 px-3 py-1.5 text-sm font-medium text-white hover:bg-blue-700 disabled:opacity-50"
-                  disabled={selectedOffers.length < 2}
-                >
-                  Compare
-                </button>
-                <button
-                  onClick={() => setSelectedOffers([])}
-                  className="rounded-md border px-3 py-1.5 text-sm hover:bg-gray-50"
-                >
-                  Clear
-                </button>
-              </div>
-            </div>
-
-            <div className="mt-3 grid grid-cols-2 gap-3 sm:grid-cols-4">
-              {selectedOffers.map((o) => {
-                const id = idForOffer(o);
-                return (
-                  <div key={id} className="flex items-center gap-2 rounded-lg border border-gray-200 p-2">
-                    {/* eslint-disable-next-line @next/next/no-img-element */}
-                    {o.image ? (
-                      <img src={o.image} alt="" className="h-10 w-10 rounded object-cover" />
-                    ) : (
-                      <div className="h-10 w-10 rounded bg-gray-100" />
-                    )}
-                    <div className="min-w-0">
-                      <div className="truncate text-xs font-medium">
-                        {o.retailer}{o?.seller?.username ? ` · @${o.seller.username}` : ""}
-                      </div>
-                      <div className="truncate text-xs text-gray-500">
-                        {formatPrice(o.price, o.currency)} · {shortDex(o?.specs?.dexterity)} · {headTxt(o?.specs?.headType)} · {lenTxt(o?.specs?.length)}
-                      </div>
-                    </div>
-                    <button
-                      onClick={() => removeSelected(id)}
-                      className="ml-auto rounded-md border px-2 py-1 text-xs hover:bg-gray-50"
-                      title="Remove"
-                    >
-                      Remove
-                    </button>
-                  </div>
-                );
-              })}
-            </div>
-          </div>
-        </div>
-      )}
-
-      {/* -------- Compare modal -------- */}
-      {compareOpen && (
-        <div className="fixed inset-0 z-[70] flex items-center justify-center bg-black/40 p-4">
-          <div className="max-h-[85vh] w-full max-w-5xl overflow-auto rounded-xl bg-white p-4 shadow-2xl">
-            <div className="mb-3 flex items-center justify-between">
-              <h2 className="text-lg font-semibold">Compare listings</h2>
-              <button
-                onClick={() => setCompareOpen(false)}
-                className="rounded-md border px-3 py-1.5 text-sm hover:bg-gray-50"
-              >
-                Close
-              </button>
-            </div>
-
-            <div className="overflow-x-auto">
-              <table className="min-w-full border-collapse text-sm">
-                <thead>
-                  <tr className="border-b bg-gray-50 text-left">
-                    <th className="p-2">Listing</th>
-                    {selectedOffers.map((o) => (
-                      <th key={idForOffer(o)} className="p-2 font-medium">
-                        <div className="flex items-center gap-2">
-                          {/* eslint-disable-next-line @next/next/no-img-element */}
-                          {o.image ? (
-                            <img src={o.image} alt="" className="h-10 w-10 rounded object-cover" />
-                          ) : (
-                            <div className="h-10 w-10 rounded bg-gray-100" />
-                          )}
-                          <div className="min-w-0">
-                            <div className="truncate font-semibold">
-                              {o.retailer}
-                              {o?.seller?.username && (
-                                <span className="ml-1 text-xs text-gray-500">@{o.seller.username}</span>
-                              )}
-                            </div>
-                            <div className="text-xs text-gray-500 truncate max-w-[180px]">
-                              {o.title || ""}
-                            </div>
-                          </div>
-                        </div>
-                      </th>
-                    ))}
-                  </tr>
-                </thead>
-                <tbody>
-                  <tr className="border-b">
-                    <td className="p-2 font-medium">Price</td>
-                    {selectedOffers.map((o) => (
-                      <td key={idForOffer(o)} className="p-2">{formatPrice(o.price, o.currency)}</td>
-                    ))}
-                  </tr>
-                  <tr className="border-b">
-                    <td className="p-2 font-medium">Seller</td>
-                    {selectedOffers.map((o) => (
-                      <td key={idForOffer(o)} className="p-2">
-                        {o?.seller?.username ? `@${o.seller.username}` : "—"}
-                        {typeof o?.seller?.feedbackPct === "number" && (
-                          <span className="ml-2 rounded-full bg-gray-100 px-2 py-[2px] text-[11px] font-medium text-gray-700">
-                            {o.seller.feedbackPct.toFixed(1)}%
-                          </span>
-                        )}
-                      </td>
-                    ))}
-                  </tr>
-                  <tr className="border-b">
-                    <td className="p-2 font-medium">Dexterity</td>
-                    {selectedOffers.map((o) => (
-                      <td key={idForOffer(o)} className="p-2">{shortDex(o?.specs?.dexterity)}</td>
-                    ))}
-                  </tr>
-                  <tr className="border-b">
-                    <td className="p-2 font-medium">Head</td>
-                    {selectedOffers.map((o) => (
-                      <td key={idForOffer(o)} className="p-2">{headTxt(o?.specs?.headType)}</td>
-                    ))}
-                  </tr>
-                  <tr className="border-b">
-                    <td className="p-2 font-medium">Length</td>
-                    {selectedOffers.map((o) => (
-                      <td key={idForOffer(o)} className="p-2">{lenTxt(o?.specs?.length)}</td>
-                    ))}
-                  </tr>
-                  <tr className="border-b">
-                    <td className="p-2 font-medium">Shaft</td>
-                    {selectedOffers.map((o) => (
-                      <td key={idForOffer(o)} className="p-2">{o?.specs?.shaft ? o.specs.shaft.toLowerCase() : "—"}</td>
-                    ))}
-                  </tr>
-                  <tr className="border-b">
-                    <td className="p-2 font-medium">Headcover</td>
-                    {selectedOffers.map((o) => (
-                      <td key={idForOffer(o)} className="p-2">{o?.specs?.hasHeadcover ? "Yes" : "No"}</td>
-                    ))}
-                  </tr>
-                  <tr>
-                    <td className="p-2 font-medium">Listed</td>
-                    {selectedOffers.map((o) => (
-                      <td key={idForOffer(o)} className="p-2">
-                        {o.createdAt ? timeAgo(new Date(o.createdAt).getTime()) : "—"}
-                      </td>
-                    ))}
-                  </tr>
-                </tbody>
-              </table>
-            </div>
-
-            <div className="mt-4 flex flex-wrap gap-2">
-              {selectedOffers.map((o) => (
-                <a
-                  key={idForOffer(o)}
-                  href={o.url}
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  className="inline-flex items-center rounded-md border px-3 py-1.5 text-sm hover:bg-gray-50"
-                >
-                  Open {o.retailer}
-                </a>
-              ))}
-            </div>
-          </div>
-        </div>
       )}
     </main>
   );
