@@ -4,7 +4,122 @@ import { useEffect, useMemo, useState } from "react";
 import MarketSnapshot from "@/components/MarketSnapshot";
 import PriceSparkline from "@/components/PriceSparkline";
 
-// ---------- helpers ----------
+/* ============================
+   SMART FAIR-PRICE BADGE (inline)
+   ============================ */
+
+// Confidence from sample size + dispersion (IQR/median or approx)
+function getConfidence(sampleSize = 0, dispersionRatio = 0.35) {
+  if (!Number.isFinite(sampleSize) || sampleSize < 8) return "insufficient";
+  if (sampleSize >= 30 && dispersionRatio < 0.25) return "high";
+  if (sampleSize >= 12 && dispersionRatio < 0.50) return "medium";
+  return "low";
+}
+function getTier(deltaPct, confidence) {
+  if (confidence === "insufficient") return "insufficient";
+  if (deltaPct <= -0.20) return "great_deal";
+  if (deltaPct <= -0.10) return "good_price";
+  if (deltaPct < 0.10)   return "fair";
+  if (deltaPct <= 0.25)  return "above_market";
+  return "overpriced";
+}
+function dealScoreFrom(deltaPct, confidence) {
+  const savings = Math.min(Math.max(-deltaPct, 0), 0.40); // 0..0.40
+  let score = Math.round(savings * 100); // 0..40
+  const confBonus =
+    confidence === "high" ? 60 :
+    confidence === "medium" ? 40 :
+    confidence === "low" ? 20 : 0;
+  score += confBonus;
+  if (deltaPct > 0.10) score = Math.max(5, score - 20);
+  return Math.max(0, Math.min(100, score));
+}
+// Build a badge from listingPrice + stats {p10,p50,p90,n?,dispersionRatio?}
+function makeSmartBadge({ listingPrice, stats, windowDays = 60 }) {
+  if (!stats || typeof listingPrice !== "number" || !isFinite(listingPrice)) {
+    return { tier: "insufficient", label: "Not enough data" };
+  }
+  const p50 = Number(stats.p50);
+  if (!isFinite(p50) || p50 <= 0) {
+    return { tier: "insufficient", label: "Not enough data" };
+  }
+  const expected = p50;
+  const deltaPct = (listingPrice - expected) / expected;
+
+  const n = Number(stats.n ?? stats.sampleSize ?? stats.count ?? 0);
+  const dispersionRatio = Number.isFinite(stats.dispersionRatio)
+    ? Number(stats.dispersionRatio)
+    : (isFinite(stats.p90) && isFinite(stats.p10) && p50 > 0 ? ((stats.p90 - stats.p10) / 2) / p50 : 0.35);
+
+  const confidence = getConfidence(n, dispersionRatio);
+  const tier = getTier(deltaPct, confidence);
+  const score = tier === "insufficient" ? 0 : dealScoreFrom(deltaPct, confidence);
+
+  const LABELS = {
+    great_deal: "Great Deal",
+    good_price: "Good Price",
+    fair: "Fair",
+    above_market: "Above Market",
+    overpriced: "Overpriced",
+    insufficient: "Not enough data",
+  };
+  const COLORS = {
+    great_deal: "bg-green-100 text-green-800 ring-green-200",
+    good_price: "bg-emerald-100 text-emerald-800 ring-emerald-200",
+    fair: "bg-slate-100 text-slate-800 ring-slate-200",
+    above_market: "bg-amber-100 text-amber-900 ring-amber-200",
+    overpriced: "bg-red-100 text-red-800 ring-red-200",
+    insufficient: "bg-zinc-100 text-zinc-700 ring-zinc-200",
+  };
+  const ICONS = {
+    great_deal: "✅",
+    good_price: "👍",
+    fair: "⚖️",
+    above_market: "⬆️",
+    overpriced: "⚠️",
+    insufficient: "？",
+  };
+
+  const pctAbs = Math.abs(deltaPct * 100);
+  const vsText = deltaPct < 0 ? `~${pctAbs.toFixed(0)}% below`
+               : deltaPct > 0 ? `~${pctAbs.toFixed(0)}% above`
+               : "near";
+  const nText = n ? `${n}` : "—";
+  const tooltip = tier === "insufficient"
+    ? "Not enough comparable sales to estimate a fair market price confidently."
+    : `Based on ${nText} comparable sales in ~${windowDays} days. This listing is ${vsText} expected (median). Confidence: ${confidence}.`;
+
+  return {
+    tier,
+    label: LABELS[tier],
+    color: COLORS[tier],
+    icon: ICONS[tier],
+    deltaPct,
+    pctAbs,
+    score,
+    confidence,
+    tooltip,
+  };
+}
+function SmartPriceBadge({ price, stats, windowDays = 60, className = "" }) {
+  const badge = useMemo(() => makeSmartBadge({ listingPrice: price, stats, windowDays }), [price, stats, windowDays]);
+  if (!badge) return null;
+  return (
+    <span
+      className={`inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[11px] font-medium ring-1 ${badge.color} ${className}`}
+      title={badge.tooltip}
+      aria-label={`Price badge: ${badge.label}. Score ${badge.score}. ${badge.tooltip}`}
+    >
+      <span aria-hidden="true">{badge.icon}</span>
+      <span>{badge.label}</span>
+      {badge.tier !== "insufficient" && <span className="opacity-70">• {badge.score}</span>}
+    </span>
+  );
+}
+
+/* ============================
+   ORIGINAL HELPERS
+   ============================ */
 function formatPrice(value, currency = "USD") {
   if (typeof value !== "number" || !isFinite(value)) return "—";
   try {
@@ -42,7 +157,9 @@ async function copyToClipboard(text) {
   }
 }
 
-// ---------- constants ----------
+/* ============================
+   CONSTANTS
+   ============================ */
 const BRANDS = [
   { label: "Scotty Cameron", q: "scotty cameron putter" },
   { label: "TaylorMade", q: "taylormade putter" },
@@ -78,7 +195,9 @@ const retailerLogos = {
   eBay: "https://upload.wikimedia.org/wikipedia/commons/1/1b/EBay_logo.svg",
 };
 
-// ---------- NEW: recent models hook ----------
+/* ============================
+   RECENT MODELS
+   ============================ */
 const RECENT_KEY = "putteriq_recent_models";
 function useRecentModels() {
   const [recent, setRecent] = useState([]);
@@ -103,7 +222,25 @@ function useRecentModels() {
   return { recent, push, clear };
 }
 
-// ---------- component ----------
+/* ============================
+   EXTRA HELPERS (for flat view stats)
+   ============================ */
+
+// Derive a model key for stats lookup in flat view.
+function getModelKey(o) {
+  if (typeof o?.model === "string" && o.model.trim()) return o.model.trim();
+  if (typeof o?.groupModel === "string" && o.groupModel.trim()) return o.groupModel.trim();
+  if (typeof o?.title === "string" && o.title.trim()) {
+    const t = o.title.replace(/\s+/g, " ").trim();
+    const first = t.split(" - ")[0] || t;
+    return first.slice(0, 120);
+  }
+  return "";
+}
+
+/* ============================
+   PAGE
+   ============================ */
 export default function PuttersPage() {
   // filters/state
   const [onlyComplete, setOnlyComplete] = useState(true);
@@ -138,6 +275,7 @@ export default function PuttersPage() {
   const [copiedFor, setCopiedFor] = useState("");
 
   // Per-model caches
+  // NOTE: we store stats object directly as value: statsByModel[model] = {p10,p50,p90,...} or null
   const [lowsByModel, setLowsByModel] = useState({});
   const [seriesByModel, setSeriesByModel] = useState({});
   const [statsByModel, setStatsByModel] = useState({});
@@ -304,7 +442,7 @@ export default function PuttersPage() {
       // mark as recently viewed when opening
       pushRecent(model);
 
-      // lazily load lows/series/stats
+      // lazily load lows/series/stats for this group
       if (!lowsByModel[model]) {
         try {
           const r = await fetch(`/api/analytics/lows?model=${encodeURIComponent(model)}`, { cache: "no-store" });
@@ -361,14 +499,14 @@ export default function PuttersPage() {
     return { domDex, domHead, domLen: domLenVal };
   }
 
+  // quick “Great deal/Good deal” chip (kept for the summary row)
   function fairPriceBadge(best, stats) {
     if (!best || !stats) return null;
-    const p10 = Number(stats.p10), p50 = Number(stats.p50), p90 = Number(stats.p90);
+    const p10 = Number(stats.p10), p50 = Number(stats.p50);
     if (!isFinite(p10) && !isFinite(p50)) return null;
     if (isFinite(p10) && best <= p10) return { label: "Great deal", tone: "emerald" };
     if (isFinite(p50) && best <= p50) return { label: "Good deal", tone: "green" };
     return null;
-    // (You can extend with p90 → “Above market” etc.)
   }
 
   const clearAll = () => {
@@ -379,6 +517,57 @@ export default function PuttersPage() {
     setSortBy("best_price_asc");
     setPage(1); setGroupMode(true); setBroaden(false);
   };
+
+  /* ============================
+     FLAT VIEW: prefetch stats for visible items
+     ============================ */
+  useEffect(() => {
+    if (!q.trim() || loading || err || groupMode || !showAdvanced) return;
+    if (!Array.isArray(offers) || offers.length === 0) return;
+
+    let abort = false;
+    (async () => {
+      const needed = [];
+      for (const o of offers) {
+        const key = getModelKey(o);
+        if (!key) continue;
+        if (statsByModel[key] === undefined || statsByModel[key] === null) {
+          needed.push(key);
+        }
+      }
+      if (needed.length === 0) return;
+
+      const unique = Array.from(new Set(needed)).slice(0, 20); // safety cap
+      try {
+        const results = await Promise.all(
+          unique.map(async (model) => {
+            try {
+              const r = await fetch(`/api/model-stats?model=${encodeURIComponent(model)}`, { cache: "no-store" });
+              const j = await r.json();
+              return { model, stats: j?.stats || null };
+            } catch {
+              return { model, stats: null };
+            }
+          })
+        );
+        if (abort) return;
+
+        setStatsByModel((prev) => {
+          const next = { ...prev };
+          for (const { model, stats } of results) {
+            if (next[model] === undefined || next[model] === null) {
+              next[model] = stats; // store stats object directly
+            }
+          }
+          return next;
+        });
+      } catch {
+        // ignore; badges will fall back to "Not enough data"
+      }
+    })();
+
+    return () => { abort = true; };
+  }, [q, loading, err, groupMode, showAdvanced, offers, statsByModel]);
 
   return (
     <main className="mx-auto max-w-6xl px-4 py-8">
@@ -731,8 +920,8 @@ export default function PuttersPage() {
                   : [...g.offers].sort((a,b) => (a.price ?? Infinity) - (b.price ?? Infinity));
 
               const nums = ordered.map(o => o?.price).filter(x => typeof x === "number").sort((a,b)=>a-b);
-              const n = nums.length;
-              const med = n < 2 ? null : (n % 2 ? nums[Math.floor(n/2)] : (nums[n/2-1]+nums[n/2])/2);
+              const nNums = nums.length;
+              const med = nNums < 2 ? null : (nNums % 2 ? nums[Math.floor(nNums/2)] : (nums[nNums/2-1]+nums[nNums/2])/2);
               const bestDelta = (typeof g.bestPrice === "number" && typeof med === "number" && med - g.bestPrice > 0)
                 ? { diff: med - g.bestPrice, pct: ((med - g.bestPrice)/med)*100 }
                 : null;
@@ -747,6 +936,7 @@ export default function PuttersPage() {
               const stats = statsByModel[g.model] || null;
 
               const bestUrl = ordered.length ? ordered[0]?.url : null;
+
               const fair = fairPriceBadge(g.bestPrice, stats);
 
               return (
@@ -770,8 +960,8 @@ export default function PuttersPage() {
                           {g.count} offer{g.count === 1 ? "" : "s"} · {g.retailers.join(", ")}
                         </p>
 
-                        {/* Dominant chips */}
-                        <div className="mt-2 flex flex-wrap gap-2">
+                        {/* Dominant chips + BADGES */}
+                        <div className="mt-2 flex flex-wrap items-center gap-2">
                           {domDex && (
                             <span className="rounded-full bg-slate-100 px-2 py-0.5 text-[11px] font-medium text-slate-700">
                               {domDex === "LEFT" ? "Left-hand" : "Right-hand"}
@@ -787,6 +977,11 @@ export default function PuttersPage() {
                               ~{domLen}&quot;
                             </span>
                           )}
+
+                          {/* New smarter fair price badge (based on stats.p50) */}
+                          <SmartPriceBadge price={g.bestPrice} stats={stats} className="ml-1" />
+
+                          {/* (Optional) quick chip */}
                           {fair && (
                             <span className={`rounded-full px-2 py-0.5 text-[11px] font-medium text-white ${fair.tone === "emerald" ? "bg-emerald-600" : "bg-green-600"}`}>
                               {fair.label}
@@ -901,6 +1096,8 @@ export default function PuttersPage() {
                               </div>
                             </div>
                             <div className="flex items-center gap-3">
+                              {/* Per-listing badge using group's stats */}
+                              <SmartPriceBadge price={o.price} stats={stats} />
                               <span className="text-sm font-semibold">{formatPrice(o.price, o.currency)}</span>
                               <a
                                 href={o.url}
@@ -978,8 +1175,38 @@ export default function PuttersPage() {
                     {Number.isFinite(Number(o?.specs?.lie)) && <> · {o.specs.lie}° lie</>}
                     {o.createdAt && (<> · listed {timeAgo(new Date(o.createdAt).getTime())}</>)}
                   </p>
+
                   <div className="mt-3 flex items-center justify-between">
-                    <span className="text-base font-semibold">{formatPrice(o.price, o.currency)}</span>
+                    <div className="flex items-center gap-2">
+                      {/* Flat-view badge: uses prefetched statsByModel via derived key */}
+                      {(() => {
+                        const key = getModelKey(o);
+                        const stats = key ? statsByModel[key] || null : null;
+                        return <SmartPriceBadge price={o.price} stats={stats} />;
+                      })()}
+                      <span className="text-base font-semibold">{formatPrice(o.price, o.currency)}</span>
+
+                      {/* Optional Save $ chip if below median */}
+                      {(() => {
+                        const key = getModelKey(o);
+                        const p50 = key && statsByModel[key]?.p50;
+                        if (Number.isFinite(Number(p50)) && typeof o.price === "number" && o.price < Number(p50)) {
+                          const save = Number(p50) - o.price;
+                          const pct = Math.round((save / Number(p50)) * 100);
+                          return (
+                            <span
+                              className="rounded-full bg-emerald-50 px-2 py-0.5 text-[11px] font-medium text-emerald-700"
+                              title={`Median ${formatPrice(Number(p50))} · Save ~${formatPrice(save)} (~${pct}%)`}
+                            >
+                              Save {formatPrice(save)}
+                            </span>
+                          );
+                        }
+                        return null;
+                      })()}
+                    </div>
+
+                    {/* Affiliate/outbound link UNCHANGED */}
                     <a
                       href={o.url}
                       target="_blank"
