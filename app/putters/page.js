@@ -1230,16 +1230,15 @@ export default function PuttersPage() {
                     <div className="mt-3 flex items-center justify-between">
                       <div className="flex items-center gap-2">
                         {/* Flat-view badge: uses prefetched (model, condition) stats */}
-                        <SmartPriceBadge price={o.price} stats={stats} /
-			<SmartPriceBadge
-  price={Number(o.price)}
-  baseStats={statsByModel[g.model] || null}
-  variantStats={null}
-  title={o.title}
-  specs={o.specs}
-  brand={g?.brand}
-  className="mr-2"
-/>
+                      <SmartPriceBadge
+  		price={Number(o.price)}
+ 		 baseStats={statsByModel[g.model] || null}
+  		variantStats={null}
+ 		 title={o.title}
+  		specs={o.specs}
+ 			 brand={g?.brand}
+  		className="mr-2"
+			/>
 
 
                         <span className="text-base font-semibold">{formatPrice(o.price, o.currency)}</span>
