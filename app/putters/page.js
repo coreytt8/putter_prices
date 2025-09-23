@@ -1094,7 +1094,7 @@ export default function PuttersPage() {
                                   <img src={retailerLogos[o.retailer]} alt={o.retailer} className="h-4 w-12 object-contain" />
                                 )}
                                 <div className="min-w-0">
-                                 <div className="truncate text-sm font-medium">
+                              <div className="truncate text-sm font-medium">
   {o.retailer}
   {o?.seller?.username && (
     <>
@@ -1112,15 +1112,14 @@ export default function PuttersPage() {
       </span>
     </>
   )}
+  {typeof o?.seller?.feedbackPct === "number" && (
+    <span className="ml-2 rounded-full bg-gray-100 px-2 py-[2px] text-[11px] font-medium text-gray-700">
+      {o.seller.feedbackPct.toFixed(1)}%
+    </span>
+  )}
 </div>
 
-                                    )}
-                                    {typeof o?.seller?.feedbackPct === "number" && (
-                                      <span className="ml-2 rounded-full bg-gray-100 px-2 py-[2px] text-[11px] font-medium text-gray-700">
-                                        {o.seller.feedbackPct.toFixed(1)}%
-                                      </span>
-                                    )}
-                                  </div>
+                               
                                   {/* Enhanced spec line */}
                                   <div className="mt-0.5 truncate text-xs text-gray-500">
                                     {(o.specs?.dexterity || "").toUpperCase() === "LEFT" ? "LH" :
