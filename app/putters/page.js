@@ -3,6 +3,7 @@
 import { useEffect, useMemo, useState } from "react";
 import MarketSnapshot from "@/components/MarketSnapshot";
 import PriceSparkline from "@/components/PriceSparkline";
+import SmartPriceBadge from "@/components/SmartPriceBadge";
 
 /* ============================
    SMART FAIR-PRICE BADGE (inline, JS/JSX)
@@ -985,36 +986,26 @@ export default function PuttersPage() {
                           {g.count} offer{g.count === 1 ? "" : "s"} · {g.retailers.join(", ")}
                         </p>
 
-                        {/* Dominant chips + BADGES */}
-                        <div className="mt-2 flex flex-wrap items-center gap-2">
-                          {domDex && (
-                            <span className="rounded-full bg-slate-100 px-2 py-0.5 text-[11px] font-medium text-slate-700">
-                              {domDex === "LEFT" ? "Left-hand" : "Right-hand"}
-                            </span>
-                          )}
-                          {domHead && (
-                            <span className="rounded-full bg-indigo-100 px-2 py-0.5 text-[11px] font-medium text-indigo-700">
-                              {domHead === "MALLET" ? "Mallet" : "Blade"}
-                            </span>
-                          )}
-                          {Number.isFinite(domLen) && (
-                            <span className="rounded-full bg-amber-100 px-2 py-0.5 text-[11px] font-medium text-amber-800">
-                              ~{domLen}&quot;
-                            </span>
-                          )}
+                        {/* Dominant chips */}
+<div className="mt-2 flex flex-wrap gap-2">
+  {domDex && ...}
+  {domHead && ...}
+  {Number.isFinite(domLen) && ...}
+</div>
 
-                          {/* New smarter fair price badge (based on stats.p50) */}
-                          <SmartPriceBadge price={g.bestPrice} stats={stats} className="ml-1" />
-
-                          {/* (Optional) quick chip */}
-                          {fair && (
-                            <span className={`rounded-full px-2 py-0.5 text-[11px] font-medium text-white ${fair.tone === "emerald" ? "bg-emerald-600" : "bg-green-600"}`}>
-                              {fair.label}
-                            </span>
-                          )}
-                        </div>
-
-                        {/* Lows row (on expand) */}
+{/* New: smarter group badge */}
+<div className="mt-2">
+  <SmartPriceBadge
+    price={Number(g.bestPrice)}
+    baseStats={statsByModel[g.model] || null}
+    variantStats={null} // hook up later when you have variant stats
+    title={ordered?.[0]?.title || g.model}
+    specs={ordered?.[0]?.specs}
+    brand={g?.brand}
+    showHelper
+  />
+</div>
+                       {/* Lows row (on expand) */}
                         {isOpen && (
                           <div className="mt-2 text-xs text-gray-600">
                             <span className="mr-2">Lows:</span>
