@@ -1127,7 +1127,15 @@ export default function PuttersPage() {
                               </div>
                               <div className="flex items-center gap-3">
                                 {/* Per-listing badge using (model,condition) stats */}
-                                <SmartPriceBadge price={o.price} stats={perOfferStats} />
+                                  <SmartPriceBadge
+    price={Number(o.price)}
+    baseStats={statsByModel[g.model] || null}
+    variantStats={null}
+    title={o.title}
+    specs={o.specs}
+    brand={g?.brand}
+    className="mr-2"
+  />
                                 <span className="text-sm font-semibold">{formatPrice(o.price, o.currency)}</span>
                                 <a
                                   href={o.url}
