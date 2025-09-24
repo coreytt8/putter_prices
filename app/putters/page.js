@@ -1154,21 +1154,6 @@ export default function PuttersPage() {
 
   return (
     <li
-{(() => {
-  const condParam =
-    (o?.conditionBand || o?.condition || "").toUpperCase() ||
-    selectedConditionBand(conds) ||
-    "";
-
-  // Variant-aware stats lookup
-  const modelKey   = getModelKey(o);
-  const variant    = detectVariant(o?.title);
-  const variantKey = getStatsKey3(modelKey, variant, condParam);
-  const baseKey    = getStatsKey(modelKey, condParam);
-  const perOfferStats = statsByModel[variantKey] ?? statsByModel[baseKey] ?? stats;
-
-  return (
-    <li
       key={o.productId + o.url}
       className="flex items-center justify-between gap-3 rounded border border-gray-100 p-2"
     >
@@ -1200,20 +1185,17 @@ export default function PuttersPage() {
 
       {/* RIGHT: badge + price + view */}
       <div className="flex items-center gap-3">
-        {/* ✅ variant → base → group */}
         <SmartPriceBadge
           price={Number(o.price)}
-          baseStats={perOfferStats}
+          baseStats={perOfferStats}  // variant → base → group
           variantStats={null}
           title={o.title}
           specs={o.specs}
           brand={g?.brand}
         />
-
         <span className="text-sm font-semibold">
           {typeof o.price === "number" ? formatPrice(o.price, o.currency) : "—"}
         </span>
-
         <a
           href={o.url}
           target="_blank"
@@ -1225,7 +1207,7 @@ export default function PuttersPage() {
       </div>
     </li>
   );
-})()}
+})}
 
                                
                                   {/* Enhanced spec line */}
