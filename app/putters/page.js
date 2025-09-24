@@ -6,8 +6,6 @@ import PriceSparkline from "@/components/PriceSparkline";
 import SmartPriceBadge from "@/components/SmartPriceBadge";
 import { detectVariant } from "@/lib/variantMap";
 
-
-
 /* ============================
    SMART FAIR-PRICE BADGE (inline, JS/JSX)
    ============================ */
@@ -106,7 +104,6 @@ function makeSmartBadge({ listingPrice, stats, windowDays = 60 }) {
     tooltip,
   };
 }
-
 
 /* ============================
    ORIGINAL HELPERS
@@ -218,21 +215,18 @@ function useRecentModels() {
 }
 
 /* ============================
-   EXTRA HELPERS (for flat view stats & condition awareness)
+   EXTRA HELPERS
    ============================ */
-
-// Derive a model key for stats lookup in flat view.
 function getModelKey(o) {
   if (typeof o?.model === "string" && o.model.trim()) return o.model.trim();
   if (typeof o?.groupModel === "string" && o.groupModel.trim()) return o.groupModel.trim();
   if (typeof o?.title === "string" && o.title.trim()) {
-    const t = o.title.replace(/\\s+/g, " ").trim();
+    const t = o.title.replace(/\s+/g, " ").trim();
     const first = t.split(" - ")[0] || t;
     return first.slice(0, 120);
   }
   return "";
 }
-
 function selectedConditionBand(conds) {
   return Array.isArray(conds) && conds.length === 1 ? conds[0] : "";
 }
@@ -293,8 +287,7 @@ export default function PuttersPage() {
   // Per-model caches
   const [lowsByModel, setLowsByModel] = useState({});   // model -> lows
   const [seriesByModel, setSeriesByModel] = useState({}); // model -> series
-  // IMPORTANT: stats cache is keyed by `${model}::${condition||ANY}`
-  const [statsByModel, setStatsByModel] = useState({});
+  const [statsByModel, setStatsByModel] = useState({});   // `${model}::${cond}` or `${model}::${variant}::${cond}`
 
   // recent models
   const { recent, push: pushRecent, clear: clearRecent } = useRecentModels();
@@ -542,45 +535,70 @@ export default function PuttersPage() {
   };
 
   /* ============================
-     FLAT VIEW: prefetch stats for visible items (condition-aware)
+     FLAT VIEW: prefetch stats for visible items (variant + base)
      ============================ */
   useEffect(() => {
-  // Only run in flat/advanced mode when we have offers
-  if (!q.trim() || loading || err || groupMode || !showAdvanced) return;
-  if (!Array.isArray(offers) || offers.length === 0) return;
+    // Only run in flat/advanced mode when we have offers
+    if (!q.trim() || loading || err || groupMode || !showAdvanced) return;
+    if (!Array.isArray(offers) || offers.length === 0) return;
 
-  let abort = false;
-  const selCond = selectedConditionBand(conds) || "";
-  const seen = new Set();
-  const jobs = [];
+    let abort = false;
+    const selCond = selectedConditionBand(conds) || "";
+    const seen = new Set();
+    const jobs = [];
 
-  for (const o of offers) {
-    const modelKey = getModelKey(o);
-    const condParam =
-      (o?.conditionBand || o?.condition || "").toUpperCase() ||
-      selCond ||
-      "";
-    const variant = detectVariant(o?.title);
+    for (const o of offers) {
+      const modelKey = getModelKey(o);
+      const condParam =
+        (o?.conditionBand || o?.condition || "").toUpperCase() ||
+        selCond ||
+        "";
+      const variant = detectVariant(o?.title);
 
-    // ----- 1) VARIANT key first -----
-    if (variant) {
-      const vKey = getStatsKey3(modelKey, variant, condParam);
-      if (vKey && !statsByModel[vKey]) {
-        const vUrl =
+      // 1) Variant key first
+      if (variant) {
+        const vKey = getStatsKey3(modelKey, variant, condParam);
+        if (vKey && !statsByModel[vKey]) {
+          const vUrl =
+            `/api/model-stats?model=${encodeURIComponent(modelKey)}` +
+            `${condParam ? `&condition=${encodeURIComponent(condParam)}` : ""}` +
+            `&variant=${encodeURIComponent(variant)}`;
+
+          if (!seen.has(vUrl)) {
+            seen.add(vUrl);
+            jobs.push(
+              fetch(vUrl)
+                .then((r) => (r.ok ? r.json() : null))
+                .then((json) => {
+                  if (abort || !json) return;
+                  const stats = json?.stats ?? json;
+                  if (stats && Object.keys(stats).length) {
+                    setStatsByModel((prev) => ({ ...prev, [vKey]: stats }));
+                  }
+                })
+                .catch(() => {})
+            );
+          }
+        }
+      }
+
+      // 2) Base key fallback
+      const baseKey = getStatsKey(modelKey, condParam);
+      if (baseKey && !statsByModel[baseKey]) {
+        const baseUrl =
           `/api/model-stats?model=${encodeURIComponent(modelKey)}` +
-          `${condParam ? `&condition=${encodeURIComponent(condParam)}` : ""}` +
-          `&variant=${encodeURIComponent(variant)}`;
+          `${condParam ? `&condition=${encodeURIComponent(condParam)}` : ""}`;
 
-        if (!seen.has(vUrl)) {
-          seen.add(vUrl);
+        if (!seen.has(baseUrl)) {
+          seen.add(baseUrl);
           jobs.push(
-            fetch(vUrl)
+            fetch(baseUrl)
               .then((r) => (r.ok ? r.json() : null))
               .then((json) => {
                 if (abort || !json) return;
                 const stats = json?.stats ?? json;
                 if (stats && Object.keys(stats).length) {
-                  setStatsByModel((prev) => ({ ...prev, [vKey]: stats }));
+                  setStatsByModel((prev) => ({ ...prev, [baseKey]: stats }));
                 }
               })
               .catch(() => {})
@@ -589,37 +607,13 @@ export default function PuttersPage() {
       }
     }
 
-    // ----- 2) BASE key fallback -----
-    const baseKey = getStatsKey(modelKey, condParam);
-    if (baseKey && !statsByModel[baseKey]) {
-      const baseUrl =
-        `/api/model-stats?model=${encodeURIComponent(modelKey)}` +
-        `${condParam ? `&condition=${encodeURIComponent(condParam)}` : ""}`;
-
-      if (!seen.has(baseUrl)) {
-        seen.add(baseUrl);
-        jobs.push(
-          fetch(baseUrl)
-            .then((r) => (r.ok ? r.json() : null))
-            .then((json) => {
-              if (abort || !json) return;
-              const stats = json?.stats ?? json;
-              if (stats && Object.keys(stats).length) {
-                setStatsByModel((prev) => ({ ...prev, [baseKey]: stats }));
-              }
-            })
-            .catch(() => {})
-        );
-      }
+    if (jobs.length) {
+      Promise.all(jobs).catch(() => {});
     }
-  }
 
-  if (jobs.length) {
-    Promise.all(jobs).catch(() => {});
-  }
+    return () => { abort = true; };
+  }, [q, loading, err, groupMode, showAdvanced, offers, JSON.stringify(conds)]);
 
-  return () => { abort = true; };
-}, [q, loading, err, groupMode, showAdvanced, offers, JSON.stringify(conds)]);
   return (
     <main className="mx-auto max-w-6xl px-4 py-8">
       <header className="flex flex-col gap-2 sm:flex-row sm:items-end sm:justify-between">
@@ -987,7 +981,6 @@ export default function PuttersPage() {
 
               const lows = lowsByModel[g.model];
               const series = seriesByModel[g.model] || [];
-              // Stats lookup with condition
               const groupCond = selectedConditionBand(conds) || inferConditionBandFromOffers(g?.offers || []) || "";
               const statsKey = getStatsKey(g.model, groupCond);
               const stats = statsByModel[statsKey] || null;
@@ -1035,44 +1028,42 @@ export default function PuttersPage() {
                             </span>
                           )}
 
-                          {/* New smarter fair price badge (based on stats.p50) */}
+                          {/* Group header price badge */}
                           <SmartPriceBadge price={Number(g.bestPrice)} baseStats={stats} className="ml-1" />
 
-
-                          {/* (Optional) quick chip */}
+                          {/* Optional quick chip */}
                           {fair && (
                             <span className={`rounded-full px-2 py-0.5 text-[11px] font-medium text-white ${fair.tone === "emerald" ? "bg-emerald-600" : "bg-green-600"}`}>
                               {fair.label}
                             </span>
                           )}
                         </div>
-			<div className="mt-2">
-  {(() => {
-    // Use the first listing in the group (if present) to detect variant
-    const first = ordered?.[0];
-    const condParam = selectedConditionBand(conds) || inferConditionBandFromOffers(g?.offers || []) || "";
-    const modelKey = first ? getModelKey(first) : g.model;
-    const variant  = first ? detectVariant(first?.title) : null;
 
-    const variantKey = getStatsKey3(modelKey, variant, condParam); // model::variant::cond
-    const baseKey    = getStatsKey(modelKey, condParam);           // model::cond
-    const firstStats = statsByModel[variantKey] ?? statsByModel[baseKey] ?? stats;
+                        {/* Helper badge (variant-aware from first listing) */}
+                        <div className="mt-2">
+                          {(() => {
+                            const first = ordered?.[0];
+                            const condParam = selectedConditionBand(conds) || inferConditionBandFromOffers(g?.offers || []) || "";
+                            const modelKey = first ? getModelKey(first) : g.model;
+                            const variant  = first ? detectVariant(first?.title) : null;
 
-    return (
-      <SmartPriceBadge
-        price={Number(g.bestPrice)}
-        baseStats={firstStats}
-        variantStats={null}
-        title={first?.title || g.model}
-        specs={first?.specs}
-        brand={g?.brand}
-        showHelper
-      />
-    );
-  })()}
-</div>
+                            const variantKey = getStatsKey3(modelKey, variant, condParam);
+                            const baseKey    = getStatsKey(modelKey, condParam);
+                            const firstStats = statsByModel[variantKey] ?? statsByModel[baseKey] ?? stats;
 
-
+                            return (
+                              <SmartPriceBadge
+                                price={Number(g.bestPrice)}
+                                baseStats={firstStats}
+                                variantStats={null}
+                                title={first?.title || g.model}
+                                specs={first?.specs}
+                                brand={g?.brand}
+                                showHelper
+                              />
+                            );
+                          })()}
+                        </div>
 
                         {/* Lows row (on expand) */}
                         {isOpen && (
@@ -1139,76 +1130,51 @@ export default function PuttersPage() {
                       )}
                     </div>
 
-{list.map((o) => {
-  const condParam =
-    (o?.conditionBand || o?.condition || "").toUpperCase() ||
-    selectedConditionBand(conds) ||
-    "";
+                    {/* Expanded listings */}
+                    {isOpen && (
+                      <ul className="mt-3 space-y-2">
+                        {list.map((o) => {
+                          const condParam =
+                            (o?.conditionBand || o?.condition || "").toUpperCase() ||
+                            selectedConditionBand(conds) ||
+                            "";
 
-  // Variant-aware stats lookup
-  const modelKey   = getModelKey(o);
-  const variant    = detectVariant(o?.title);
-  const variantKey = getStatsKey3(modelKey, variant, condParam);
-  const baseKey    = getStatsKey(modelKey, condParam);
-  const perOfferStats = statsByModel[variantKey] ?? statsByModel[baseKey] ?? stats;
+                          // Variant-aware stats lookup
+                          const modelKey   = getModelKey(o);
+                          const variant    = detectVariant(o?.title);
+                          const variantKey = getStatsKey3(modelKey, variant, condParam);
+                          const baseKey    = getStatsKey(modelKey, condParam);
+                          const perOfferStats = statsByModel[variantKey] ?? statsByModel[baseKey] ?? stats;
 
-  return (
-    <li
-      key={o.productId + o.url}
-      className="flex items-center justify-between gap-3 rounded border border-gray-100 p-2"
-    >
-      {/* LEFT: logo + retailer/seller */}
-      <div className="flex min-w-0 items-center gap-2">
-        {retailerLogos[o.retailer] && (
-          // eslint-disable-next-line @next/next/no-img-element
-          <img
-            src={retailerLogos[o.retailer]}
-            alt={o.retailer}
-            className="h-4 w-12 object-contain"
-          />
-        )}
+                          return (
+                            <li
+                              key={o.productId + o.url}
+                              className="flex items-center justify-between gap-3 rounded border border-gray-100 p-2"
+                            >
+                              {/* LEFT: logo + retailer/seller */}
+                              <div className="flex min-w-0 items-center gap-2">
+                                {retailerLogos[o.retailer] && (
+                                  // eslint-disable-next-line @next/next/no-img-element
+                                  <img
+                                    src={retailerLogos[o.retailer]}
+                                    alt={o.retailer}
+                                    className="h-4 w-12 object-contain"
+                                  />
+                                )}
 
-        <div className="min-w-0">
-          <div className="truncate text-sm font-medium">
-            {o.retailer}
-            {o?.seller?.username && (
-              <span className="ml-2 text-xs text-gray-500">@{o.seller.username}</span>
-            )}
-            {typeof o?.seller?.feedbackPct === "number" && (
-              <span className="ml-2 rounded-full bg-gray-100 px-2 py-[2px] text-[11px] font-medium text-gray-700">
-                {o.seller.feedbackPct.toFixed(1)}%
-              </span>
-            )}
-          </div>
-        </div>
-      </div>
+                                <div className="min-w-0">
+                                  <div className="truncate text-sm font-medium">
+                                    {o.retailer}
+                                    {o?.seller?.username && (
+                                      <span className="ml-2 text-xs text-gray-500">@{o.seller.username}</span>
+                                    )}
+                                    {typeof o?.seller?.feedbackPct === "number" && (
+                                      <span className="ml-2 rounded-full bg-gray-100 px-2 py-[2px] text-[11px] font-medium text-gray-700">
+                                        {o.seller.feedbackPct.toFixed(1)}%
+                                      </span>
+                                    )}
+                                  </div>
 
-      {/* RIGHT: badge + price + view */}
-      <div className="flex items-center gap-3">
-        <SmartPriceBadge
-          price={Number(o.price)}
-          baseStats={perOfferStats}  // variant → base → group
-          variantStats={null}
-          title={o.title}
-          specs={o.specs}
-          brand={g?.brand}
-        />
-        <span className="text-sm font-semibold">
-          {typeof o.price === "number" ? formatPrice(o.price, o.currency) : "—"}
-        </span>
-        <a
-          href={o.url}
-          target="_blank"
-          rel="noreferrer"
-          className="rounded-md border px-2 py-1 text-xs"
-        >
-          View
-        </a>
-      </div>
-    </li>
-  );
-})}
-                               
                                   {/* Enhanced spec line */}
                                   <div className="mt-0.5 truncate text-xs text-gray-500">
                                     {(o.specs?.dexterity || "").toUpperCase() === "LEFT" ? "LH" :
@@ -1229,23 +1195,25 @@ export default function PuttersPage() {
                                   </div>
                                 </div>
                               </div>
+
+                              {/* RIGHT: badge + price + view */}
                               <div className="flex items-center gap-3">
-                                {/* Per-listing badge using (model,condition) stats */}
-                                  <SmartPriceBadge
-    price={Number(o.price)}
-    baseStats={statsByModel[g.model] || null}
-    variantStats={null}
-    title={o.title}
-    specs={o.specs}
-    brand={g?.brand}
-    className="mr-2"
-  />
-                                <span className="text-sm font-semibold">{formatPrice(o.price, o.currency)}</span>
+                                <SmartPriceBadge
+                                  price={Number(o.price)}
+                                  baseStats={perOfferStats}
+                                  variantStats={null}
+                                  title={o.title}
+                                  specs={o.specs}
+                                  brand={g?.brand}
+                                />
+                                <span className="text-sm font-semibold">
+                                  {typeof o.price === "number" ? formatPrice(o.price, o.currency) : "—"}
+                                </span>
                                 <a
                                   href={o.url}
                                   target="_blank"
-                                  rel="noopener noreferrer"
-                                  className="inline-flex items-center rounded-md bg-blue-600 px-3 py-1.5 text-sm font-medium text-white hover:bg-blue-700"
+                                  rel="noreferrer"
+                                  className="rounded-md border px-2 py-1 text-xs"
                                 >
                                   View
                                 </a>
@@ -1253,6 +1221,7 @@ export default function PuttersPage() {
                             </li>
                           );
                         })}
+
                         {!showAll && g.count > 10 && (
                           <li className="px-2 pt-1 text-xs text-gray-500">Showing top 10 offers.</li>
                         )}
@@ -1292,16 +1261,15 @@ export default function PuttersPage() {
         <>
           <section className="mt-6 grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
             {offers.map((o) => {
-             const modelKey = getModelKey(o);
-const condParam =
-  (o?.conditionBand || o?.condition || "").toUpperCase() ||
-  selectedConditionBand(conds) ||
-  "";
-const variant    = detectVariant(o?.title);
-const variantKey = getStatsKey3(modelKey, variant, condParam); // model::variant::cond
-const baseKey    = getStatsKey(modelKey, condParam);           // model::cond
-const stats      = statsByModel[variantKey] ?? statsByModel[baseKey] ?? null;
-
+              const modelKey = getModelKey(o);
+              const condParam =
+                (o?.conditionBand || o?.condition || "").toUpperCase() ||
+                selectedConditionBand(conds) ||
+                "";
+              const variant    = detectVariant(o?.title);
+              const variantKey = getStatsKey3(modelKey, variant, condParam);
+              const baseKey    = getStatsKey(modelKey, condParam);
+              const stats      = statsByModel[variantKey] ?? statsByModel[baseKey] ?? null;
 
               return (
                 <article key={o.productId + o.url} className="overflow-hidden rounded-xl border border-gray-200 bg-white shadow-sm">
@@ -1333,18 +1301,15 @@ const stats      = statsByModel[variantKey] ?? statsByModel[baseKey] ?? null;
 
                     <div className="mt-3 flex items-center justify-between">
                       <div className="flex items-center gap-2">
-                        {/* Flat-view badge: uses prefetched (model, condition) stats */}
-                      <SmartPriceBadge
-  price={Number(o.price)}
-  baseStats={stats}
-  variantStats={null}
-  title={o.title}
-  specs={o.specs}
-  brand={o.brand || ""}
-  className="mr-2"
-/>
-
-
+                        <SmartPriceBadge
+                          price={Number(o.price)}
+                          baseStats={stats}
+                          variantStats={null}
+                          title={o.title}
+                          specs={o.specs}
+                          brand={o.brand || ""}
+                          className="mr-2"
+                        />
 
                         <span className="text-base font-semibold">{formatPrice(o.price, o.currency)}</span>
 
@@ -1408,4 +1373,3 @@ const stats      = statsByModel[variantKey] ?? statsByModel[baseKey] ?? null;
     </main>
   );
 }
-// badge tweak noop
