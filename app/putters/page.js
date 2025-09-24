@@ -1099,107 +1099,136 @@ export default function PuttersPage() {
               </div>
 
               {/* Expand / actions */}
-              <div className="mt-3 flex items-center justify-between">
-                <a
-                  href={bestUrl || "#"}
-                  target="_blank"
-                  rel="noreferrer"
-                  className="rounded-md bg-black px-3 py-1.5 text-xs font-medium text-white"
-                >
-                  See best deal
-                </a>
-                <button
-                  className="rounded-md border px-2 py-1 text-xs"
-                  onClick={() => {
-                    setExpanded((prev) => ({ ...prev, [g.model]: !isOpen }));
-                    if (!seriesByModel[g.model] && typeof onExpandGroup === "function") {
-                      onExpandGroup(g);
-                    }
-                  }}
-                >
-                  {isOpen ? "Hide listings" : "Show listings"}
-                </button>
-              </div>
+{/* Actions row */}
+<div className="mt-3 flex items-center justify-between gap-2">
+  <a
+    href={bestUrl || "#"}
+    target="_blank"
+    rel="noreferrer"
+    className="rounded-md bg-black px-3 py-1.5 text-xs font-medium text-white"
+  >
+    See best deal
+  </a>
 
-              {/* Expanded listings */}
-              {isOpen && (
-                <div className="mt-3 divide-y">
-                  {list.map((o) => {
-                    const condParam =
-                      (o?.conditionBand || o?.condition || "").toUpperCase() || groupCond || "";
-                    const modelKey = getModelKey(o);
-                    const variant = detectVariant(o?.title);
-                    const variantKey = getStatsKey3(modelKey, variant, condParam);
-                    const baseKey = getStatsKey(modelKey, condParam);
-                    const perItemStats = statsByModel[variantKey] ?? statsByModel[baseKey] ?? stats;
+  <div className="flex items-center gap-2">
+    <button
+      type="button"
+      className="rounded-md border px-2 py-1 text-xs"
+      onClick={() => {
+        // adjust this to your actual copy handler
+        const text = `${g.model} • Best: ${formatPrice(g.bestPrice, g.bestCurrency)} • ${bestUrl || ""}`;
+        navigator.clipboard?.writeText(text).then(() => {
+          setCopiedFor?.(g.model);
+          setTimeout(() => setCopiedFor?.(null), 1200);
+        }).catch(() => {});
+      }}
+    >
+      {copiedFor === g.model ? "Copied!" : "Copy best"}
+    </button>
 
-                    return (
-                      <div key={o.url} className="flex items-start gap-3 py-2">
-                        {/* eslint-disable-next-line @next/next/no-img-element */}
-                        <img src={o.image || "/placeholder.png"} alt="" className="h-12 w-12 rounded object-cover" />
-                        <div className="min-w-0 flex-1">
-                          <div className="flex items-center justify-between">
-                            <a href={o.url} target="_blank" rel="noreferrer" className="truncate text-sm font-medium underline">
-                              {o.title}
-                            </a>
-                            <div className="ml-2 flex items-center gap-2">
-                              <span className="text-sm font-semibold">
-                                {typeof o.price === "number" ? formatPrice(o.price, o.currency) : "—"}
-                              </span>
-                            </div>
-                          </div>
+    <button
+      type="button"
+      className="rounded-md border px-2 py-1 text-xs"
+      onClick={() => {
+        setExpanded((prev) => ({ ...prev, [g.model]: !isOpen }));
+        if (!seriesByModel[g.model] && typeof onExpandGroup === "function") {
+          onExpandGroup(g);
+        }
+      }}
+    >
+      {isOpen ? "Hide listings" : "Show listings"}
+    </button>
+  </div>
+</div>
 
-                          <div className="mt-1 flex flex-wrap items-center gap-2 text-xs text-gray-600">
-                            <div className="truncate text-sm font-medium">
-                              {o.retailer}
-                              {o?.seller?.username && (
-                                <>
-                                  {/* ✅ Per-listing badge using (model, variant, condition) */}
-                                  <SmartPriceBadge
-                                    price={Number(o.price)}
-                                    baseStats={perItemStats}
-                                    variantStats={null}
-                                    title={o.title}
-                                    specs={o.specs}
-                                    brand={g?.brand}
-                                    className="ml-2"
-                                  />
-                                  <span className="ml-2 text-xs text-gray-500">@{o.seller.username}</span>
-                                </>
-                              )}
-                              {typeof o?.seller?.feedbackPct === "number" && (
-                                <span className="ml-2 rounded-full bg-gray-100 px-2 py-[2px] text-[11px] font-medium text-gray-700">
-                                  {o.seller.feedbackPct.toFixed(1)}%
-                                </span>
-                              )}
-                            </div>
-
-                            {o?.specs?.hand && (
-                              <span className="rounded-full bg-gray-100 px-2 py-0.5 text-[11px] font-medium text-gray-700">
-                                {o.specs.hand}
-                              </span>
-                            )}
-                            {o?.specs?.length && (
-                              <span className="rounded-full bg-amber-100 px-2 py-0.5 text-[11px] font-medium text-amber-800">
-                                ~{o.specs.length}&quot;
-                              </span>
-                            )}
-                          </div>
-                        </div>
-                      </div>
-                    );
-                  })}
-                </div>
-              )}
-            </div>
-          </article>
-        );
-      })}
-    </section>
-  </>
+{/* Sparkline */}
+{isOpen && Array.isArray(series) && series.length > 1 && (
+  <div className="mt-3">
+    <PriceSparkline series={series} width={120} height={36} />
+    <div className="mt-1 text-right text-[10px] text-gray-500">
+      Asking-price trend · 90d
+    </div>
+  </div>
 )}
 
+{/* Expanded listings */}
+{isOpen && (
+  <div className="mt-3 divide-y">
+    {list.map((o) => {
+      const condParam =
+        (o?.conditionBand || o?.condition || "").toUpperCase() || groupCond || "";
+      const modelKey = getModelKey(o);
+      const variant = detectVariant(o?.title);
+      const variantKey = getStatsKey3(modelKey, variant, condParam);
+      const baseKey    = getStatsKey(modelKey, condParam);
+      const perItemStats = statsByModel[variantKey] ?? statsByModel[baseKey] ?? stats;
 
+      return (
+        <div key={o.url} className="flex items-start gap-3 py-2">
+          {/* eslint-disable-next-line @next/next/no-img-element */}
+          <img
+            src={o.image || "/placeholder.png"}
+            alt=""
+            className="h-12 w-12 rounded object-cover"
+          />
+          <div className="min-w-0 flex-1">
+            <div className="flex items-center justify-between">
+              <a
+                href={o.url}
+                target="_blank"
+                rel="noreferrer"
+                className="truncate text-sm font-medium underline"
+              >
+                {o.title}
+              </a>
+              <div className="ml-2 flex items-center gap-2">
+                <span className="text-sm font-semibold">
+                  {typeof o.price === "number" ? formatPrice(o.price, o.currency) : "—"}
+                </span>
+              </div>
+            </div>
+
+            <div className="mt-1 flex flex-wrap items-center gap-2 text-xs text-gray-600">
+              <div className="truncate text-sm font-medium">
+                {o.retailer}
+                {o?.seller?.username && (
+                  <>
+                    <SmartPriceBadge
+                      price={Number(o.price)}
+                      baseStats={perItemStats}
+                      variantStats={null}
+                      title={o.title}
+                      specs={o.specs}
+                      brand={g?.brand}
+                      className="ml-2"
+                    />
+                    <span className="ml-2 text-xs text-gray-500">@{o.seller.username}</span>
+                  </>
+                )}
+                {typeof o?.seller?.feedbackPct === "number" && (
+                  <span className="ml-2 rounded-full bg-gray-100 px-2 py-[2px] text-[11px] font-medium text-gray-700">
+                    {o.seller.feedbackPct.toFixed(1)}%
+                  </span>
+                )}
+              </div>
+
+              {o?.specs?.hand && (
+                <span className="rounded-full bg-gray-100 px-2 py-0.5 text-[11px] font-medium text-gray-700">
+                  {o.specs.hand}
+                </span>
+              )}
+              {o?.specs?.length && (
+                <span className="rounded-full bg-amber-100 px-2 py-0.5 text-[11px] font-medium text-amber-800">
+                  ~{o.specs.length}&quot;
+                </span>
+              )}
+            </div>
+          </div>
+        </div>
+      );
+    })}
+  </div>
+)}
                         {/* Lows row (on expand) */}
 {isOpen && (
   <div className="mt-2 text-xs text-gray-600">
