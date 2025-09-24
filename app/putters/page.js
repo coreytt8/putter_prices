@@ -1139,24 +1139,25 @@ export default function PuttersPage() {
                       )}
                     </div>
 
-                    {list.map((o) => {
+{list.map((o) => {
   const condParam =
     (o?.conditionBand || o?.condition || "").toUpperCase() ||
     selectedConditionBand(conds) ||
     "";
 
-  // ✅ variant-aware stats lookup for this listing
+  // Variant-aware stats lookup
   const modelKey   = getModelKey(o);
   const variant    = detectVariant(o?.title);
-  const variantKey = getStatsKey3(modelKey, variant, condParam); // model::variant::cond
-  const baseKey    = getStatsKey(modelKey, condParam);           // model::cond
-  const perOfferStats = statsByModel[variantKey] ?? statsByModel[baseKey] ?? stats; // fall back to group stats
+  const variantKey = getStatsKey3(modelKey, variant, condParam);
+  const baseKey    = getStatsKey(modelKey, condParam);
+  const perOfferStats = statsByModel[variantKey] ?? statsByModel[baseKey] ?? stats;
 
   return (
     <li
       key={o.productId + o.url}
       className="flex items-center justify-between gap-3 rounded border border-gray-100 p-2"
     >
+      {/* LEFT: logo + seller/retailer + badge */}
       <div className="flex min-w-0 items-center gap-2">
         {retailerLogos[o.retailer] && (
           // eslint-disable-next-line @next/next/no-img-element
@@ -1172,17 +1173,17 @@ export default function PuttersPage() {
             {o.retailer}
             {o?.seller?.username && (
               <>
- {/* ✅ variant → base → group */}
-<SmartPriceBadge
-  price={Number(o.price)}
-  baseStats={perOfferStats}
-  variantStats={null}
-  title={o.title}
-  specs={o.specs}
-/>
-                <span className="ml-2 text-xs text-gray-500">
-                  @{o.seller.username}
-                </span>
+                {/* ✅ variant → base → group */}
+                <SmartPriceBadge
+                  price={Number(o.price)}
+                  baseStats={perOfferStats}
+                  variantStats={null}
+                  title={o.title}
+                  specs={o.specs}
+                  brand={g?.brand}
+                  className="ml-2"
+                />
+                <span className="ml-2 text-xs text-gray-500">@{o.seller.username}</span>
               </>
             )}
             {typeof o?.seller?.feedbackPct === "number" && (
@@ -1193,6 +1194,24 @@ export default function PuttersPage() {
           </div>
         </div>
       </div>
+
+      {/* RIGHT: price + view */}
+      <div className="flex items-center gap-3">
+        <span className="text-sm font-semibold">
+          {typeof o.price === "number" ? formatPrice(o.price, o.currency) : "—"}
+        </span>
+        <a
+          href={o.url}
+          target="_blank"
+          rel="noreferrer"
+          className="rounded-md border px-2 py-1 text-xs"
+        >
+          View
+        </a>
+      </div>
+    </li>
+  );
+})}
 
                                
                                   {/* Enhanced spec line */}
