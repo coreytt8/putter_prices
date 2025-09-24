@@ -4,6 +4,9 @@ import { useEffect, useMemo, useState } from "react";
 import MarketSnapshot from "@/components/MarketSnapshot";
 import PriceSparkline from "@/components/PriceSparkline";
 import SmartPriceBadge from "@/components/SmartPriceBadge";
+import { detectVariant } from "@/lib/variantMap";
+import { getStatsKey3 } from "@/lib/yourKeyHelpers"; // wherever you defined getStatsKey3
+
 
 
 /* ============================
@@ -245,6 +248,11 @@ function inferConditionBandFromOffers(offers = []) {
   for (const [k,v] of counts.entries()) { if (v > max) { max = v; best = k; } }
   return best;
 }
+
+function getStatsKey3(model, variant, cond) {
+  return `${model}::${variant || "BASE"}::${cond || "ANY"}`;
+}
+
 function getStatsKey(model, cond) {
   return `${model}::${cond || "ANY"}`;
 }
@@ -539,42 +547,84 @@ export default function PuttersPage() {
   /* ============================
      FLAT VIEW: prefetch stats for visible items (condition-aware)
      ============================ */
-  useEffect(() => {
-    if (!q.trim() || loading || err || groupMode || !showAdvanced) return;
-    if (!Array.isArray(offers) || offers.length === 0) return;
 
-    let abort = false;
-    (async () => {
-      const fetchJobs = [];
-      for (const o of offers) {
-        const modelKey = getModelKey(o);
-        if (!modelKey) continue;
-        const condParam = (o?.conditionBand || o?.condition || "").toUpperCase() || selectedConditionBand(conds) || "";
-        const statsKey = getStatsKey(modelKey, condParam);
-        if (statsByModel[statsKey] === undefined) {
-          const url = `/api/model-stats?model=${encodeURIComponent(modelKey)}${condParam ? `&condition=${encodeURIComponent(condParam)}` : ""}`;
-          fetchJobs.push(
-            fetch(url, { cache: "no-store" })
-              .then(r => r.json())
-              .then(j => ({ statsKey, stats: j?.stats || null }))
-              .catch(() => ({ statsKey, stats: null }))
+import { detectVariant } from "@/lib/variantMap";
+
+
+   useEffect(() => {
+  if (!q.trim() || loading || err || groupMode || !showAdvanced) return;
+  if (!Array.isArray(offers) || offers.length === 0) return;
+
+  let abort = false;
+  const selCond = selectedConditionBand(conds) || "";
+
+  (async () => {
+    const jobs = [];
+
+    for (const o of offers) {
+      const modelKey = getModelKey(o);
+      const condParam =
+        (o?.conditionBand || o?.condition || "").toUpperCase() || selCond || "";
+      const variant = detectVariant(o?.title);
+
+      // ===== 1) VARIANT KEY FIRST (e.g., Circle T) =====
+      if (variant) {
+        const vKey = getStatsKey3(modelKey, variant, condParam);
+        if (vKey && !statsByModel[vKey]) {
+          // If your API supports variant, it will read req.query.variant; if not, it can ignore it safely.
+          const vUrl =
+            `/api/model-stats?model=${encodeURIComponent(modelKey)}` +
+            `${condParam ? `&condition=${encodeURIComponent(condParam)}` : ""}` +
+            `&variant=${encodeURIComponent(variant)}`;
+
+          jobs.push(
+            fetch(vUrl)
+              .then((r) => (r.ok ? r.json() : null))
+              .then((json) => {
+                if (abort || !json) return;
+                // Accept either {stats: {...}} or direct stats object
+                const stats = json?.stats ?? json;
+                if (stats && Object.keys(stats).length) {
+                  setStatsByModel((prev) => ({ ...prev, [vKey]: stats }));
+                }
+              })
+              .catch(() => {})
           );
         }
       }
-      if (fetchJobs.length === 0) return;
-      const results = await Promise.all(fetchJobs);
-      if (abort) return;
-      setStatsByModel((prev) => {
-        const next = { ...prev };
-        for (const { statsKey, stats } of results) {
-          if (next[statsKey] === undefined) next[statsKey] = stats;
-        }
-        return next;
-      });
-    })();
 
-    return () => { abort = true; };
-  }, [q, loading, err, groupMode, showAdvanced, offers, conds, statsByModel]);
+      // ===== 2) BASE KEY AS RELIABLE FALLBACK =====
+      const baseKey = getStatsKey(modelKey, condParam);
+      if (baseKey && !statsByModel[baseKey]) {
+        const baseUrl =
+          `/api/model-stats?model=${encodeURIComponent(modelKey)}` +
+          `${condParam ? `&condition=${encodeURIComponent(condParam)}` : ""}`;
+
+        jobs.push(
+          fetch(baseUrl)
+            .then((r) => (r.ok ? r.json() : null))
+            .then((json) => {
+              if (abort || !json) return;
+              const stats = json?.stats ?? json;
+              if (stats && Object.keys(stats).length) {
+                setStatsByModel((prev) => ({ ...prev, [baseKey]: stats }));
+              }
+            })
+            .catch(() => {})
+        );
+      }
+    }
+
+    if (jobs.length) {
+      try { await Promise.all(jobs); } catch {}
+    }
+  })();
+
+  return () => {
+    abort = true;
+  };
+}, [q, loading, err, groupMode, showAdvanced, offers, JSON.stringify(conds)]);
+
 
   return (
     <main className="mx-auto max-w-6xl px-4 py-8">
@@ -918,100 +968,236 @@ export default function PuttersPage() {
       )}
 
       {/* GROUPED VIEW */}
-      {q.trim() && !loading && !err && groupMode && (
-        <>
-          <section className="mt-6 grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-2">
-            {sortedGroups.map((g) => {
-              const isOpen = !!expanded[g.model];
+{q.trim() && !loading && !err && groupMode && (
+  <>
+    <section className="mt-6 grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-2">
+      {sortedGroups.map((g) => {
+        const isOpen = !!expanded[g.model];
 
-              const ordered =
-                sortBy === "best_price_desc"
-                  ? [...g.offers].sort((a,b) => (b.price ?? -Infinity) - (a.price ?? -Infinity))
-                  : [...g.offers].sort((a,b) => (a.price ?? Infinity) - (b.price ?? Infinity));
+        const ordered =
+          sortBy === "best_price_desc"
+            ? [...g.offers].sort((a, b) => (b.price ?? -Infinity) - (a.price ?? -Infinity))
+            : [...g.offers].sort((a, b) => (a.price ?? Infinity) - (b.price ?? Infinity));
 
-              const nums = ordered.map(o => o?.price).filter(x => typeof x === "number").sort((a,b)=>a-b);
-              const nNums = nums.length;
-              const med = nNums < 2 ? null : (nNums % 2 ? nums[Math.floor(nNums/2)] : (nums[nNums/2-1]+nums[nNums/2])/2);
-              const bestDelta = (typeof g.bestPrice === "number" && typeof med === "number" && med - g.bestPrice > 0)
-                ? { diff: med - g.bestPrice, pct: ((med - g.bestPrice)/med)*100 }
-                : null;
+        const nums = ordered.map(o => o?.price).filter(x => typeof x === "number").sort((a, b) => a - b);
+        const nNums = nums.length;
+        const med = nNums < 2 ? null : (nNums % 2 ? nums[Math.floor(nNums / 2)] : (nums[nNums / 2 - 1] + nums[nNums / 2]) / 2);
+        const bestDelta = (typeof g.bestPrice === "number" && typeof med === "number" && med - g.bestPrice > 0)
+          ? { diff: med - g.bestPrice, pct: ((med - g.bestPrice) / med) * 100 }
+          : null;
 
-              const { domDex, domHead, domLen } = summarizeDexHead(g);
+        const { domDex, domHead, domLen } = summarizeDexHead(g);
 
-              const showAll = !!showAllOffersByModel[g.model];
-              const list = isOpen ? (showAll ? ordered : ordered.slice(0, 10)) : [];
+        const showAll = !!showAllOffersByModel[g.model];
+        const list = isOpen ? (showAll ? ordered : ordered.slice(0, 10)) : [];
 
-              const lows = lowsByModel[g.model];
-              const series = seriesByModel[g.model] || [];
-              // Stats lookup with condition
-              const groupCond = selectedConditionBand(conds) || inferConditionBandFromOffers(g?.offers || []) || "";
-              const statsKey = getStatsKey(g.model, groupCond);
-              const stats = statsByModel[statsKey] || null;
+        const lows = lowsByModel[g.model];
+        const series = seriesByModel[g.model] || [];
 
-              const bestUrl = ordered.length ? ordered[0]?.url : null;
+        // ✅ Stats lookup with condition (group-level/base)
+        const groupCond = selectedConditionBand(conds) || inferConditionBandFromOffers(g?.offers || []) || "";
+        const statsKey = getStatsKey(g.model, groupCond);
+        const stats = statsByModel[statsKey] || null;
 
-              const fair = fairPriceBadge(g.bestPrice, stats);
+        const bestUrl = ordered.length ? ordered[0]?.url : null;
 
-              return (
-                <article key={g.model} className="overflow-hidden rounded-xl border border-gray-200 bg-white shadow-sm">
-                  <div className="relative aspect-[4/3] w-full max-h-48 bg-gray-50">
-                    {g.image ? (
-                      // eslint-disable-next-line @next/next/no-img-element
-                      <img src={g.image} alt={g.model} className="h-full w-full object-contain" loading="lazy" />
-                    ) : (
-                      <div className="flex h-full w-full items-center justify-center text-xs text-gray-400">
-                        No image
-                      </div>
+        const fair = fairPriceBadge(g.bestPrice, stats);
+
+        // For the helper badge under the header, be variant-aware for the first listing if present
+        const first = ordered?.[0];
+        const firstCond = groupCond;
+        const firstModelKey = first ? getModelKey(first) : g.model;
+        const firstVariant = first ? detectVariant(first?.title) : null;
+        const firstVariantKey = getStatsKey3(firstModelKey, firstVariant, firstCond);
+        const firstBaseKey = getStatsKey(firstModelKey, firstCond);
+        const firstStats = statsByModel[firstVariantKey] ?? statsByModel[firstBaseKey] ?? stats;
+
+        return (
+          <article key={g.model} className="overflow-hidden rounded-xl border border-gray-200 bg-white shadow-sm">
+            <div className="relative aspect-[4/3] w-full max-h-48 bg-gray-50">
+              {g.image ? (
+                // eslint-disable-next-line @next/next/no-img-element
+                <img src={g.image} alt={g.model} className="h-full w-full object-contain" loading="lazy" />
+              ) : (
+                <div className="flex h-full w-full items-center justify-center text-xs text-gray-400">
+                  No image
+                </div>
+              )}
+            </div>
+
+            <div className="p-4">
+              <div className="flex items-start justify-between gap-3">
+                <div className="min-w-0">
+                  <h3 className="text-lg font-semibold leading-tight">{g.model}</h3>
+                  <p className="mt-1 text-xs text-gray-500">
+                    {g.count} offer{g.count === 1 ? "" : "s"} · {g.retailers.join(", ")}
+                  </p>
+
+                  {/* Dominant chips + BADGES */}
+                  <div className="mt-2 flex flex-wrap items-center gap-2">
+                    {domDex && (
+                      <span className="rounded-full bg-slate-100 px-2 py-0.5 text-[11px] font-medium text-slate-700">
+                        {domDex === "LEFT" ? "Left-hand" : "Right-hand"}
+                      </span>
+                    )}
+                    {domHead && (
+                      <span className="rounded-full bg-indigo-100 px-2 py-0.5 text-[11px] font-medium text-indigo-700">
+                        {domHead === "MALLET" ? "Mallet" : "Blade"}
+                      </span>
+                    )}
+                    {Number.isFinite(domLen) && (
+                      <span className="rounded-full bg-amber-100 px-2 py-0.5 text-[11px] font-medium text-amber-800">
+                        ~{domLen}&quot;
+                      </span>
+                    )}
+
+                    {/* ✅ Group header badge (correct prop + correct stats) */}
+                    <SmartPriceBadge price={Number(g.bestPrice)} baseStats={stats} className="ml-1" />
+
+                    {/* Optional quick chip using fairPriceBadge */}
+                    {fair && (
+                      <span
+                        className={`rounded-full px-2 py-0.5 text-[11px] font-medium text-white ${
+                          fair.tone === "orange" ? "bg-orange-600" : fair.tone === "emerald" ? "bg-emerald-600" : "bg-green-600"
+                        }`}
+                      >
+                        {fair.label}
+                      </span>
                     )}
                   </div>
 
-                  <div className="p-4">
-                    <div className="flex items-start justify-between gap-3">
-                      <div className="min-w-0">
-                        <h3 className="text-lg font-semibold leading-tight">{g.model}</h3>
-                        <p className="mt-1 text-xs text-gray-500">
-                          {g.count} offer{g.count === 1 ? "" : "s"} · {g.retailers.join(", ")}
-                        </p>
+                  {/* ✅ Helper badge under header (variant-aware for first offer if present) */}
+                  <div className="mt-2">
+                    <SmartPriceBadge
+                      price={Number(g.bestPrice)}
+                      baseStats={firstStats}
+                      variantStats={null}
+                      title={first?.title || g.model}
+                      specs={first?.specs}
+                      brand={g?.brand}
+                      showHelper
+                    />
+                  </div>
 
-                        {/* Dominant chips + BADGES */}
-                        <div className="mt-2 flex flex-wrap items-center gap-2">
-                          {domDex && (
-                            <span className="rounded-full bg-slate-100 px-2 py-0.5 text-[11px] font-medium text-slate-700">
-                              {domDex === "LEFT" ? "Left-hand" : "Right-hand"}
-                            </span>
-                          )}
-                          {domHead && (
-                            <span className="rounded-full bg-indigo-100 px-2 py-0.5 text-[11px] font-medium text-indigo-700">
-                              {domHead === "MALLET" ? "Mallet" : "Blade"}
-                            </span>
-                          )}
-                          {Number.isFinite(domLen) && (
-                            <span className="rounded-full bg-amber-100 px-2 py-0.5 text-[11px] font-medium text-amber-800">
-                              ~{domLen}&quot;
-                            </span>
-                          )}
+                  {/* Lows row (on expand) */}
+                  {isOpen && (
+                    <div className="mt-2 text-xs text-gray-600">
+                      <span className="mr-2">Lowest:</span>
+                      {ordered.slice(0, 3).map((o, i) => (
+                        <a key={o.url + i} href={o.url} target="_blank" rel="noreferrer" className="mr-2 underline">
+                          {typeof o.price === "number" ? formatPrice(o.price, o.currency) : "—"}
+                        </a>
+                      ))}
+                    </div>
+                  )}
+                </div>
 
-                          {/* New smarter fair price badge (based on stats.p50) */}
-                          <SmartPriceBadge price={g.bestPrice} stats={stats} className="ml-1" />
+                <div className="ml-3 shrink-0">
+                  <PriceSparkline series={series} width={120} height={36} />
+                  <div className="mt-1 text-right text-[10px] text-gray-500">Asking-price trend · 90d</div>
+                </div>
+              </div>
 
-                          {/* (Optional) quick chip */}
-                          {fair && (
-                            <span className={`rounded-full px-2 py-0.5 text-[11px] font-medium text-white ${fair.tone === "emerald" ? "bg-emerald-600" : "bg-green-600"}`}>
-                              {fair.label}
-                            </span>
-                          )}
+              {/* Expand / actions */}
+              <div className="mt-3 flex items-center justify-between">
+                <a
+                  href={bestUrl || "#"}
+                  target="_blank"
+                  rel="noreferrer"
+                  className="rounded-md bg-black px-3 py-1.5 text-xs font-medium text-white"
+                >
+                  See best deal
+                </a>
+                <button
+                  className="rounded-md border px-2 py-1 text-xs"
+                  onClick={() => {
+                    setExpanded((prev) => ({ ...prev, [g.model]: !isOpen }));
+                    if (!seriesByModel[g.model] && typeof onExpandGroup === "function") {
+                      onExpandGroup(g);
+                    }
+                  }}
+                >
+                  {isOpen ? "Hide listings" : "Show listings"}
+                </button>
+              </div>
+
+              {/* Expanded listings */}
+              {isOpen && (
+                <div className="mt-3 divide-y">
+                  {list.map((o) => {
+                    const condParam =
+                      (o?.conditionBand || o?.condition || "").toUpperCase() || groupCond || "";
+                    const modelKey = getModelKey(o);
+                    const variant = detectVariant(o?.title);
+                    const variantKey = getStatsKey3(modelKey, variant, condParam);
+                    const baseKey = getStatsKey(modelKey, condParam);
+                    const perItemStats = statsByModel[variantKey] ?? statsByModel[baseKey] ?? stats;
+
+                    return (
+                      <div key={o.url} className="flex items-start gap-3 py-2">
+                        {/* eslint-disable-next-line @next/next/no-img-element */}
+                        <img src={o.image || "/placeholder.png"} alt="" className="h-12 w-12 rounded object-cover" />
+                        <div className="min-w-0 flex-1">
+                          <div className="flex items-center justify-between">
+                            <a href={o.url} target="_blank" rel="noreferrer" className="truncate text-sm font-medium underline">
+                              {o.title}
+                            </a>
+                            <div className="ml-2 flex items-center gap-2">
+                              <span className="text-sm font-semibold">
+                                {typeof o.price === "number" ? formatPrice(o.price, o.currency) : "—"}
+                              </span>
+                            </div>
+                          </div>
+
+                          <div className="mt-1 flex flex-wrap items-center gap-2 text-xs text-gray-600">
+                            <div className="truncate text-sm font-medium">
+                              {o.retailer}
+                              {o?.seller?.username && (
+                                <>
+                                  {/* ✅ Per-listing badge using (model, variant, condition) */}
+                                  <SmartPriceBadge
+                                    price={Number(o.price)}
+                                    baseStats={perItemStats}
+                                    variantStats={null}
+                                    title={o.title}
+                                    specs={o.specs}
+                                    brand={g?.brand}
+                                    className="ml-2"
+                                  />
+                                  <span className="ml-2 text-xs text-gray-500">@{o.seller.username}</span>
+                                </>
+                              )}
+                              {typeof o?.seller?.feedbackPct === "number" && (
+                                <span className="ml-2 rounded-full bg-gray-100 px-2 py-[2px] text-[11px] font-medium text-gray-700">
+                                  {o.seller.feedbackPct.toFixed(1)}%
+                                </span>
+                              )}
+                            </div>
+
+                            {o?.specs?.hand && (
+                              <span className="rounded-full bg-gray-100 px-2 py-0.5 text-[11px] font-medium text-gray-700">
+                                {o.specs.hand}
+                              </span>
+                            )}
+                            {o?.specs?.length && (
+                              <span className="rounded-full bg-amber-100 px-2 py-0.5 text-[11px] font-medium text-amber-800">
+                                ~{o.specs.length}&quot;
+                              </span>
+                            )}
+                          </div>
                         </div>
-			<div className="mt-2">
-  <SmartPriceBadge
-    price={Number(g.bestPrice)}
-    baseStats={statsByModel[g.model] || null}
-    variantStats={null}
-    title={ordered?.[0]?.title || g.model}
-    specs={ordered?.[0]?.specs}
-    brand={g?.brand}
-    showHelper
-  />
-</div>
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
+            </div>
+          </article>
+        );
+      })}
+    </section>
+  </>
+)}
 
 
                         {/* Lows row (on expand) */}
