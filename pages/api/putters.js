@@ -216,8 +216,8 @@ function headTypeFromTitle(title = "") {
 function parseLengthFromTitle(title = "") {
   const t = norm(title);
   let length = null;
-  const m1 = t.match(/(\\d{2}(?:\\.\\d)?)\\s*(?:\\"|in\\b|inch(?:es)?\\b)/i);
-  const m2 = t.match(/\\b(32|33|34|35|36|37)\\s*(?:\\/|-)\\s*(32|33|34|35|36|37)\\b/);
+const m1 = t.match(/(\d{2}(?:\.\d)?)\s*(?:"|in\b|inch(?:es)?\b)/i);
+const m2 = t.match(/\b(32|33|34|35|36|37)\s*(?:\/|-)\s*(32|33|34|35|36|37)\b/);
   if (m1) length = Number(m1[1]);
   else if (m2) length = Math.max(Number(m2[1]), Number(m2[2]));
   return length;
