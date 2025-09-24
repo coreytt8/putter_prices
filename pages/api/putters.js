@@ -199,8 +199,8 @@ if (/^r\/h$|^r-h$|^r\s*h$/.test(s)) return "RIGHT";
 
 function dexFromTitle(title = "") {
   const t = ` ${norm(title)} `;
-  if (/(^|\\W)l\\/h(\\W|$)|(^|\\W)l-h(\\W|$)|(^|\\W)l\\s*h(\\W|$)|(^|\\W)lh(\\W|$)|\\bleft[-\\s]?hand(?:ed)?\\b/.test(t)) return "LEFT";
-  if (/(^|\\W)r\\/h(\\W|$)|(^|\\W)r-h(\\W|$)|(^|\\W)r\\s*h(\\W|$)|(^|\\W)rh(\\W|$)|\\bright[-\\s]?hand(?:ed)?\\b/.test(t)) return "RIGHT";
+if (/(^|\W)l\/h(\W|$)|(^|\W)l-h(\W|$)|(^|\W)l\s*h(\W|$)|(^|\W)lh(\W|$)|\bleft[-\s]?hand(?:ed)?\b/.test(t)) return "LEFT";
+if (/(^|\W)r\/h(\W|$)|(^|\W)r-h(\W|$)|(^|\W)r\s*h(\W|$)|(^|\W)rh(\W|$)|\bright[-\s]?hand(?:ed)?\b/.test(t)) return "RIGHT";
   return null;
 }
 
