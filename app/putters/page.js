@@ -1241,7 +1241,6 @@ export default function PuttersPage() {
                           {copiedFor === g.model ? "Copied!" : "Copy best"}
                         </button>
                       </div>
-                    </div>
 
                     {/* Sparkline */}
                     {isOpen && Array.isArray(series) && series.length > 1 && (
