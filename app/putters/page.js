@@ -1210,7 +1210,6 @@ export default function PuttersPage() {
   </div>
 )}
 
-</div>{/* (this closes the left column in your earlier layout) */}
 
 <div className="flex flex-col items-end gap-1">
   <div className="shrink-0 rounded-full bg-green-100 px-3 py-1 text-xs font-semibold text-green-700">
