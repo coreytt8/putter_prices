@@ -197,35 +197,82 @@ export default async function handler(req, res) {
       })
       .filter(Boolean);
 
-    // ---------- Query-aware filter + ranking (lenient + fallback) ----------
-const qTokens = tokensFromQuery(q);
+// ---------- Query-aware filter + ranking (brand/model aware) ----------
 
-// allow overriding the threshold: /api/sources/2ndswing?q=...&minScore=1
+// Expand brand/model synonyms so "scotty cameron" can also match "titleist" prefixes, etc.
+const ALIASES = {
+  // brand families
+  scotty: ["scotty", "cameron", "titleist"], // 2nd Swing often prefixes with Titleist
+  cameron: ["scotty", "cameron", "titleist"],
+  titleist: ["titleist", "scotty", "cameron"],
+  taylormade: ["taylormade", "taylor", "made", "tm"],
+  odyssey: ["odyssey", "ai-one", "tri-hot", "white hot", "versa"],
+  ping: ["ping", "anser", "pld", "vault"],
+  evnroll: ["evnroll", "er"],
+  bettinardi: ["bettinardi", "bb", "studio stock", "queen b"],
+  lab: ["lab", "l.a.b.", "df", "mezz", "mez"],
+  // common model families
+  newport: ["newport", "newport 2", "np2", "np", "newport2"],
+  phantom: ["phantom", "x", "phantom x"],
+  spider: ["spider", "spider x", "spider tour", "5k", "mallet"],
+  anser: ["anser"],
+};
+function expandTokens(tokens) {
+  const out = new Set();
+  for (const t of tokens) {
+    out.add(t);
+    const key = t.toLowerCase();
+    if (ALIASES[key]) {
+      for (const a of ALIASES[key]) out.add(a.toLowerCase());
+    }
+  }
+  return Array.from(out);
+}
+
+const RAW_TOKENS = tokensFromQuery(q);
+// keep short numerics like "2", "5.5", "#7"
+const TOKENS = expandTokens(RAW_TOKENS);
+
+// helper: count distinct token hits in a title (word-boundary-ish)
+function titleHits(title, toks) {
+  const t = ` ${norm(title)} `;
+  let hits = 0;
+  for (const tok of toks) {
+    // escape regex specials in tok
+    const tokEsc = tok.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    const re = new RegExp(`(^|[^a-z0-9])${tokEsc}([^a-z0-9]|$)`, "i");
+    if (re.test(t)) hits++;
+  }
+  return hits;
+}
+
+// require more than 1 hit when query has multiple meaningful tokens
+const defaultThreshold = RAW_TOKENS.length >= 2 ? 2 : 1;
+// allow override via ?minScore=2
 const minScoreParam = Number.isFinite(Number(req.query.minScore))
   ? Number(req.query.minScore) : null;
+const threshold = minScoreParam ?? defaultThreshold;
 
-// default threshold is 1 (very lenient)
-const minScore = minScoreParam ?? 1;
+if (TOKENS.length) {
+  const scored = out.map(x => ({
+    x,
+    score: titleHits(x.title, TOKENS)
+  }));
 
-if (qTokens.length) {
-  const scored = out.map(x => ({ x, score: relevanceScore(x.title, qTokens) }));
+  // 1) strict filter first
+  let filtered = scored.filter(r => r.score >= threshold);
 
-  // primary filter (lenient)
-  let filtered = scored.filter(r => r.score >= minScore);
-
-  // if still empty, try ANY match of any token (score>=1)
+  // 2) if empty, relax to >=1 (at least one term match)
   if (filtered.length === 0) {
     filtered = scored.filter(r => r.score >= 1);
   }
 
-  // if STILL empty, fall back to original list (keep something visible)
+  // 3) still empty? keep a small cheapest slice to avoid [].
   if (filtered.length === 0) {
-    // sort by price asc as a sensible default
     out.sort((a, b) => (a.price ?? Infinity) - (b.price ?? Infinity));
-    // cap to a small number so it doesn't explode
     out = out.slice(0, 12);
   } else {
-    // Sort matched results: relevance desc, then price asc
+    // sort by relevance desc then price asc
     filtered.sort((a, b) => (b.score - a.score) || ((a.x.price ?? Infinity) - (b.x.price ?? Infinity)));
     out = filtered.map(r => r.x);
   }
