@@ -155,7 +155,7 @@ export default function PuttersPage() {
   const [maxPrice, setMaxPrice] = useState("");
   const [conds, setConds] = useState([]);
   const [sort, setSort] = useState("POPULAR");
-  const [q, setQ] = useState("");
+  const [q, setQ] = useState("putter");
 
   // paging
   const [page, setPage] = useState(1);
@@ -178,7 +178,7 @@ export default function PuttersPage() {
   useEffect(() => {
     let on = true;
     setLoading(true);
-    fetchModels({ q, minPrice, maxPrice, onlyComplete, conds, sort, page, perPage })
+    fetchModels({ q: q && q.trim() ? q : "putter", minPrice, maxPrice, onlyComplete, conds, sort, page, perPage })
       .then((json) => {
         if (!on) return;
         setGroups(Array.isArray(json.groups) ? json.groups : []);
