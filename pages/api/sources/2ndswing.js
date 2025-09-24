@@ -197,20 +197,39 @@ export default async function handler(req, res) {
       })
       .filter(Boolean);
 
-    // ---------- Query-aware filter + ranking ----------
-    const qTokens = tokensFromQuery(q);
-    if (qTokens.length) {
-      const withScore = out.map(x => ({ x, score: relevanceScore(x.title, qTokens) }));
-      const need = qTokens.length >= 2 ? 2 : 1;
-      let filtered = withScore.filter(r => r.score >= need);
+    // ---------- Query-aware filter + ranking (lenient + fallback) ----------
+const qTokens = tokensFromQuery(q);
 
-      // Relax if too strict (keep at least a few)
-      if (filtered.length < 3) filtered = withScore.filter(r => r.score >= 1);
+// allow overriding the threshold: /api/sources/2ndswing?q=...&minScore=1
+const minScoreParam = Number.isFinite(Number(req.query.minScore))
+  ? Number(req.query.minScore) : null;
 
-      // Sort: relevance desc, then price asc
-      filtered.sort((a, b) => (b.score - a.score) || ((a.x.price ?? Infinity) - (b.x.price ?? Infinity)));
-      out = filtered.map(r => r.x);
-    }
+// default threshold is 1 (very lenient)
+const minScore = minScoreParam ?? 1;
+
+if (qTokens.length) {
+  const scored = out.map(x => ({ x, score: relevanceScore(x.title, qTokens) }));
+
+  // primary filter (lenient)
+  let filtered = scored.filter(r => r.score >= minScore);
+
+  // if still empty, try ANY match of any token (score>=1)
+  if (filtered.length === 0) {
+    filtered = scored.filter(r => r.score >= 1);
+  }
+
+  // if STILL empty, fall back to original list (keep something visible)
+  if (filtered.length === 0) {
+    // sort by price asc as a sensible default
+    out.sort((a, b) => (a.price ?? Infinity) - (b.price ?? Infinity));
+    // cap to a small number so it doesn't explode
+    out = out.slice(0, 12);
+  } else {
+    // Sort matched results: relevance desc, then price asc
+    filtered.sort((a, b) => (b.score - a.score) || ((a.x.price ?? Infinity) - (b.x.price ?? Infinity)));
+    out = filtered.map(r => r.x);
+  }
+}
 
     return res.status(200).json(out);
   } catch (e) {
