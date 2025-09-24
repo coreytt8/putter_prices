@@ -1,6 +1,6 @@
 /* eslint-disable no-console */
 // pages/api/sources/2ndswing.js
-// Uses 2nd Swing's catalogsearch (more relevant): /catalogsearch/result/?q=...
+// Robust: handles catalogsearch grid, list, and single-product pages.
 
 function cleanTitle(s = "") {
   return String(s).replace(/\s+/g, " ").trim();
@@ -26,7 +26,7 @@ function toModelKey(title = "") {
   return title.toLowerCase().replace(/\s+/g, " ").replace(/putter|golf/g, "").trim().slice(0, 60);
 }
 
-/** ------- Query relevance helpers (brand/model aware) ------- */
+/** Query relevance helpers */
 const STOP = new Set([
   "putter","putters","golf","club","clubs","left","right","lh","rh",
   "hand","handed","mens","women","ladies","adult","junior","kids","in","inch","inches"
@@ -75,52 +75,143 @@ function hitsIn(text, toks) {
   return n;
 }
 
-export default async function handler(req, res) {
-  if (req.method !== "GET") return res.status(405).json([]);
-  const q = String(req.query.q || "").trim();
-  if (!q) return res.status(200).json([]);
+/** Parse a single product page (JSON-LD first, then DOM) */
+async function parseProductPage(html, url) {
+  const { load } = await import("cheerio");
+  const $ = load(html);
 
-  try {
-    const searchUrl = `https://www.2ndswing.com/catalogsearch/result/?q=${encodeURIComponent(q)}`;
+  // JSON-LD Product
+  let title = "";
+  let price = null;
+  let image = "";
 
-    const html = await fetch(searchUrl, {
-      headers: {
-        "user-agent": "Mozilla/5.0 (compatible; PutterIQBot/1.0; +https://putteriq.com)",
-        "accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
-      },
-      cache: "no-store",
-    }).then(r => r.ok ? r.text() : "").catch(() => "");
+  $('script[type="application/ld+json"]').each((_, el) => {
+    try {
+      const txt = $(el).contents().text();
+      if (!txt) return;
+      const data = JSON.parse(txt);
+      const arr = Array.isArray(data) ? data : [data];
+      for (const node of arr) {
+        if (!node) continue;
+        if (node["@type"] === "Product" || node.name) {
+          if (!title && node.name) title = cleanTitle(node.name);
+          if (!image && node.image) image = Array.isArray(node.image) ? node.image[0] : node.image;
+          const offer = Array.isArray(node.offers) ? node.offers[0] : node.offers;
+          if (offer?.price && price == null) price = Number(offer.price);
+        }
+        if (Array.isArray(node["@graph"])) {
+          for (const g of node["@graph"]) {
+            if (g?.["@type"] === "Product" || g?.name) {
+              if (!title && g.name) title = cleanTitle(g.name);
+              if (!image && g.image) image = Array.isArray(g.image) ? g.image[0] : g.image;
+              const offer = Array.isArray(g.offers) ? g.offers[0] : g.offers;
+              if (offer?.price && price == null) price = Number(offer.price);
+            }
+          }
+        }
+      }
+    } catch {}
+  });
 
-    if (!html) return res.status(200).json([]);
+  // Fallback DOM selectors
+  if (!title) {
+    title =
+      cleanTitle($('.product-info-main .page-title span, .product-info-main .page-title, h1.page-title span, h1.page-title').first().text()) ||
+      cleanTitle($('.product-name').first().text());
+  }
+  if (price == null) {
+    const pAttr = $('.price-wrapper[data-price-amount]').first().attr('data-price-amount');
+    if (pAttr) price = Number(pAttr);
+    if (price == null) {
+      const priceText = $('.price-final_price .price, .price-wrapper .price, .price').first().text().trim();
+      price = parsePrice(priceText);
+    }
+  }
+  if (!image) {
+    image =
+      $('img.fotorama__img, .gallery-placeholder img, .product.media img').first().attr('src') ||
+      $('img').first().attr('src') ||
+      "";
+  }
 
-    const { load } = await import("cheerio");
-    const $ = load(html);
+  if (!title || price == null) return null;
 
-    // Product tiles on catalogsearch page (Magento-style markup)
-    const items = [];
-    const seen = new Set();
+  return {
+    source: "2ndswing",
+    retailer: "2nd Swing",
+    productId: url || title,
+    url,
+    title,
+    image: image || null,
+    price,
+    currency: "USD",
+    condition: "USED",
+    specs: inferSpecsFromTitle(title),
+    createdAt: new Date().toISOString(),
+    __model: toModelKey(title),
+  };
+}
 
-    // Common selectors:
-    // - .products-grid .product-item
-    // - .product-item-info / .product-item-link
-    // - .price, .price-final_price .price, .price-wrapper[data-price-amount]
-    $(".products-grid .product-item, .product-item").each((_, el) => {
+/** Parse a search (grid/list) page */
+async function parseSearchPage(html) {
+  const { load } = await import("cheerio");
+  const $ = load(html);
+  const items = [];
+  const seen = new Set();
+
+  // Grid-style (Magento)
+  $(".products-grid .product-item, .product-item").each((_, el) => {
+    const $el = $(el);
+    const title =
+      cleanTitle(
+        $el.find(".product-item-name a, .product-item-link").first().text() ||
+        $el.find("a[title]").first().attr("title") ||
+        $el.find(".product-item-name").first().text()
+      );
+    let href =
+      $el.find(".product-item-name a, .product-item-link").first().attr("href") ||
+      $el.find("a[title]").first().attr("href") ||
+      "";
+
+    if (!title || !href) return;
+    if (href.startsWith("/")) href = `https://www.2ndswing.com${href}`;
+
+    const img =
+      $el.find("img").first().attr("src") ||
+      $el.find("img").first().attr("data-src") ||
+      "";
+
+    const priceAttr = $el.find(".price-wrapper[data-price-amount]").first().attr("data-price-amount");
+    const priceText =
+      $el.find(".price-final_price .price, .price").first().text().trim() ||
+      $el.find("[data-price-type='finalPrice']").first().text().trim() ||
+      "";
+    const price = priceAttr ? Number(priceAttr) : parsePrice(priceText);
+
+    if (price == null) return;
+
+    const key = `${title}::${href}`;
+    if (seen.has(key)) return;
+    seen.add(key);
+
+    items.push({ title, url: href, image: img, price, currency: "USD" });
+  });
+
+  // List-style fallback
+  if (!items.length) {
+    $(".products.list .product-item, .search.results .product-item").each((_, el) => {
       const $el = $(el);
-
       const title =
         cleanTitle(
           $el.find(".product-item-name a, .product-item-link").first().text() ||
           $el.find("a[title]").first().attr("title") ||
           $el.find(".product-item-name").first().text()
         );
-
       let href =
         $el.find(".product-item-name a, .product-item-link").first().attr("href") ||
         $el.find("a[title]").first().attr("href") ||
         "";
-
       if (!title || !href) return;
-
       if (href.startsWith("/")) href = `https://www.2ndswing.com${href}`;
 
       const img =
@@ -128,30 +219,57 @@ export default async function handler(req, res) {
         $el.find("img").first().attr("data-src") ||
         "";
 
-      // Price: try data attributes first, then text
       const priceAttr = $el.find(".price-wrapper[data-price-amount]").first().attr("data-price-amount");
       const priceText =
         $el.find(".price-final_price .price, .price").first().text().trim() ||
         $el.find("[data-price-type='finalPrice']").first().text().trim() ||
         "";
       const price = priceAttr ? Number(priceAttr) : parsePrice(priceText);
-
       if (price == null) return;
 
       const key = `${title}::${href}`;
       if (seen.has(key)) return;
       seen.add(key);
 
-      items.push({
-        title,
-        url: href,
-        image: img,
-        price,
-        currency: "USD",
-      });
+      items.push({ title, url: href, image: img, price, currency: "USD" });
     });
+  }
 
-    if (!items.length) return res.status(200).json([]);
+  return items;
+}
+
+export default async function handler(req, res) {
+  if (req.method !== "GET") return res.status(405).json([]);
+  const q = String(req.query.q || "").trim();
+  if (!q) return res.status(200).json([]);
+
+  try {
+    const searchUrl = `https://www.2ndswing.com/catalogsearch/result/?q=${encodeURIComponent(q)}`;
+    const html = await fetch(searchUrl, {
+      headers: {
+        "user-agent": "Mozilla/5.0 (compatible; PutterIQBot/1.0; +https://putteriq.com)",
+        "accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+      },
+      cache: "no-store",
+      redirect: "follow",
+    }).then(r => r.ok ? r.text() : "").catch(() => "");
+
+    if (!html) return res.status(200).json([]);
+
+    // Heuristic: is this a single product page? (has product JSON-LD with price)
+    const looksLikeSingle =
+      /"@type"\s*:\s*"Product"/i.test(html) &&
+      /"offers"\s*:\s*{[^}]*"price"\s*:\s*"?\d/i.test(html) &&
+      !/ItemList/i.test(html);
+
+    if (looksLikeSingle || /"og:type"\s*content="product"/i.test(html)) {
+      const one = await parseProductPage(html, searchUrl);
+      return res.status(200).json(one ? [one] : []);
+    }
+
+    // Otherwise parse as a search results page
+    let items = await parseSearchPage(html);
+    if (!items || !items.length) return res.status(200).json([]);
 
     // Normalize
     let out = items.map(p => ({
@@ -163,39 +281,28 @@ export default async function handler(req, res) {
       image: p.image || null,
       price: p.price,
       currency: p.currency || "USD",
-      condition: "USED", // generally preowned (OK as default)
+      condition: "USED",
       specs: inferSpecsFromTitle(p.title),
       createdAt: new Date().toISOString(),
       __model: toModelKey(p.title),
     }));
 
-    // Query-aware filter: should already be relevant, but enforce tokens
-    // ---- MIN threshold: be lenient for model-led queries like “napa” ----
-const RAW = tokensFromQuery(q);
-const TOKENS = expandTokens(RAW);
+    // Token-aware filter (lenient for model-led terms like “napa”)
+    const RAW = tokensFromQuery(q);
+    const TOKENS = expandTokens(RAW);
 
-// treat certain model tokens as “rare/short” — allow MIN=1 when present
-const RARE_MODELS = new Set([
-  "napa","tei3","circa","button","back","bb","np","np2","x5","x7","x5.5","x7.5",
-  "bee","timeless","goLo","futura","fastback","squareback","fb","sb"
-]);
+    // If query has a short/rare model token, allow single-hit matching by default
+    const RARE_MODELS = new Set([
+      "napa","tei3","circa","bb","np","np2","x5","x7","x5.5","x7.5","bee","timeless","golo",
+      "futura","fastback","squareback","fb","sb"
+    ]);
+    const hasRareModel = RAW.some(t => RARE_MODELS.has(t));
+    const minScoreParam = Number.isFinite(Number(req.query.minScore))
+      ? Number(req.query.minScore) : null;
+    const defaultMin = RAW.length >= 2 ? 2 : 1;
+    const MIN = minScoreParam ?? (hasRareModel ? 1 : defaultMin);
 
-const hasRareModel = RAW.some(t => RARE_MODELS.has(t));
-const minScoreParam = Number.isFinite(Number(req.query.minScore))
-  ? Number(req.query.minScore)
-  : null;
-
-// default MIN: if query had multiple meaningful tokens, 2; else 1
-const defaultMin = RAW.length >= 2 ? 2 : 1;
-
-// BUT if it’s model-led (e.g., includes “napa”), allow MIN=1
-const MIN = minScoreParam ?? (hasRareModel ? 1 : defaultMin);
-if (TOKENS.length) {
-      const minScoreParam = Number.isFinite(Number(req.query.minScore))
-        ? Number(req.query.minScore)
-        : null;
-      const MIN = minScoreParam ?? (RAW.length >= 2 ? 2 : 1);
-
+    if (TOKENS.length) {
       out = out
         .map(x => ({ x, score: Math.max(hitsIn(x.title, TOKENS), hitsIn(x.url, TOKENS)) }))
         .filter(r => r.score >= MIN)
