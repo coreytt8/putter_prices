@@ -1154,10 +1154,25 @@ export default function PuttersPage() {
 
   return (
     <li
+{(() => {
+  const condParam =
+    (o?.conditionBand || o?.condition || "").toUpperCase() ||
+    selectedConditionBand(conds) ||
+    "";
+
+  // Variant-aware stats lookup
+  const modelKey   = getModelKey(o);
+  const variant    = detectVariant(o?.title);
+  const variantKey = getStatsKey3(modelKey, variant, condParam);
+  const baseKey    = getStatsKey(modelKey, condParam);
+  const perOfferStats = statsByModel[variantKey] ?? statsByModel[baseKey] ?? stats;
+
+  return (
+    <li
       key={o.productId + o.url}
       className="flex items-center justify-between gap-3 rounded border border-gray-100 p-2"
     >
-      {/* LEFT: logo + seller/retailer + badge */}
+      {/* LEFT: logo + retailer/seller */}
       <div className="flex min-w-0 items-center gap-2">
         {retailerLogos[o.retailer] && (
           // eslint-disable-next-line @next/next/no-img-element
@@ -1172,19 +1187,7 @@ export default function PuttersPage() {
           <div className="truncate text-sm font-medium">
             {o.retailer}
             {o?.seller?.username && (
-              <>
-                {/* ✅ variant → base → group */}
-                <SmartPriceBadge
-                  price={Number(o.price)}
-                  baseStats={perOfferStats}
-                  variantStats={null}
-                  title={o.title}
-                  specs={o.specs}
-                  brand={g?.brand}
-                  className="ml-2"
-                />
-                <span className="ml-2 text-xs text-gray-500">@{o.seller.username}</span>
-              </>
+              <span className="ml-2 text-xs text-gray-500">@{o.seller.username}</span>
             )}
             {typeof o?.seller?.feedbackPct === "number" && (
               <span className="ml-2 rounded-full bg-gray-100 px-2 py-[2px] text-[11px] font-medium text-gray-700">
@@ -1195,11 +1198,22 @@ export default function PuttersPage() {
         </div>
       </div>
 
-      {/* RIGHT: price + view */}
+      {/* RIGHT: badge + price + view */}
       <div className="flex items-center gap-3">
+        {/* ✅ variant → base → group */}
+        <SmartPriceBadge
+          price={Number(o.price)}
+          baseStats={perOfferStats}
+          variantStats={null}
+          title={o.title}
+          specs={o.specs}
+          brand={g?.brand}
+        />
+
         <span className="text-sm font-semibold">
           {typeof o.price === "number" ? formatPrice(o.price, o.currency) : "—"}
         </span>
+
         <a
           href={o.url}
           target="_blank"
@@ -1211,7 +1225,7 @@ export default function PuttersPage() {
       </div>
     </li>
   );
-})}
+})()}
 
                                
                                   {/* Enhanced spec line */}
