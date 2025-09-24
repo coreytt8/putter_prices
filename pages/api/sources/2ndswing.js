@@ -330,27 +330,66 @@ export default async function handler(req, res) {
     }));
 
     // token-aware filter (lenient for model-led terms like “napa”)
-    const RARE_MODELS = new Set([
-      "napa","tei3","circa","bb","np","np2","x5","x7","x5.5","x7.5","bee","timeless","golo",
-      "futura","fastback","squareback","fb","sb"
-    ]);
-    const hasRareModel = RAW.some(t => RARE_MODELS.has(t));
-    const minScoreParam = Number.isFinite(Number(req.query.minScore))
-      ? Number(req.query.minScore) : null;
-    const defaultMin = RAW.length >= 2 ? 2 : 1;
-    const MIN = minScoreParam ?? (hasRareModel ? 1 : defaultMin);
+    // Token-aware filter (brand-guard + model-friendly scoring)
+const RAW = tokensFromQuery(q);
+const TOKENS = expandTokens(RAW);
 
-    if (TOKENS.length) {
-      const scored = out
-        .map(x => ({ x, score: Math.max(hitsIn(x.title, TOKENS), hitsIn(x.url, TOKENS)) }));
-      log.counts.scored = scored.length;
+// brand family guard: if user mentioned a brand, require it
+const BRAND_FAMILIES = {
+  scotty: ["scotty","cameron","titleist"],
+  cameron: ["scotty","cameron","titleist"],
+  titleist: ["titleist","scotty","cameron"],
+  taylormade: ["taylormade","taylor","made","tm","spider"],
+  odyssey: ["odyssey","jailbird","tri-hot","white hot","versa","ai-one"],
+  ping: ["ping","anser","pld","vault"],
+  bettinardi: ["bettinardi","bb","studio stock","queen b"],
+  lab: ["lab","l.a.b.","df","mezz","mez"]
+};
+const brandKey = Object.keys(BRAND_FAMILIES).find(b => RAW.includes(b));
+const needBrand = Boolean(brandKey);
+const brandTokens = new Set(BRAND_FAMILIES[brandKey] || []);
 
-      out = scored
-        .filter(r => r.score >= MIN)
-        .sort((a, b) => (b.score - a.score) || ((a.x.price ?? Infinity) - (b.x.price ?? Infinity)))
-        .map(r => r.x);
-      log.counts.afterFilter = out.length;
-    }
+// common model tokens — add as needed
+const MODEL_TOKENS = new Set([
+  "napa","newport","newport2","np2","phantom","futura","fastback","squareback","golo",
+  "anser","spider","jailbird","bb","studio","stock","queen","b","pld","vault","df","mezz"
+]);
+
+// rare/short models → allow MIN=1
+const RARE_MODELS = new Set([
+  "napa","tei3","circa","bb","np","np2","x5","x7","x5.5","x7.5","bee","timeless","golo",
+  "futura","fastback","squareback","fb","sb"
+]);
+const hasRareModel = RAW.some(t => RARE_MODELS.has(t));
+const minScoreParam = Number.isFinite(Number(req.query.minScore))
+  ? Number(req.query.minScore)
+  : null;
+// default MIN: with ≥2 query tokens we used 2; but we’ll be more lenient now
+const defaultMin = RAW.length >= 2 ? 2 : 1;
+const MIN = minScoreParam ?? (hasRareModel ? 1 : defaultMin);
+
+if (TOKENS.length) {
+  const brandList = Array.from(brandTokens);
+  const modelList = RAW.filter(t => MODEL_TOKENS.has(t));
+  out = out
+    .map(x => {
+      const scoreTitle = hitsIn(x.title, TOKENS);
+      const scoreUrl   = hitsIn(x.url, TOKENS);
+      const score      = Math.max(scoreTitle, scoreUrl);
+
+      const brandHit = needBrand ? (hitsIn(x.title, brandList) > 0 || hitsIn(x.url, brandList) > 0) : true;
+
+      const modelHit = modelList.length
+        ? (hitsIn(x.title, modelList) > 0 || hitsIn(x.url, modelList) > 0)
+        : false;
+
+      return { x, score, brandHit, modelHit };
+    })
+    // Keep if: brand ok AND (model token hit OR score >= MIN)
+    .filter(r => r.brandHit && (r.modelHit || r.score >= MIN))
+    .sort((a, b) => (b.score - a.score) || ((a.x.price ?? Infinity) - (b.x.price ?? Infinity)))
+    .map(r => r.x);
+}
 
     if (trace) return res.status(200).json({ out, trace: log });
     return res.status(200).json(out);
