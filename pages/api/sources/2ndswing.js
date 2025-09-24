@@ -170,9 +170,27 @@ export default async function handler(req, res) {
     }));
 
     // Query-aware filter: should already be relevant, but enforce tokens
-    const RAW = tokensFromQuery(q);
-    const TOKENS = expandTokens(RAW);
-    if (TOKENS.length) {
+    // ---- MIN threshold: be lenient for model-led queries like “napa” ----
+const RAW = tokensFromQuery(q);
+const TOKENS = expandTokens(RAW);
+
+// treat certain model tokens as “rare/short” — allow MIN=1 when present
+const RARE_MODELS = new Set([
+  "napa","tei3","circa","button","back","bb","np","np2","x5","x7","x5.5","x7.5",
+  "bee","timeless","goLo","futura","fastback","squareback","fb","sb"
+]);
+
+const hasRareModel = RAW.some(t => RARE_MODELS.has(t));
+const minScoreParam = Number.isFinite(Number(req.query.minScore))
+  ? Number(req.query.minScore)
+  : null;
+
+// default MIN: if query had multiple meaningful tokens, 2; else 1
+const defaultMin = RAW.length >= 2 ? 2 : 1;
+
+// BUT if it’s model-led (e.g., includes “napa”), allow MIN=1
+const MIN = minScoreParam ?? (hasRareModel ? 1 : defaultMin);
+if (TOKENS.length) {
       const minScoreParam = Number.isFinite(Number(req.query.minScore))
         ? Number(req.query.minScore)
         : null;
