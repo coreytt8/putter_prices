@@ -16,7 +16,7 @@
  * EPN_MKEVT=1
  */
 
-import * as cheerio from "cheerio";
+import cheerio from "cheerio";
 
 const EBAY_BROWSE_URL = "https://api.ebay.com/buy/browse/v1/item_summary/search";
 const EBAY_SITE = process.env.EBAY_SITE || "EBAY_US";
