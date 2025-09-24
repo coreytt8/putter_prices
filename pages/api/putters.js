@@ -20,6 +20,9 @@ const cheerio = require("cheerio");
 
 const EBAY_BROWSE_URL = "https://api.ebay.com/buy/browse/v1/item_summary/search";
 const EBAY_SITE = process.env.EBAY_SITE || "EBAY_US";
+// Toggle extra sources safely (env: ENABLE_2ND_SWING=false to disable in prod)
+const ENABLE_2ND_SWING = String(process.env.ENABLE_2ND_SWING ?? "true") !== "false";
+
 
 // -------------------- EPN affiliate decorator --------------------
 const EPN = {
@@ -689,12 +692,21 @@ export default async function handler(req, res) {
     });
 
     // ===== NEW: 2nd Swing fetch + normalize =====
-    let extraOffers = [];
-    try {
-      extraOffers = await fetchSecondSwing(q);
-    } catch {
-      extraOffers = [];
-    }
+   // ===== NEW: 2nd Swing fetch + normalize (SAFE) =====
+let extraOffers = [];
+const skip2ndSwing = String((req.query.nosrc || "")).toLowerCase().includes("2ndswing");
+
+if (ENABLE_2ND_SWING && !skip2ndSwing) {
+  try {
+    const arr = await fetchSecondSwing(q);
+    if (Array.isArray(arr) && arr.length) extraOffers = arr;
+  } catch (e) {
+    console.error("2nd Swing fetch failed:", e?.message || e);
+    // keep going with eBay-only
+  }
+}
+// (rest of your code continues… merge offers, filters, grouping, etc.)
+
 
     const fetchedCountExtra = extraOffers.length;
 
