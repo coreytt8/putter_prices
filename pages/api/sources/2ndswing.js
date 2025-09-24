@@ -1,10 +1,9 @@
 /* eslint-disable no-console */
 // pages/api/sources/2ndswing.js
-// Robust: handles catalogsearch grid, list, and single-product pages.
+// Strategy: catalogsearch → single-product detect → grid/list parse
+// Fallback: DuckDuckGo HTML search (site:2ndswing.com <q> putter) → parse product pages
 
-function cleanTitle(s = "") {
-  return String(s).replace(/\s+/g, " ").trim();
-}
+function cleanTitle(s = "") { return String(s).replace(/\s+/g, " ").trim(); }
 function parsePrice(text) {
   if (!text) return null;
   const m = String(text).replace(/,/g, "").match(/\$?\s*([\d.]+)/);
@@ -26,7 +25,7 @@ function toModelKey(title = "") {
   return title.toLowerCase().replace(/\s+/g, " ").replace(/putter|golf/g, "").trim().slice(0, 60);
 }
 
-/** Query relevance helpers */
+/** query relevance */
 const STOP = new Set([
   "putter","putters","golf","club","clubs","left","right","lh","rh",
   "hand","handed","mens","women","ladies","adult","junior","kids","in","inch","inches"
@@ -75,16 +74,16 @@ function hitsIn(text, toks) {
   return n;
 }
 
-/** Parse a single product page (JSON-LD first, then DOM) */
+/** parse single product page */
 async function parseProductPage(html, url) {
   const { load } = await import("cheerio");
   const $ = load(html);
 
-  // JSON-LD Product
   let title = "";
   let price = null;
   let image = "";
 
+  // JSON-LD
   $('script[type="application/ld+json"]').each((_, el) => {
     try {
       const txt = $(el).contents().text();
@@ -113,7 +112,7 @@ async function parseProductPage(html, url) {
     } catch {}
   });
 
-  // Fallback DOM selectors
+  // DOM fallbacks
   if (!title) {
     title =
       cleanTitle($('.product-info-main .page-title span, .product-info-main .page-title, h1.page-title span, h1.page-title').first().text()) ||
@@ -152,14 +151,14 @@ async function parseProductPage(html, url) {
   };
 }
 
-/** Parse a search (grid/list) page */
+/** parse search (grid/list) page */
 async function parseSearchPage(html) {
   const { load } = await import("cheerio");
   const $ = load(html);
   const items = [];
   const seen = new Set();
 
-  // Grid-style (Magento)
+  // grid
   $(".products-grid .product-item, .product-item").each((_, el) => {
     const $el = $(el);
     const title =
@@ -172,7 +171,6 @@ async function parseSearchPage(html) {
       $el.find(".product-item-name a, .product-item-link").first().attr("href") ||
       $el.find("a[title]").first().attr("href") ||
       "";
-
     if (!title || !href) return;
     if (href.startsWith("/")) href = `https://www.2ndswing.com${href}`;
 
@@ -187,7 +185,6 @@ async function parseSearchPage(html) {
       $el.find("[data-price-type='finalPrice']").first().text().trim() ||
       "";
     const price = priceAttr ? Number(priceAttr) : parsePrice(priceText);
-
     if (price == null) return;
 
     const key = `${title}::${href}`;
@@ -197,7 +194,7 @@ async function parseSearchPage(html) {
     items.push({ title, url: href, image: img, price, currency: "USD" });
   });
 
-  // List-style fallback
+  // list fallback
   if (!items.length) {
     $(".products.list .product-item, .search.results .product-item").each((_, el) => {
       const $el = $(el);
@@ -234,8 +231,40 @@ async function parseSearchPage(html) {
       items.push({ title, url: href, image: img, price, currency: "USD" });
     });
   }
-
   return items;
+}
+
+/** fallback via DuckDuckGo HTML: get product URLs then parse each page */
+async function ddgFindProductUrls(q) {
+  const query = `site:2ndswing.com ${q} putter`;
+  const ddgUrl = `https://duckduckgo.com/html/?q=${encodeURIComponent(query)}`;
+  const html = await fetch(ddgUrl, {
+    headers: {
+      "user-agent": "Mozilla/5.0 (compatible; PutterIQBot/1.0; +https://putteriq.com)",
+      "accept": "text/html",
+    },
+    cache: "no-store",
+  }).then(r => r.ok ? r.text() : "").catch(() => "");
+  if (!html) return [];
+
+  const { load } = await import("cheerio");
+  const $ = load(html);
+  const urls = new Set();
+
+  $("a.result__a, a.result__url, a[href]").each((_, el) => {
+    const href = String($(el).attr("href") || "");
+    if (!href) return;
+    // prefer product detail pages
+    if (/^https?:\/\/(www\.)?2ndswing\.com\/golf-clubs\/putters\//i.test(href)) {
+      urls.add(href);
+    }
+    // accept catalogsearch results too
+    if (/^https?:\/\/(www\.)?2ndswing\.com\/catalogsearch\/result\//i.test(href)) {
+      urls.add(href);
+    }
+  });
+
+  return Array.from(urls).slice(0, 10);
 }
 
 export default async function handler(req, res) {
@@ -244,54 +273,10 @@ export default async function handler(req, res) {
   if (!q) return res.status(200).json([]);
 
   try {
-    const searchUrl = `https://www.2ndswing.com/catalogsearch/result/?q=${encodeURIComponent(q)}`;
-    const html = await fetch(searchUrl, {
-      headers: {
-        "user-agent": "Mozilla/5.0 (compatible; PutterIQBot/1.0; +https://putteriq.com)",
-        "accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
-      },
-      cache: "no-store",
-      redirect: "follow",
-    }).then(r => r.ok ? r.text() : "").catch(() => "");
-
-    if (!html) return res.status(200).json([]);
-
-    // Heuristic: is this a single product page? (has product JSON-LD with price)
-    const looksLikeSingle =
-      /"@type"\s*:\s*"Product"/i.test(html) &&
-      /"offers"\s*:\s*{[^}]*"price"\s*:\s*"?\d/i.test(html) &&
-      !/ItemList/i.test(html);
-
-    if (looksLikeSingle || /"og:type"\s*content="product"/i.test(html)) {
-      const one = await parseProductPage(html, searchUrl);
-      return res.status(200).json(one ? [one] : []);
-    }
-
-    // Otherwise parse as a search results page
-    let items = await parseSearchPage(html);
-    if (!items || !items.length) return res.status(200).json([]);
-
-    // Normalize
-    let out = items.map(p => ({
-      source: "2ndswing",
-      retailer: "2nd Swing",
-      productId: p.url || p.title,
-      url: p.url,
-      title: cleanTitle(p.title),
-      image: p.image || null,
-      price: p.price,
-      currency: p.currency || "USD",
-      condition: "USED",
-      specs: inferSpecsFromTitle(p.title),
-      createdAt: new Date().toISOString(),
-      __model: toModelKey(p.title),
-    }));
-
-    // Token-aware filter (lenient for model-led terms like “napa”)
     const RAW = tokensFromQuery(q);
     const TOKENS = expandTokens(RAW);
 
-    // If query has a short/rare model token, allow single-hit matching by default
+    // Threshold: be lenient for “napa”, “np2”, etc.
     const RARE_MODELS = new Set([
       "napa","tei3","circa","bb","np","np2","x5","x7","x5.5","x7.5","bee","timeless","golo",
       "futura","fastback","squareback","fb","sb"
@@ -302,7 +287,70 @@ export default async function handler(req, res) {
     const defaultMin = RAW.length >= 2 ? 2 : 1;
     const MIN = minScoreParam ?? (hasRareModel ? 1 : defaultMin);
 
-    if (TOKENS.length) {
+    // 1) try catalogsearch
+    const searchUrl = `https://www.2ndswing.com/catalogsearch/result/?q=${encodeURIComponent(q)}`;
+    let html = await fetch(searchUrl, {
+      headers: {
+        "user-agent": "Mozilla/5.0 (compatible; PutterIQBot/1.0; +https://putteriq.com)",
+        "accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+      },
+      cache: "no-store",
+      redirect: "follow",
+    }).then(r => r.ok ? r.text() : "").catch(() => "");
+
+    let out = [];
+
+    if (html) {
+      const looksLikeSingle =
+        /"@type"\s*:\s*"Product"/i.test(html) &&
+        /"offers"\s*:\s*{[^}]*"price"\s*:\s*"?\d/i.test(html) &&
+        !/ItemList/i.test(html);
+
+      if (looksLikeSingle || /"og:type"\s*content="product"/i.test(html)) {
+        const one = await parseProductPage(html, searchUrl);
+        if (one) out = [one];
+      } else {
+        const items = await parseSearchPage(html);
+        if (items?.length) {
+          out = items.map(p => ({
+            source: "2ndswing",
+            retailer: "2nd Swing",
+            productId: p.url || p.title,
+            url: p.url,
+            title: cleanTitle(p.title),
+            image: p.image || null,
+            price: p.price,
+            currency: p.currency || "USD",
+            condition: "USED",
+            specs: inferSpecsFromTitle(p.title),
+            createdAt: new Date().toISOString(),
+            __model: toModelKey(p.title),
+          }));
+        }
+      }
+    }
+
+    // 2) if empty, fallback to DuckDuckGo product URLs
+    if (!out.length) {
+      const urls = await ddgFindProductUrls(q);
+      const results = [];
+      for (const url of urls) {
+        const pageHtml = await fetch(url, {
+          headers: {
+            "user-agent": "Mozilla/5.0 (compatible; PutterIQBot/1.0; +https://putteriq.com)",
+            "accept": "text/html",
+          },
+          cache: "no-store",
+        }).then(r => r.ok ? r.text() : "").catch(() => "");
+        if (!pageHtml) continue;
+        const prod = await parseProductPage(pageHtml, url);
+        if (prod) results.push(prod);
+      }
+      out = results;
+    }
+
+    // 3) apply token filter (strict; no generic filler)
+    if (TOKENS.length && out.length) {
       out = out
         .map(x => ({ x, score: Math.max(hitsIn(x.title, TOKENS), hitsIn(x.url, TOKENS)) }))
         .filter(r => r.score >= MIN)
@@ -313,6 +361,6 @@ export default async function handler(req, res) {
     return res.status(200).json(out);
   } catch (e) {
     console.error("[2ndswing] error:", e?.message || e);
-    return res.status(200).json([]); // never throw
+    return res.status(200).json([]);
   }
 }
