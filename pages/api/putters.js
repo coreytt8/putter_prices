@@ -16,6 +16,8 @@
  * EPN_MKEVT=1
  */
 
+import * as cheerio from "cheerio";
+
 const EBAY_BROWSE_URL = "https://api.ebay.com/buy/browse/v1/item_summary/search";
 const EBAY_SITE = process.env.EBAY_SITE || "EBAY_US";
 
@@ -134,19 +136,19 @@ function normalizeSearchQ(q = "") {
   if (!s) return s;
 
   // singularize "putters" → "putter"
-  s = s.replace(/\bputters\b/gi, "putter");
+  s = s.replace(/\\bputters\\b/gi, "putter");
 
   // guarantee exactly one "putter"
-  if (!/\bputter\b/i.test(s)) s = `${s} putter`;
-  s = s.replace(/\b(putter)(\s+\1)+\b/gi, "putter");
+  if (!/\\bputter\\b/i.test(s)) s = `${s} putter`;
+  s = s.replace(/\\b(putter)(\\s+\\1)+\\b/gi, "putter");
 
-  return s.replace(/\s+/g, " ").trim();
+  return s.replace(/\\s+/g, " ").trim();
 }
 
 // Recognize putter items (title, aspects, or category path)
 function isLikelyPutter(item) {
   const title = norm(item?.title);
-  if (/\bputter\b/.test(title)) return true;
+  if (/\\bputter\\b/.test(title)) return true;
 
   const aspects = [
     ...(Array.isArray(item?.itemSpecifics) ? item.itemSpecifics : []),
@@ -188,17 +190,17 @@ function pickAspect(item, names = []) {
 function coerceDex(val) {
   const s = norm(val);
   if (!s) return null;
-  if (/\bl(h|eft)\b|\bleft[-\s]?hand(ed)?\b/.test(s)) return "LEFT";
-  if (/\br(h|ight)\b|\bright[-\s]?hand(ed)?\b/.test(s)) return "RIGHT";
-  if (/^l\/h$|^l-h$|^l\s*h$/.test(s)) return "LEFT";
-  if (/^r\/h$|^r-h$|^r\s*h$/.test(s)) return "RIGHT";
+  if (/\\bl(h|eft)\\b|\\bleft[-\\s]?hand(ed)?\\b/.test(s)) return "LEFT";
+  if (/\\br(h|ight)\\b|\\bright[-\\s]?hand(ed)?\\b/.test(s)) return "RIGHT";
+  if (/^l\\/h$|^l-h$|^l\\s*h$/.test(s)) return "LEFT";
+  if (/^r\\/h$|^r-h$|^r\\s*h$/.test(s)) return "RIGHT";
   return null;
 }
 
 function dexFromTitle(title = "") {
   const t = ` ${norm(title)} `;
-  if (/(^|\W)l\/h(\W|$)|(^|\W)l-h(\W|$)|(^|\W)l\s*h(\W|$)|(^|\W)lh(\W|$)|\bleft[-\s]?hand(?:ed)?\b/.test(t)) return "LEFT";
-  if (/(^|\W)r\/h(\W|$)|(^|\W)r-h(\W|$)|(^|\W)r\s*h(\W|$)|(^|\W)rh(\W|$)|\bright[-\s]?hand(?:ed)?\b/.test(t)) return "RIGHT";
+  if (/(^|\\W)l\\/h(\\W|$)|(^|\\W)l-h(\\W|$)|(^|\\W)l\\s*h(\\W|$)|(^|\\W)lh(\\W|$)|\\bleft[-\\s]?hand(?:ed)?\\b/.test(t)) return "LEFT";
+  if (/(^|\\W)r\\/h(\\W|$)|(^|\\W)r-h(\\W|$)|(^|\\W)r\\s*h(\\W|$)|(^|\\W)rh(\\W|$)|\\bright[-\\s]?hand(?:ed)?\\b/.test(t)) return "RIGHT";
   return null;
 }
 
@@ -214,8 +216,8 @@ function headTypeFromTitle(title = "") {
 function parseLengthFromTitle(title = "") {
   const t = norm(title);
   let length = null;
-  const m1 = t.match(/(\d{2}(?:\.\d)?)\s*(?:\"|in\b|inch(?:es)?\b)/i);
-  const m2 = t.match(/\b(32|33|34|35|36|37)\s*(?:\/|-)\s*(32|33|34|35|36|37)\b/);
+  const m1 = t.match(/(\\d{2}(?:\\.\\d)?)\\s*(?:\\"|in\\b|inch(?:es)?\\b)/i);
+  const m2 = t.match(/\\b(32|33|34|35|36|37)\\s*(?:\\/|-)\\s*(32|33|34|35|36|37)\\b/);
   if (m1) length = Number(m1[1]);
   else if (m2) length = Math.max(Number(m2[1]), Number(m2[2]));
   return length;
@@ -235,13 +237,12 @@ function parseSpecsFromItem(item) {
   headType = headType || headTypeFromTitle(title);
 
   const length = parseLengthFromTitle(title);
-  const hasHeadcover = /head\s*cover|\bhc\b|headcover/i.test(title);
+  const hasHeadcover = /head\\s*cover|\\bhc\\b|headcover/i.test(title);
   const shaftMatch = /slant|flow|plumber|single bend/i.exec(title);
   const shaft = shaftMatch ? shaftMatch[0] : null;
 
   // coarse family tagging (used for grouping key fallback)
   const FAMILIES = [
-    // Cameron core & collectible
     "newport 2.5", "newport 2", "newport",
     "phantom 11.5", "phantom 11", "phantom 7.5", "phantom 7", "phantom 5.5", "phantom 5", "phantom x",
     "fastback", "squareback", "futura", "select", "special select",
@@ -250,8 +251,6 @@ function parseSpecsFromItem(item) {
     "newport beach", "beach",
     "napa", "napa valley",
     "circle t", "tour rat", "009m", "009h", "009s", "009", "gss", "my girl",
-
-    // TaylorMade / Odyssey / Ping / Bettinardi / LAB / Evnroll
     "anser", "tyne", "zing", "tomcat", "fetch",
     "spider", "spider x", "spider tour", "myspider",
     "two ball", "2-ball", "eleven", "seven", "#7", "#9", "versa", "jailbird",
@@ -270,8 +269,8 @@ function normalizeModelFromTitle(title = "", fallbackFamily = null) {
   if (fallbackFamily) return fallbackFamily;
   const t = title
     .toLowerCase()
-    .replace(/scotty\s*cameron|titleist|putter|golf|\b(rh|lh)\b|right\s*hand(ed)?|left\s*hand(ed)?/g, "")
-    .replace(/\s+/g, " ")
+    .replace(/scotty\\s*cameron|titleist|putter|golf|\\b(rh|lh)\\b|right\\s*hand(ed)?|left\\s*hand(ed)?/g, "")
+    .replace(/\\s+/g, " ")
     .trim();
   const tokens = t.split(" ").filter(Boolean).slice(0, 4);
   return tokens.length ? tokens.join(" ") : (title || "unknown").slice(0, 50);
@@ -286,42 +285,32 @@ const GLOBAL_LIMITED_TOKENS = [
 ];
 
 const BRAND_LIMITED_TOKENS = {
-  // Scotty Cameron
   "scotty cameron": [
     "circle t", "tour rat", "009", "009m", "009h", "009s", "gss",
     "my girl", "button back", "oil can", "pro platinum",
     "newport beach", "napa", "napa valley", "studio design", "tei3", "tel3"
   ],
-  // Bettinardi
   "bettinardi": [
     "hive", "tour stock", "dass", "bb0", "bb8", "bb8 flow", "bb8f",
     "tiki", "stinger", "damascus", "limited run", "tour dept"
   ],
-  // TaylorMade
   "taylormade": [
     "spider limited", "spider tour", "itsy bitsy", "tour issue", "tour only"
   ],
-  // Odyssey / Toulon
   "odyssey": [
     "tour issue", "tour only", "prototype", "japan limited", "ten limited", "eleven limited"
   ],
   "toulon": [
     "garage", "small batch", "tour issue", "tour only"
   ],
-  // PING
   "ping": [
     "pld limited", "pld milled limited", "scottsdale tr", "anser becu", "anser copper", "vault"
   ],
-  // L.A.B. Golf
   "l.a.b.": ["limited", "tour issue", "tour only", "df3 limited", "mezz limited"],
   "lab golf": ["limited", "tour issue", "tour only", "df3 limited", "mezz limited"],
-  // Evnroll
   "evnroll": ["tour proto", "tour preferred", "v-series tourspec", "limited"],
-  // Mizuno
   "mizuno": ["m-craft limited", "m craft limited", "copper", "japan limited"],
-  // Wilson
   "wilson": ["8802 limited", "8802 copper", "tour issue"],
-  // SIK / others
   "sik": ["tour issue", "limited", "prototype"],
 };
 
@@ -332,7 +321,7 @@ function hasAnyToken(text, tokens) {
 
 function detectBrandInText(text) {
   const n = norm(text);
-  const brandAliases = Object.keys(BRAND_LIMITED_TOKENS).concat(["titleist"]); // titleist ~ cameron
+  const brandAliases = Object.keys(BRAND_LIMITED_TOKENS).concat(["titleist"]);
   for (const b of brandAliases) {
     if (n.includes(norm(b))) return b;
   }
@@ -346,25 +335,22 @@ function buildLimitedRecallQueries(rawQ, normalizedQ) {
   const brandInQ = detectBrandInText(rawQ);
   const n = norm(rawQ);
 
-  // Brand-specific assists
   for (const [brand, tokens] of Object.entries(BRAND_LIMITED_TOKENS)) {
     const brandMentioned = brandInQ && norm(brandInQ) === norm(brand);
     const tokensPresent = hasAnyToken(n, tokens);
     if (brandMentioned || tokensPresent) {
       qset.add(normalizeSearchQ(`${brand} ${rawQ}`));
-      if (!/\bputter\b/i.test(rawQ)) qset.add(normalizeSearchQ(`${brand} ${rawQ} putter`));
+      if (!/\\bputter\\b/i.test(rawQ)) qset.add(normalizeSearchQ(`${brand} ${rawQ} putter`));
     }
   }
 
-  // Global limited words without a brand → add popular brand assists
   if (!brandInQ && hasAnyToken(n, GLOBAL_LIMITED_TOKENS)) {
     ["scotty cameron", "bettinardi", "odyssey", "ping", "taylormade", "toulon", "evnroll", "lab golf"].forEach(b =>
       qset.add(normalizeSearchQ(`${b} ${rawQ}`))
     );
   }
 
-  // Cameron implied brand (user forgot “Scotty Cameron”)
-  const impliesCameron = /\b(newport|phantom|futura|squareback|fastback|napa|tei3|tel3|button back|pro platinum|circle t|tour rat|009|009m|009h|009s|my girl|beach)\b/i.test(rawQ);
+  const impliesCameron = /\\b(newport|phantom|futura|squareback|fastback|napa|tei3|tel3|button back|pro platinum|circle t|tour rat|009|009m|009h|009s|my girl|beach)\\b/i.test(rawQ);
   if (!brandInQ && impliesCameron) {
     qset.add(normalizeSearchQ(`scotty cameron ${rawQ}`));
   }
@@ -407,6 +393,147 @@ async function fetchEbayBrowse({ q, limit = 50, offset = 0, sort, forceCategory 
     throw new Error(`eBay Browse error ${res.status}: ${txt}`);
   }
   return res.json();
+}
+
+/* ============================
+   2ND SWING ADAPTER (inline)
+   ============================ */
+function parsePriceLike(text) {
+  if (!text) return null;
+  const m = String(text).replace(/,/g, "").match(/\\$?\\s*([\\d.]+)/);
+  return m ? Number(m[1]) : null;
+}
+
+function extractJsonLdProducts($) {
+  const out = [];
+  $('script[type="application/ld+json"]').each((_, el) => {
+    const txt = $(el).contents().text();
+    if (!txt) return;
+    try {
+      const json = JSON.parse(txt);
+      const arr = Array.isArray(json) ? json : [json];
+      for (const node of arr) {
+        if (!node) continue;
+        if (node["@type"] === "ItemList" && Array.isArray(node.itemListElement)) {
+          for (const it of node.itemListElement) {
+            const item = it?.item || it;
+            if (!item) continue;
+            const offer = item.offers && (Array.isArray(item.offers) ? item.offers[0] : item.offers);
+            out.push({
+              name: item.name,
+              url: item.url || item["@id"],
+              image: Array.isArray(item.image) ? item.image[0] : item.image,
+              price: offer?.price,
+              priceCurrency: offer?.priceCurrency || "USD",
+              condition: item.itemCondition || offer?.itemCondition || "",
+            });
+          }
+        }
+        if (Array.isArray(node["@graph"])) {
+          for (const g of node["@graph"]) {
+            if (!g) continue;
+            const offer = g.offers && (Array.isArray(g.offers) ? g.offers[0] : g.offers);
+            if (g["@type"] === "Product" || g.name) {
+              out.push({
+                name: g.name,
+                url: g.url || g["@id"],
+                image: Array.isArray(g.image) ? g.image[0] : g.image,
+                price: offer?.price,
+                priceCurrency: offer?.priceCurrency || "USD",
+                condition: g.itemCondition || offer?.itemCondition || "",
+              });
+            }
+          }
+        }
+      }
+    } catch {}
+  });
+  return out;
+}
+
+function extractCards($) {
+  const out = [];
+  const sels = [
+    ".product-list .product-tile",
+    ".product-grid .product-tile",
+    ".product-card",
+    ".product-item",
+    "[data-product-id]",
+  ];
+  const seen = new Set();
+  for (const sel of sels) {
+    $(sel).each((_, el) => {
+      const $el = $(el);
+      const title = ($el.find(".product-title, .title, a[title]").first().text() || "").trim()
+        || ($el.find("a").first().attr("title") || "");
+      let url = $el.find("a").first().attr("href") || "";
+      if (url && url.startsWith("/")) url = `https://www.2ndswing.com${url}`;
+      const img = $el.find("img").first().attr("src") || $el.find("img").first().attr("data-src") || "";
+      const priceTxt = $el.find(".price, .product-price, [data-price]").first().text().trim()
+        || $el.find("[data-price]").first().attr("data-price") || "";
+      const price = parsePriceLike(priceTxt);
+      if (!title || !url || price == null) return;
+      const key = `${title}::${url}`;
+      if (seen.has(key)) return;
+      seen.add(key);
+      out.push({
+        name: title,
+        url, image: img, price, priceCurrency: "USD", condition: "",
+      });
+    });
+    if (out.length) break;
+  }
+  return out;
+}
+
+async function fetchSecondSwing(q) {
+  const urls = [
+    `https://www.2ndswing.com/search?query=${encodeURIComponent(q)}&category=golf-putters`,
+    `https://www.2ndswing.com/golf-putters/?q=${encodeURIComponent(q)}`,
+  ];
+  for (const url of urls) {
+    try {
+      const res = await fetch(url, {
+        headers: {
+          "user-agent": "Mozilla/5.0 (compatible; PutterIQBot/1.0; +https://putteriq.com)",
+          "accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+        },
+        cache: "no-store",
+      });
+      if (!res.ok) continue;
+      const html = await res.text();
+      const $ = cheerio.load(html);
+      let items = extractJsonLdProducts($);
+      if (!items.length) items = extractCards($);
+      if (!items.length) continue;
+
+      return items.map((p) => {
+        const title = (p.name || "").trim();
+        const price = safeNum(p.price ?? parsePriceLike(p.price));
+        if (!title || price == null) return null;
+        // reuse our title-based spec/model inference
+        const specs = parseSpecsFromItem({ title });
+        const modelKey = normalizeModelFromTitle(title, specs?.family || null);
+        return {
+          source: "2ndswing",
+          retailer: "2nd Swing",
+          productId: p.url || title,
+          url: p.url || "",
+          title,
+          price,
+          currency: p.priceCurrency || "USD",
+          image: p.image || null,
+          condition: p.condition || null,
+          createdAt: new Date().toISOString(),
+          specs,
+          __model: modelKey,
+        };
+      }).filter(Boolean);
+    } catch {
+      // try next
+    }
+  }
+  return [];
 }
 
 // -------------------- API Route --------------------
@@ -482,7 +609,7 @@ export default async function handler(req, res) {
 
     // If recall is still low, try an alternate variant (remove plural entirely, keep "putter" once)
     if (items.length < 20) {
-      const alt = normalizeSearchQ(rawQ.replace(/\bputters\b/gi, "").trim());
+      const alt = normalizeSearchQ(rawQ.replace(/\\bputters\\b/gi, "").trim());
       if (alt && alt !== q) {
         const extra = await fetchEbayBrowse({ q: alt, limit, offset: 0, sort, forceCategory });
         const arr = Array.isArray(extra?.itemSummaries) ? extra.itemSummaries : [];
@@ -494,9 +621,9 @@ export default async function handler(req, res) {
     // Strict "putter only" filter
     items = items.filter(isLikelyPutter);
 
-    const fetchedCount = items.length;
+    const fetchedCountEbay = items.length;
 
-    // Map → offers
+    // Map → eBay offers
     let offers = items.map((item) => {
       const image = item?.image?.imageUrl || item?.thumbnailImages?.[0]?.imageUrl || null;
 
@@ -523,6 +650,7 @@ export default async function handler(req, res) {
       const modelKey = normalizeModelFromTitle(item?.title || "", family);
 
       return {
+        source: "ebay",
         productId: item?.itemId || item?.legacyItemId || item?.itemHref || item?.title,
         url,
         title: item?.title,
@@ -551,19 +679,39 @@ export default async function handler(req, res) {
       };
     });
 
-    // De-dupe obvious clones (same seller + same title + same price)
-    const seen = new Set();
+    // De-dupe obvious clones (same seller + same title + same price) for eBay
+    const seenEbay = new Set();
     offers = offers.filter((o) => {
       const key = `${(o.seller?.username || "").toLowerCase()}|${(o.title || "").toLowerCase()}|${o.price ?? "?"}`;
-      if (seen.has(key)) return false;
-      seen.add(key);
+      if (seenEbay.has(key)) return false;
+      seenEbay.add(key);
       return true;
     });
 
-    // Track drops for debugging
+    // ===== NEW: 2nd Swing fetch + normalize =====
+    let extraOffers = [];
+    try {
+      extraOffers = await fetchSecondSwing(q);
+    } catch {
+      extraOffers = [];
+    }
+
+    const fetchedCountExtra = extraOffers.length;
+
+    // Merge by (source|url) to avoid dupes across sources
+    const byKey = new Map();
+    for (const o of [...offers, ...extraOffers]) {
+      const src = o.source || (o.retailer && o.retailer.toLowerCase().includes("ebay") ? "ebay" : "unknown");
+      const key = `${src}|${o.url}`;
+      if (!byKey.has(key)) byKey.set(key, o);
+    }
+    offers = Array.from(byKey.values());
+
+    // Track drops for debugging (now across all sources)
     let droppedNoPrice = 0;
     let droppedNoImage = 0;
 
+    // Apply the same filters to the merged set
     if (onlyComplete) {
       offers = offers.filter((o) => {
         const ok = typeof o.price === "number" && o.image;
@@ -611,8 +759,12 @@ export default async function handler(req, res) {
         const tb = b.createdAt ? new Date(b.createdAt).getTime() : 0;
         return tb - ta;
       });
+    } else {
+      // default: best price asc for flat; grouped later re-sorts by best price too
+      offers.sort((a, b) => (a.price ?? Infinity) - (b.price ?? Infinity));
     }
 
+    const fetchedCount = fetchedCountEbay + fetchedCountExtra;
     const keptCount = offers.length;
 
     // lightweight analytics for the snapshot
@@ -652,9 +804,8 @@ export default async function handler(req, res) {
           page,
           perPage,
           sort: sort || "default",
-          source: "ebay-browse",
-          // keep debug minimal to avoid leaking in UI; you can expand if needed
-          debug: { droppedNoPrice, droppedNoImage, totalFromEbay }
+          source: "multi",
+          debug: { droppedNoPrice, droppedNoImage, totalFromEbay, fetchedCountEbay, fetchedCountExtra }
         },
         analytics,
       });
@@ -677,7 +828,7 @@ export default async function handler(req, res) {
       }
       const g = groupsMap.get(key);
       g.count += 1;
-      g.retailers.add(o.retailer || "eBay");
+      g.retailers.add(o.retailer || (o.source === "ebay" ? "eBay" : o.source));
       g.offers.push(o);
       if (typeof o.price === "number" && (g.bestPrice == null || o.price < g.bestPrice)) {
         g.bestPrice = o.price;
@@ -698,7 +849,7 @@ export default async function handler(req, res) {
           ? Math.max(...a.offers.map((o) => (o.createdAt ? new Date(o.createdAt).getTime() : 0)))
           : 0;
         const tb = b.offers.length
-          ? Math.max(...b.offers.map((o) => (o.createdAt ? new Date(b.createdAt).getTime() : 0)))
+          ? Math.max(...b.offers.map((o) => (o.createdAt ? new Date(o.createdAt).getTime() : 0)))
           : 0;
         return tb - ta;
       });
@@ -724,8 +875,8 @@ export default async function handler(req, res) {
         page,
         perPage,
         sort: sort || "bestprice",
-        source: "ebay-browse",
-        debug: { droppedNoPrice, droppedNoImage, totalFromEbay },
+        source: "multi",
+        debug: { droppedNoPrice, droppedNoImage, totalFromEbay, fetchedCountEbay, fetchedCountExtra },
       },
       analytics,
     });
