@@ -1172,15 +1172,14 @@ export default function PuttersPage() {
             {o.retailer}
             {o?.seller?.username && (
               <>
-                <SmartPriceBadge
-                  price={Number(o.price)}
-                  baseStats={perOfferStats}   {/* ✅ variant → base → group */}
-                  variantStats={null}
-                  title={o.title}
-                  specs={o.specs}
-                  brand={g?.brand}
-                  className="mr-2"
-                />
+ {/* ✅ variant → base → group */}
+<SmartPriceBadge
+  price={Number(o.price)}
+  baseStats={perOfferStats}
+  variantStats={null}
+  title={o.title}
+  specs={o.specs}
+/>
                 <span className="ml-2 text-xs text-gray-500">
                   @{o.seller.username}
                 </span>
