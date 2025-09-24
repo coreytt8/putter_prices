@@ -192,8 +192,8 @@ function coerceDex(val) {
   if (!s) return null;
   if (/\\bl(h|eft)\\b|\\bleft[-\\s]?hand(ed)?\\b/.test(s)) return "LEFT";
   if (/\\br(h|ight)\\b|\\bright[-\\s]?hand(ed)?\\b/.test(s)) return "RIGHT";
-  if (/^l\\/h$|^l-h$|^l\\s*h$/.test(s)) return "LEFT";
-  if (/^r\\/h$|^r-h$|^r\\s*h$/.test(s)) return "RIGHT";
+if (/^l\/h$|^l-h$|^l\s*h$/.test(s)) return "LEFT";
+if (/^r\/h$|^r-h$|^r\s*h$/.test(s)) return "RIGHT";
   return null;
 }
 
