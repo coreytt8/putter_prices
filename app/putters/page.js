@@ -1208,7 +1208,6 @@ export default function PuttersPage() {
     </li>
   );
 })}
-
                                
                                   {/* Enhanced spec line */}
                                   <div className="mt-0.5 truncate text-xs text-gray-500">
