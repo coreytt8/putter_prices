@@ -1,11 +1,9 @@
 /* eslint-disable no-console */
 // pages/api/sources/2ndswing.js
+// Uses 2nd Swing's catalogsearch (more relevant): /catalogsearch/result/?q=...
 
 function cleanTitle(s = "") {
-  return String(s)
-    .replace(/\s+/g, " ")
-    .replace(/\s+Putter\s*$/i, " Putter")
-    .trim();
+  return String(s).replace(/\s+/g, " ").trim();
 }
 function parsePrice(text) {
   if (!text) return null;
@@ -25,44 +23,57 @@ function inferSpecsFromTitle(title = "") {
   return { dexterity: dex, headType: head, length: len ? Number(len) : undefined };
 }
 function toModelKey(title = "") {
-  return title
-    .toLowerCase()
-    .replace(/\s+/g, " ")
-    .replace(/putter|golf/g, "")
-    .trim()
-    .slice(0, 60);
+  return title.toLowerCase().replace(/\s+/g, " ").replace(/putter|golf/g, "").trim().slice(0, 60);
 }
 
-/** -------- Query relevance helpers -------- */
+/** ------- Query relevance helpers (brand/model aware) ------- */
 const STOP = new Set([
-  "putter","putters","golf","club","clubs","hockey","stick","left","right","lh","rh",
+  "putter","putters","golf","club","clubs","left","right","lh","rh",
   "hand","handed","mens","women","ladies","adult","junior","kids","in","inch","inches"
 ]);
+const ALIASES = {
+  scotty: ["scotty","cameron","titleist"],
+  cameron: ["scotty","cameron","titleist"],
+  titleist: ["titleist","scotty","cameron"],
+  taylormade: ["taylormade","taylor","made","tm","spider"],
+  odyssey: ["odyssey","jailbird","tri-hot","white hot","versa","ai-one"],
+  ping: ["ping","anser","pld","vault"],
+  bettinardi: ["bettinardi","bb","studio stock","queen b"],
+  lab: ["lab","l.a.b.","df","mezz","mez"],
+  newport: ["newport","newport2","newport 2","np2","np"],
+  phantom: ["phantom","phantom x","x"],
+  spider: ["spider","tour","5k"],
+  anser: ["anser"],
+  napa: ["napa"]
+};
 function tokensFromQuery(q) {
   const t = norm(q).replace(/[#/\\\-_.]/g, " ");
   const raw = t.split(/\s+/).filter(Boolean);
   const kept = [];
   for (const tok of raw) {
     if (STOP.has(tok)) continue;
-    // keep short model tokens (#7, 7, x5) and brand/model words
-    if (tok.length >= 2 || /^\d+$/.test(tok)) kept.push(tok);
+    if (tok.length >= 2 || /^\d+(\.\d+)?$/.test(tok)) kept.push(tok);
   }
-  // split "scotty cameron" naturally gives two tokens; that's good
   return kept;
 }
-function relevanceScore(title, qTokens) {
-  if (!qTokens.length) return 0;
-  const t = ` ${norm(title)} `;
-  let score = 0;
-  for (const tok of qTokens) {
-    // match whole word or common separators, case-insensitive
-    const re = new RegExp(`(^|[^a-z0-9])${tok}([^a-z0-9]|$)`, "i");
-    if (re.test(t)) score++;
+function expandTokens(tokens) {
+  const out = new Set();
+  for (const t of tokens) {
+    out.add(t);
+    (ALIASES[t] || []).forEach(a => out.add(a.toLowerCase()));
   }
-  return score;
+  return Array.from(out);
 }
-
-/** ----------------------------------------- */
+function hitsIn(text, toks) {
+  const s = ` ${norm(text)} `;
+  let n = 0;
+  for (const tok of toks) {
+    const tokEsc = tok.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    const re = new RegExp(`(^|[^a-z0-9])${tokEsc}([^a-z0-9]|$)`, "i");
+    if (re.test(s)) n++;
+  }
+  return n;
+}
 
 export default async function handler(req, res) {
   if (req.method !== "GET") return res.status(405).json([]);
@@ -70,213 +81,109 @@ export default async function handler(req, res) {
   if (!q) return res.status(200).json([]);
 
   try {
-    const urls = [
-      `https://www.2ndswing.com/search?query=${encodeURIComponent(q)}&category=golf-putters`,
-      `https://www.2ndswing.com/golf-putters/?q=${encodeURIComponent(q)}`
-    ];
+    const searchUrl = `https://www.2ndswing.com/catalogsearch/result/?q=${encodeURIComponent(q)}`;
 
-    const all = [];
-    for (const url of urls) {
-      const html = await fetch(url, {
-        headers: {
-          "user-agent": "Mozilla/5.0 (compatible; PutterIQBot/1.0; +https://putteriq.com)",
-          "accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
-        },
-        cache: "no-store",
-      }).then(r => r.ok ? r.text() : "").catch(() => "");
+    const html = await fetch(searchUrl, {
+      headers: {
+        "user-agent": "Mozilla/5.0 (compatible; PutterIQBot/1.0; +https://putteriq.com)",
+        "accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+      },
+      cache: "no-store",
+    }).then(r => r.ok ? r.text() : "").catch(() => "");
 
-      if (!html) continue;
+    if (!html) return res.status(200).json([]);
 
-      const { load } = await import("cheerio");
-      const $ = load(html);
+    const { load } = await import("cheerio");
+    const $ = load(html);
 
-      // ---- 1) JSON-LD first (ignore "Wish List") ----
-      const jsonLdItems = [];
-      $('script[type="application/ld+json"]').each((_, el) => {
-        try {
-          const txt = $(el).contents().text();
-          if (!txt) return;
-          const data = JSON.parse(txt);
-          const pile = Array.isArray(data) ? data : [data];
+    // Product tiles on catalogsearch page (Magento-style markup)
+    const items = [];
+    const seen = new Set();
 
-          const pushProduct = (p) => {
-            if (!p) return;
-            const name = cleanTitle(p.name || "");
-            if (!name || /^wish\s*list$/i.test(name)) return;
-            const offer = Array.isArray(p.offers) ? p.offers[0] : p.offers;
-            jsonLdItems.push({
-              title: name,
-              url: p.url || p["@id"] || "",
-              image: Array.isArray(p.image) ? p.image[0] : p.image,
-              price: offer?.price ? Number(offer.price) : null,
-              currency: offer?.priceCurrency || "USD",
-            });
-          };
+    // Common selectors:
+    // - .products-grid .product-item
+    // - .product-item-info / .product-item-link
+    // - .price, .price-final_price .price, .price-wrapper[data-price-amount]
+    $(".products-grid .product-item, .product-item").each((_, el) => {
+      const $el = $(el);
 
-          for (const node of pile) {
-            if (!node) continue;
-            if (node["@type"] === "ItemList" && Array.isArray(node.itemListElement)) {
-              for (const it of node.itemListElement) pushProduct(it?.item || it);
-            }
-            if (Array.isArray(node["@graph"])) {
-              for (const g of node["@graph"]) {
-                if (g?.["@type"] === "Product" || g?.name) pushProduct(g);
-              }
-            }
-            if (node["@type"] === "Product" || node.name) pushProduct(node);
-          }
-        } catch {}
+      const title =
+        cleanTitle(
+          $el.find(".product-item-name a, .product-item-link").first().text() ||
+          $el.find("a[title]").first().attr("title") ||
+          $el.find(".product-item-name").first().text()
+        );
+
+      let href =
+        $el.find(".product-item-name a, .product-item-link").first().attr("href") ||
+        $el.find("a[title]").first().attr("href") ||
+        "";
+
+      if (!title || !href) return;
+
+      if (href.startsWith("/")) href = `https://www.2ndswing.com${href}`;
+
+      const img =
+        $el.find("img").first().attr("src") ||
+        $el.find("img").first().attr("data-src") ||
+        "";
+
+      // Price: try data attributes first, then text
+      const priceAttr = $el.find(".price-wrapper[data-price-amount]").first().attr("data-price-amount");
+      const priceText =
+        $el.find(".price-final_price .price, .price").first().text().trim() ||
+        $el.find("[data-price-type='finalPrice']").first().text().trim() ||
+        "";
+      const price = priceAttr ? Number(priceAttr) : parsePrice(priceText);
+
+      if (price == null) return;
+
+      const key = `${title}::${href}`;
+      if (seen.has(key)) return;
+      seen.add(key);
+
+      items.push({
+        title,
+        url: href,
+        image: img,
+        price,
+        currency: "USD",
       });
+    });
 
-      let items = jsonLdItems;
-
-      // ---- 2) Fallback: robust card selectors ----
-      if (!items.length) {
-        const seen = new Set();
-        $(".product-grid .product-card, .product-item, .product-tile, [data-sku]").each((_, el) => {
-          const $el = $(el);
-
-          const title = cleanTitle(
-            $el.find('.product-title, .product-title a, a.product-title, a[title][href*="/golf-clubs/putters/"]').first().text()
-            || $el.find('a[href*="/golf-clubs/putters/"]').first().text()
-            || $el.find('h3, h2').first().text()
-          );
-          if (!title || /^wish\s*list$/i.test(title)) return;
-
-          let href =
-            $el.find('a[href*="/golf-clubs/putters/"]').first().attr("href")
-            || $el.find("a").first().attr("href")
-            || "";
-          if (!href) return;
-          if (href.startsWith("/")) href = `https://www.2ndswing.com${href}`;
-
-          const img =
-            $el.find("img").first().attr("src")
-            || $el.find("img").first().attr("data-src")
-            || "";
-
-          const priceTxt =
-            $el.find(".price, .product-price, [data-price]").first().text().trim()
-            || $el.find("[data-price]").first().attr("data-price")
-            || "";
-          const price = parsePrice(priceTxt);
-          if (price == null) return;
-
-          const key = `${title}::${href}`;
-          if (seen.has(key)) return;
-          seen.add(key);
-
-          items.push({ title, url: href, image: img, price, currency: "USD" });
-        });
-      }
-
-      all.push(...items);
-      if (all.length) break;
-    }
+    if (!items.length) return res.status(200).json([]);
 
     // Normalize
-    let out = (all || [])
-      .map(p => {
-        if (!p?.title || typeof p.price !== "number") return null;
-        const title = cleanTitle(p.title);
-        if (!title || /^wish\s*list$/i.test(title)) return null;
-        return {
-          source: "2ndswing",
-          retailer: "2nd Swing",
-          productId: p.url || title,
-          url: p.url,
-          title,
-          image: p.image || null,
-          price: p.price,
-          currency: p.currency || "USD",
-          condition: "USED",
-          specs: inferSpecsFromTitle(title),
-          createdAt: new Date().toISOString(),
-          __model: toModelKey(title),
-        };
-      })
-      .filter(Boolean);
+    let out = items.map(p => ({
+      source: "2ndswing",
+      retailer: "2nd Swing",
+      productId: p.url || p.title,
+      url: p.url,
+      title: cleanTitle(p.title),
+      image: p.image || null,
+      price: p.price,
+      currency: p.currency || "USD",
+      condition: "USED", // generally preowned (OK as default)
+      specs: inferSpecsFromTitle(p.title),
+      createdAt: new Date().toISOString(),
+      __model: toModelKey(p.title),
+    }));
 
-// ---------- Query-aware filter + ranking (brand/model aware) ----------
+    // Query-aware filter: should already be relevant, but enforce tokens
+    const RAW = tokensFromQuery(q);
+    const TOKENS = expandTokens(RAW);
+    if (TOKENS.length) {
+      const minScoreParam = Number.isFinite(Number(req.query.minScore))
+        ? Number(req.query.minScore)
+        : null;
+      const MIN = minScoreParam ?? (RAW.length >= 2 ? 2 : 1);
 
-// Expand brand/model synonyms so "scotty cameron" can also match "titleist" prefixes, etc.
-const ALIASES = {
-  // brand families
-  scotty: ["scotty", "cameron", "titleist"], // 2nd Swing often prefixes with Titleist
-  cameron: ["scotty", "cameron", "titleist"],
-  titleist: ["titleist", "scotty", "cameron"],
-  taylormade: ["taylormade", "taylor", "made", "tm"],
-  odyssey: ["odyssey", "ai-one", "tri-hot", "white hot", "versa"],
-  ping: ["ping", "anser", "pld", "vault"],
-  evnroll: ["evnroll", "er"],
-  bettinardi: ["bettinardi", "bb", "studio stock", "queen b"],
-  lab: ["lab", "l.a.b.", "df", "mezz", "mez"],
-  // common model families
-  newport: ["newport", "newport 2", "np2", "np", "newport2"],
-  phantom: ["phantom", "x", "phantom x"],
-  spider: ["spider", "spider x", "spider tour", "5k", "mallet"],
-  anser: ["anser"],
-};
-function expandTokens(tokens) {
-  const out = new Set();
-  for (const t of tokens) {
-    out.add(t);
-    const key = t.toLowerCase();
-    if (ALIASES[key]) {
-      for (const a of ALIASES[key]) out.add(a.toLowerCase());
+      out = out
+        .map(x => ({ x, score: Math.max(hitsIn(x.title, TOKENS), hitsIn(x.url, TOKENS)) }))
+        .filter(r => r.score >= MIN)
+        .sort((a, b) => (b.score - a.score) || ((a.x.price ?? Infinity) - (b.x.price ?? Infinity)))
+        .map(r => r.x);
     }
-  }
-  return Array.from(out);
-}
-
-const RAW_TOKENS = tokensFromQuery(q);
-// keep short numerics like "2", "5.5", "#7"
-const TOKENS = expandTokens(RAW_TOKENS);
-
-// helper: count distinct token hits in a title (word-boundary-ish)
-function titleHits(title, toks) {
-  const t = ` ${norm(title)} `;
-  let hits = 0;
-  for (const tok of toks) {
-    // escape regex specials in tok
-    const tokEsc = tok.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-    const re = new RegExp(`(^|[^a-z0-9])${tokEsc}([^a-z0-9]|$)`, "i");
-    if (re.test(t)) hits++;
-  }
-  return hits;
-}
-
-// require more than 1 hit when query has multiple meaningful tokens
-const defaultThreshold = RAW_TOKENS.length >= 2 ? 2 : 1;
-// allow override via ?minScore=2
-const minScoreParam = Number.isFinite(Number(req.query.minScore))
-  ? Number(req.query.minScore) : null;
-const threshold = minScoreParam ?? defaultThreshold;
-
-if (TOKENS.length) {
-  const scored = out.map(x => ({
-    x,
-    score: titleHits(x.title, TOKENS)
-  }));
-
-  // 1) strict filter first
-  let filtered = scored.filter(r => r.score >= threshold);
-
-  // 2) if empty, relax to >=1 (at least one term match)
-  if (filtered.length === 0) {
-    filtered = scored.filter(r => r.score >= 1);
-  }
-
-  // 3) still empty? keep a small cheapest slice to avoid [].
-  if (filtered.length === 0) {
-    out.sort((a, b) => (a.price ?? Infinity) - (b.price ?? Infinity));
-    out = out.slice(0, 12);
-  } else {
-    // sort by relevance desc then price asc
-    filtered.sort((a, b) => (b.score - a.score) || ((a.x.price ?? Infinity) - (b.x.price ?? Infinity)));
-    out = filtered.map(r => r.x);
-  }
-}
 
     return res.status(200).json(out);
   } catch (e) {
