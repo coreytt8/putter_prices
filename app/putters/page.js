@@ -548,7 +548,7 @@ export default function PuttersPage() {
      FLAT VIEW: prefetch stats for visible items (condition-aware)
      ============================ */
 
-import { detectVariant } from "@/lib/variantMap";
+
 
 
    useEffect(() => {
