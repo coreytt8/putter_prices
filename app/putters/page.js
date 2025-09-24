@@ -1201,29 +1201,31 @@ export default function PuttersPage() {
 
 
                         {/* Lows row (on expand) */}
-                        {isOpen && (
-                          <div className="mt-2 text-xs text-gray-600">
-                            <span className="mr-2">Lows:</span>
-                            <span className="mr-3">1d {formatPrice(Number(lows?.low1d))}</span>
-                            <span className="mr-3">7d {formatPrice(Number(lows?.low7d))}</span>
-                            <span>30d {formatPrice(Number(lows?.low30d))}</span>
-                          </div>
-                        )}
-                      </div>{/* (this closes the left column in your earlier layout) */}
+{isOpen && (
+  <div className="mt-2 text-xs text-gray-600">
+    <span className="mr-2">Lows:</span>
+    <span className="mr-3">1d {formatPrice(Number(lows?.low1d))}</span>
+    <span className="mr-3">7d {formatPrice(Number(lows?.low7d))}</span>
+    <span>30d {formatPrice(Number(lows?.low30d))}</span>
+  </div>
+)}
 
-                      <div className="flex flex-col items-end gap-1">
-                        <div className="shrink-0 rounded-full bg-green-100 px-3 py-1 text-xs font-semibold text-green-700">
-                          Best: {formatPrice(g.bestPrice, g.bestCurrency)}
-                        </div>
-                        {bestDelta && (
-                          <div
-                            className="rounded-full bg-emerald-50 px-3 py-1 text-[11px] font-medium text-emerald-700"
-                            title={`Median ${formatPrice(med)} · Save ~${formatPrice(bestDelta.diff)} (~${bestDelta.pct.toFixed(0)}%)`}
-                          >
-                            Save {formatPrice(bestDelta.diff)} (~{bestDelta.pct.toFixed(0)}%)
-                          </div>
-                        )}
-			</div>
+</div>{/* (this closes the left column in your earlier layout) */}
+
+<div className="flex flex-col items-end gap-1">
+  <div className="shrink-0 rounded-full bg-green-100 px-3 py-1 text-xs font-semibold text-green-700">
+    Best: {formatPrice(g.bestPrice, g.bestCurrency)}
+  </div>
+
+  {bestDelta && (
+    <div
+      className="rounded-full bg-emerald-50 px-3 py-1 text-[11px] font-medium text-emerald-700"
+      title={`Median ${formatPrice(med)} · Save ~${formatPrice(bestDelta.diff)} (~${bestDelta.pct.toFixed(0)}%)`}
+    >
+      Save {formatPrice(bestDelta.diff)} (~{bestDelta.pct.toFixed(0)}%)
+    </div>
+  )}
+</div>
 
                         {/* Copy best link */}
                         <button
