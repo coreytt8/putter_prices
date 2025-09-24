@@ -1394,3 +1394,4 @@ const stats      = statsByModel[variantKey] ?? statsByModel[baseKey] ?? null;
     </main>
   );
 }
+// badge tweak noop
