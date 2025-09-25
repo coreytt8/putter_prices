@@ -313,85 +313,109 @@ export default async function handler(req, res) {
       return res.status(200).json([]);
     }
 
-    // normalize
-    let out = items.map(p => ({
-      source: "2ndswing",
-      retailer: "2nd Swing",
-      productId: p.url || p.title,
-      url: p.url,
-      title: cleanTitle(p.title),
-      image: p.image || null,
-      price: p.price,
-      currency: p.currency || "USD",
-      condition: "USED",
-      specs: inferSpecsFromTitle(p.title),
-      createdAt: new Date().toISOString(),
-      __model: toModelKey(p.title),
-    }));
-
-    // token-aware filter (lenient for model-led terms like “napa”)
-    // Token-aware filter (brand-guard + model-friendly scoring)
-// --- brand-guard + model-friendly scoring (uses existing RAW, TOKENS) ---
+    // ---------- MODEL-FIRST FILTER (robust for weak titles like "Wish List") ----------
 {
-  // If the user mentioned a brand, require it loosely
-  const BRAND_FAMILIES = {
-    scotty: ["scotty","cameron","titleist"],
-    cameron: ["scotty","cameron","titleist"],
-    titleist: ["titleist","scotty","cameron"],
-    taylormade: ["taylormade","taylor","made","tm","spider"],
-    odyssey: ["odyssey","jailbird","tri-hot","white hot","versa","ai-one"],
-    ping: ["ping","anser","pld","vault"],
-    bettinardi: ["bettinardi","bb","studio stock","queen b"],
-    lab: ["lab","l.a.b.","df","mezz","mez"],
-  };
-  const brandKey = Object.keys(BRAND_FAMILIES).find(b => RAW.includes(b));
-  const needBrand = Boolean(brandKey);
-  const brandTokens = new Set(BRAND_FAMILIES[brandKey] || []);
+  // Normalize first
+  let outNorm = out.map(p => ({
+    ...p,
+    _t: (p.title || "").toLowerCase(),
+    _u: (p.url || "").toLowerCase(),
+  }));
 
-  // Common model tokens we want to “believe” even if the title is generic
-  const MODEL_TOKENS = new Set([
-    "napa","newport","newport2","np2","phantom","futura","fastback","squareback","golo",
-    "anser","spider","jailbird","bb","studio","stock","queen","b","pld","vault","df","mezz"
-  ]);
+  // Identify if the query looks model-led (e.g., napa/newport/phantom/...)
+  const qLC = String(q).toLowerCase();
+  const MODEL_TOKENS_ORDERED = [
+    "newport 2","newport2","newport","napa","phantom","futura","fastback","squareback",
+    "golo","anser","spider","jailbird","bb","studio stock","queen b","pld","vault","df","mezz"
+  ];
+  const foundModel = MODEL_TOKENS_ORDERED.find(t => qLC.includes(t));
 
-  // Rare/short models → allow MIN=1
-  const RARE_MODELS = new Set([
-    "napa","tei3","circa","bb","np","np2","x5","x7","x5.5","x7.5","bee","timeless","golo",
-    "futura","fastback","squareback","fb","sb"
-  ]);
-  const hasRareModel = RAW.some(t => RARE_MODELS.has(t));
-  const minScoreParam = Number.isFinite(Number(req.query.minScore))
-    ? Number(req.query.minScore)
-    : null;
-  const defaultMin = RAW.length >= 2 ? 2 : 1;
-  const MIN = minScoreParam ?? (hasRareModel ? 1 : defaultMin);
+  // Detect if the query specified a brand; if so, require it loosely
+  const BRAND_HINTS = ["scotty","cameron","titleist","odyssey","ping","taylormade","bettinardi","lab","l.a.b."];
+  const brandInQuery = BRAND_HINTS.find(b => qLC.includes(b));
 
-  if (TOKENS.length) {
-    const brandList = Array.from(brandTokens);
-    const modelList = RAW.filter(t => MODEL_TOKENS.has(t));
+  if (foundModel) {
+    const modelToken = foundModel;
+    const modelTokenTight = modelToken.replace(/\s+/g, "");
+    const modelTokenDash  = modelToken.replace(/\s+/g, "-");
 
-    out = out
-      .map(x => {
-        const scoreTitle = hitsIn(x.title, TOKENS);
-        const scoreUrl   = hitsIn(x.url, TOKENS);
-        const score      = Math.max(scoreTitle, scoreUrl);
+    outNorm = outNorm.filter(p => {
+      const T = p._t, U = p._u;
 
-        const brandHit = needBrand
-          ? (hitsIn(x.title, brandList) > 0 || hitsIn(x.url, brandList) > 0)
-          : true;
+      // pass if model appears in title OR url (allow plain, dashed, or squashed)
+      const modelHit =
+        T.includes(modelToken) ||
+        U.includes(modelToken) ||
+        U.includes(modelTokenDash) ||
+        U.includes(modelTokenTight);
 
-        const modelHit = modelList.length
-          ? (hitsIn(x.title, modelList) > 0 || hitsIn(x.url, modelList) > 0)
-          : false;
+      // if brand was in query, also require a brand hint match in title or url
+      const brandOk = brandInQuery
+        ? (T.includes(brandInQuery) || U.includes(brandInQuery))
+        : true;
 
-        return { x, score, brandHit, modelHit };
-      })
-      // Keep if: brand ok AND (model token hit OR score >= MIN)
-      .filter(r => r.brandHit && (r.modelHit || r.score >= MIN))
-      .sort((a, b) => (b.score - a.score) || ((a.x.price ?? Infinity) - (b.x.price ?? Infinity)))
-      .map(r => r.x);
+      return modelHit && brandOk;
+    });
+
+    // prefer cheaper first if multiple
+    out = outNorm
+      .sort((a, b) => (a.price ?? Infinity) - (b.price ?? Infinity))
+      .map(({ _t, _u, ...rest }) => rest);
+
+    if (typeof log === "object") {
+      log.steps.push("filter:model-first");
+      log.counts.afterModelFilter = out.length;
+    }
+  } else {
+    // Fallback to general token scoring if query isn't model-led
+    const RAW = tokensFromQuery(q);
+    const TOKENS = expandTokens(RAW);
+
+    const BRAND_FAMILIES = {
+      scotty: ["scotty","cameron","titleist"],
+      cameron: ["scotty","cameron","titleist"],
+      titleist: ["titleist","scotty","cameron"],
+      taylormade: ["taylormade","taylor","made","tm","spider"],
+      odyssey: ["odyssey","jailbird","tri-hot","white hot","versa","ai-one"],
+      ping: ["ping","anser","pld","vault"],
+      bettinardi: ["bettinardi","bb","studio stock","queen b"],
+      lab: ["lab","l.a.b.","df","mezz","mez"],
+    };
+    const brandKey = Object.keys(BRAND_FAMILIES).find(b => RAW.includes(b));
+    const needBrand = Boolean(brandKey);
+    const brandTokens = new Set(BRAND_FAMILIES[brandKey] || []);
+
+    const RARE_MODELS = new Set([
+      "napa","tei3","circa","bb","np","np2","x5","x7","x5.5","x7.5","bee","timeless","golo",
+      "futura","fastback","squareback","fb","sb"
+    ]);
+    const hasRareModel = RAW.some(t => RARE_MODELS.has(t));
+    const minScoreParam = Number.isFinite(Number(req.query.minScore))
+      ? Number(req.query.minScore) : null;
+    const defaultMin = RAW.length >= 2 ? 2 : 1;
+    const MIN = minScoreParam ?? (hasRareModel ? 1 : defaultMin);
+
+    if (TOKENS.length) {
+      const brandList = Array.from(brandTokens);
+      out = out
+        .map(x => {
+          const score = Math.max(hitsIn(x.title, TOKENS), hitsIn(x.url, TOKENS));
+          const brandHit = needBrand
+            ? (hitsIn(x.title, brandList) > 0 || hitsIn(x.url, brandList) > 0)
+            : true;
+          return { x, score, brandHit };
+        })
+        .filter(r => r.brandHit && r.score >= MIN)
+        .sort((a, b) => (b.score - a.score) || ((a.x.price ?? Infinity) - (b.x.price ?? Infinity)))
+        .map(r => r.x);
+      if (typeof log === "object") {
+        log.steps.push("filter:token-fallback");
+        log.counts.afterFilter = out.length;
+      }
+    }
   }
 }
+
 
     if (trace) return res.status(200).json({ out, trace: log });
     return res.status(200).json(out);
