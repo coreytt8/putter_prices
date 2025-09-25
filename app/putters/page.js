@@ -185,6 +185,7 @@ const FIXED_PER_PAGE = 10;
 
 const retailerLogos = {
   eBay: "https://upload.wikimedia.org/wikipedia/commons/1/1b/EBay_logo.svg",
+  "2nd Swing": "https://images.ctfassets.net/3ub10f3qbq43/6W8a2KQ6rZp3bRbxVb6s0T/9f5a9f1c3f7a1e4f3f3b9f2e0d9d2a51/2ndswing-logo.svg", // fallback public SVG; replace if you have a local asset
 };
 
 /* ============================
@@ -269,8 +270,6 @@ export default function PuttersPage() {
   const [broaden, setBroaden] = useState(false); 
   const [includeProShops, setIncludeProShops] = useState(false);
 
-
-
   // data
   const [groups, setGroups] = useState([]);
   const [offers, setOffers] = useState([]);
@@ -286,7 +285,6 @@ export default function PuttersPage() {
   const [expanded, setExpanded] = useState({});
   const [showAllOffersByModel, setShowAllOffersByModel] = useState({});
   const [copiedFor, setCopiedFor] = useState("")
-
 
   // Per-model caches
   const [lowsByModel, setLowsByModel] = useState({});   // model -> lows
@@ -545,8 +543,8 @@ export default function PuttersPage() {
      FLAT VIEW: prefetch stats for visible items (variant + base)
      ============================ */
   useEffect(() => {
-    // Only run in flat/advanced mode when we have offers
-    if (!q.trim() || loading || err || groupMode || !showAdvanced) return;
+    // Only run in flat mode when we have offers
+    if (!q.trim() || loading || err || groupMode) return;
     if (!Array.isArray(offers) || offers.length === 0) return;
 
     let abort = false;
@@ -619,7 +617,7 @@ export default function PuttersPage() {
     }
 
     return () => { abort = true; };
-  }, [q, loading, err, groupMode, showAdvanced, offers, JSON.stringify(conds)]);
+  }, [q, loading, err, groupMode, offers, JSON.stringify(conds)]);
 
   return (
     <main className="mx-auto max-w-6xl px-4 py-8">
@@ -680,8 +678,8 @@ export default function PuttersPage() {
         ))}
       </section>
 
-      {/* Top controls */}
-      <section className="mt-6 grid grid-cols-1 gap-3 md:grid-cols-5">
+      {/* Top controls (added View toggle; kept colors) */}
+      <section className="mt-6 grid grid-cols-1 gap-3 md:grid-cols-6">
         <div className="md:col-span-2">
           <label className="mb-1 block text-sm font-medium">Search</label>
           <input
@@ -706,31 +704,52 @@ export default function PuttersPage() {
           </select>
         </div>
 
+        {/* New: View toggle (Grouped / Flat) */}
+        <div>
+          <label className="mb-1 block text-sm font-medium">View</label>
+          <div className="inline-flex w-full overflow-hidden rounded-md border border-gray-300">
+            <button
+              onClick={() => setGroupMode(true)}
+              className={`flex-1 px-3 py-2 text-sm ${groupMode ? "bg-gray-100 font-semibold" : "hover:bg-gray-50"}`}
+              aria-pressed={groupMode}
+            >
+              Grouped
+            </button>
+            <button
+              onClick={() => { setGroupMode(false); }}
+              className={`flex-1 px-3 py-2 text-sm ${!groupMode ? "bg-gray-100 font-semibold" : "hover:bg-gray-50"}`}
+              aria-pressed={!groupMode}
+            >
+              Flat
+            </button>
+          </div>
+        </div>
+
         <div className="rounded-md border border-gray-200 p-3">
           <label className="flex items-center gap-2 text-sm">
             <input type="checkbox" checked={broaden} onChange={(e) => setBroaden(e.target.checked)} />
             Broaden search (include common variants)
           </label>
           <p className="mt-1 text-xs text-gray-500">
-            Pulls more pages from eBay before filtering. Helpful for niche models/years.
+            Pulls more pages before filtering. Helpful for niche models/years.
           </p>
         </div>
-	<div className="rounded-md border border-gray-200 p-3">
-  <label className="flex items-center gap-2 text-sm">
-    <input
-      type="checkbox"
-      checked={includeProShops}
-      onChange={(e) => setIncludeProShops(e.target.checked)}
-    />
-    Include pro-shop sites (2nd Swing – beta)
-  </label>
-  <p className="mt-1 text-xs text-gray-500">
-    Adds 2nd Swing listings when enabled.
-  </p>
-</div>
 
+        <div className="rounded-md border border-gray-200 p-3">
+          <label className="flex items-center gap-2 text-sm">
+            <input
+              type="checkbox"
+              checked={includeProShops}
+              onChange={(e) => setIncludeProShops(e.target.checked)}
+            />
+            Include pro-shop sites (2nd Swing – beta)
+          </label>
+          <p className="mt-1 text-xs text-gray-500">
+            Adds 2nd Swing listings when enabled.
+          </p>
+        </div>
 
-        <div className="flex items-end justify-between gap-3">
+        <div className="flex items-end justify-between gap-3 md:col-span-6">
           <button onClick={clearAll} className="w-full rounded-md border border-gray-300 px-3 py-2 text-sm hover:bg-gray-100">
             Clear
           </button>
@@ -920,17 +939,6 @@ export default function PuttersPage() {
               />
               Show advanced options
             </label>
-
-            {showAdvanced && (
-              <label className="mt-3 flex items-center gap-2 text-sm">
-                <input
-                  type="checkbox"
-                  checked={groupMode}
-                  onChange={(e) => setGroupMode(e.target.checked)}
-                />
-                Group similar listings (model cards)
-              </label>
-            )}
           </div>
         </div>
       </section>
@@ -1011,7 +1019,7 @@ export default function PuttersPage() {
               const fair = fairPriceBadge(g.bestPrice, stats);
 
               return (
-                <article key={g.model} className="overflow-hidden rounded-xl border border-gray-200 bg-white shadow-sm">
+                <article key={g.model} className="overflow-hidden rounded-xl border border-gray-200 bg-white shadow-sm hover:shadow-md transition-shadow">
                   <div className="relative aspect-[4/3] w-full max-h-48 bg-gray-50">
                     {g.image ? (
                       // eslint-disable-next-line @next/next/no-img-element
@@ -1234,7 +1242,7 @@ export default function PuttersPage() {
                                   href={o.url}
                                   target="_blank"
                                   rel="noreferrer"
-                                  className="rounded-md border px-2 py-1 text-xs"
+                                  className="rounded-md border px-2 py-1 text-xs hover:bg-gray-50"
                                 >
                                   View
                                 </a>
@@ -1277,8 +1285,8 @@ export default function PuttersPage() {
         </>
       )}
 
-      {/* FLAT VIEW (advanced) */}
-      {q.trim() && !loading && !err && !groupMode && showAdvanced && (
+      {/* FLAT VIEW (now independent of "advanced") */}
+      {q.trim() && !loading && !err && !groupMode && (
         <>
           <section className="mt-6 grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
             {offers.map((o) => {
@@ -1293,7 +1301,7 @@ export default function PuttersPage() {
               const stats      = statsByModel[variantKey] ?? statsByModel[baseKey] ?? null;
 
               return (
-                <article key={o.productId + o.url} className="overflow-hidden rounded-xl border border-gray-200 bg-white shadow-sm">
+                <article key={o.productId + o.url} className="overflow-hidden rounded-xl border border-gray-200 bg-white shadow-sm hover:shadow-md transition-shadow">
                   <div className="relative aspect-[4/3] w-full bg-gray-50">
                     {o.image ? (
                       // eslint-disable-next-line @next/next/no-img-element
@@ -1358,7 +1366,7 @@ export default function PuttersPage() {
                         href={o.url}
                         target="_blank"
                         rel="noopener noreferrer"
-                        className="inline-flex items-center rounded-md bg-blue-600 px-3 py-1.5 text-sm font-medium text-white hover:bg-blue-700"
+                        className="inline-flex items-center rounded-md border px-3 py-1.5 text-sm hover:bg-gray-50"
                       >
                         View
                       </a>
