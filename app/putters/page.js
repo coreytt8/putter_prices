@@ -7,8 +7,10 @@ import SmartPriceBadge from "@/components/SmartPriceBadge";
 import { detectVariant } from "@/lib/variantMap";
 
 /* ============================
-   SMART FAIR-PRICE BADGE utils
+   SMART FAIR-PRICE BADGE (inline, JS/JSX)
    ============================ */
+
+// Confidence from sample size + dispersion (IQR/median or approx)
 function getConfidence(sampleSize = 0, dispersionRatio = 0.35) {
   if (!Number.isFinite(sampleSize) || sampleSize < 8) return "insufficient";
   if (sampleSize >= 30 && dispersionRatio < 0.25) return "high";
@@ -24,8 +26,8 @@ function getTier(deltaPct, confidence) {
   return "overpriced";
 }
 function dealScoreFrom(deltaPct, confidence) {
-  const savings = Math.min(Math.max(-deltaPct, 0), 0.40);
-  let score = Math.round(savings * 100);
+  const savings = Math.min(Math.max(-deltaPct, 0), 0.40); // 0..0.40
+  let score = Math.round(savings * 100); // 0..40
   const confBonus =
     confidence === "high" ? 60 :
     confidence === "medium" ? 40 :
@@ -34,6 +36,7 @@ function dealScoreFrom(deltaPct, confidence) {
   if (deltaPct > 0.10) score = Math.max(5, score - 20);
   return Math.max(0, Math.min(100, score));
 }
+// Build a badge from listingPrice + stats {p10,p50,p90,n?,dispersionRatio?}
 function makeSmartBadge({ listingPrice, stats, windowDays = 60 }) {
   if (!stats || typeof listingPrice !== "number" || !isFinite(listingPrice)) {
     return { tier: "insufficient", label: "Not enough data" };
@@ -89,7 +92,17 @@ function makeSmartBadge({ listingPrice, stats, windowDays = 60 }) {
     ? "Not enough comparable sales to estimate a fair market price confidently."
     : `Based on ${nText} comparable sales${condLabel} in ~${windowDays} days. This listing is ${vsText} expected (median). Confidence: ${confidence}.`;
 
-  return { tier, label: LABELS[tier], color: COLORS[tier], icon: ICONS[tier], deltaPct, pctAbs, score, confidence, tooltip };
+  return {
+    tier,
+    label: LABELS[tier],
+    color: COLORS[tier],
+    icon: ICONS[tier],
+    deltaPct,
+    pctAbs,
+    score,
+    confidence,
+    tooltip,
+  };
 }
 
 /* ============================
@@ -142,20 +155,24 @@ const BRANDS = [
   { label: "Odyssey", q: "odyssey putter" },
   { label: "L.A.B.", q: "lab golf putter" },
 ];
+
 const CONDITION_OPTIONS = [
   { label: "New", value: "NEW" },
   { label: "Like-New", value: "LIKE_NEW" },
   { label: "Good", value: "GOOD" },
   { label: "Fair", value: "FAIR" },
+  // Keep your original values too if you rely on eBay condition codes:
   { label: "Used", value: "USED" },
   { label: "Certified Refurbished", value: "CERTIFIED_REFURBISHED" },
   { label: "Seller Refurbished", value: "SELLER_REFURBISHED" },
 ];
+
 const BUYING_OPTIONS = [
   { label: "Buy It Now", value: "FIXED_PRICE" },
   { label: "Auction", value: "AUCTION" },
   { label: "Best Offer", value: "BEST_OFFER" },
 ];
+
 const SORT_OPTIONS = [
   { label: "Best Price: Low → High", value: "best_price_asc" },
   { label: "Best Price: High → Low", value: "best_price_desc" },
@@ -163,7 +180,9 @@ const SORT_OPTIONS = [
   { label: "Most Offers", value: "count_desc" },
   { label: "A → Z (Model)", value: "model_asc" },
 ];
+
 const FIXED_PER_PAGE = 10;
+
 const retailerLogos = {
   eBay: "https://upload.wikimedia.org/wikipedia/commons/1/1b/EBay_logo.svg",
 };
@@ -196,7 +215,7 @@ function useRecentModels() {
 }
 
 /* ============================
-   EXTRA HELPERS (flat view stats & condition awareness)
+   EXTRA HELPERS
    ============================ */
 function getModelKey(o) {
   if (typeof o?.model === "string" && o.model.trim()) return o.model.trim();
@@ -239,15 +258,18 @@ export default function PuttersPage() {
   const [maxPrice, setMaxPrice] = useState("");
   const [conds, setConds] = useState([]);
   const [buying, setBuying] = useState([]);
-  const [dex, setDex] = useState("");
-  const [head, setHead] = useState("");
-  const [lengths, setLengths] = useState([]);
+  const [dex, setDex] = useState("");            // "", "LEFT", "RIGHT"
+  const [head, setHead] = useState("");          // "", "BLADE", "MALLET"
+  const [lengths, setLengths] = useState([]);    // [] or [33,34,35,36]
   const [showAdvanced, setShowAdvanced] = useState(false);
   const [groupMode, setGroupMode] = useState(true);
   const [sortBy, setSortBy] = useState("best_price_asc");
   const [page, setPage] = useState(1);
   const [q, setQ] = useState("");
-  const [broaden, setBroaden] = useState(false);
+  const [broaden, setBroaden] = useState(false); 
+  const [includeProShops, setIncludeProShops] = useState(false);
+
+
 
   // data
   const [groups, setGroups] = useState([]);
@@ -263,17 +285,18 @@ export default function PuttersPage() {
   // UI state
   const [expanded, setExpanded] = useState({});
   const [showAllOffersByModel, setShowAllOffersByModel] = useState({});
-  const [copiedFor, setCopiedFor] = useState("");
+  const [copiedFor, setCopiedFor] = useState("")
+
 
   // Per-model caches
-  const [lowsByModel, setLowsByModel] = useState({});
-  const [seriesByModel, setSeriesByModel] = useState({});
-  const [statsByModel, setStatsByModel] = useState({});
+  const [lowsByModel, setLowsByModel] = useState({});   // model -> lows
+  const [seriesByModel, setSeriesByModel] = useState({}); // model -> series
+  const [statsByModel, setStatsByModel] = useState({});   // `${model}::${cond}` or `${model}::${variant}::${cond}`
 
   // recent models
   const { recent, push: pushRecent, clear: clearRecent } = useRecentModels();
 
-  // --- read URL params ---
+  // --- read URL params on first load ---
   useEffect(() => {
     const sp = new URLSearchParams(window.location.search);
     const gList = (name) => (sp.get(name)?.split(",").filter(Boolean)) || [];
@@ -291,6 +314,7 @@ export default function PuttersPage() {
     if (sp.has("sort")) setSortBy(sp.get("sort") === "newlylisted" ? "recent" : "best_price_asc");
     if (sp.has("group")) setGroupMode(sp.get("group") === "true");
     if (sp.has("broaden")) setBroaden(sp.get("broaden") === "true");
+    if (sp.has("pro")) setIncludeProShops(sp.get("pro") === "true");
     if (sp.has("page")) setPage(Math.max(1, Number(sp.get("page") || "1")));
   }, []);
 
@@ -308,6 +332,7 @@ export default function PuttersPage() {
     if (dex) params.set("dex", dex);
     if (head) params.set("head", head);
     if (lengths.length) params.set("lengths", lengths.join(","));
+    if (includeProShops) params.set("pro","true");
     params.set("page", String(page));
     params.set("group", groupMode ? "true" : "false");
 
@@ -328,6 +353,7 @@ export default function PuttersPage() {
     if (sortBy === "recent") params.set("sort", "newlylisted");
     if (broaden) params.set("broaden", "true");
     if (dex) params.set("dex", dex);
+    if (includeProShops) params.set("pro","true");
     if (head) params.set("head", head);
     if (lengths.length) params.set("lengths", lengths.join(","));
     params.set("page", String(page));
@@ -374,7 +400,7 @@ export default function PuttersPage() {
           if (sortBy === "best_price_asc") {
             pageOffers = [...pageOffers].sort((a,b) => (a.price ?? Infinity) - (b.price ?? Infinity));
           } else if (sortBy === "best_price_desc") {
-            pageOffers = [...pageOffers].sort((a,b) => (b.price ?? -Infinity) - (a.price ?? Infinity));
+            pageOffers = [...pageOffers].sort((a,b) => (b.price ?? -Infinity) - (a.price ?? -Infinity));
           } else if (sortBy === "model_asc") {
             pageOffers = [...pageOffers].sort((a,b) => (a.title || "").localeCompare(b.title || ""));
           }
@@ -388,12 +414,14 @@ export default function PuttersPage() {
         setKeptCount(typeof data.keptCount === "number" ? data.keptCount : null);
         setApiData(data);
 
+        // reset per-model show-all + lows/series cache for fresh groups
         const nextShowAll = {};
         const resetNulls = {};
         nextGroups.forEach(g => { nextShowAll[g.model] = false; resetNulls[g.model] = null; });
         setShowAllOffersByModel(nextShowAll);
         setLowsByModel((prev) => ({ ...resetNulls }));
         setSeriesByModel((prev) => ({ ...resetNulls }));
+        // DO NOT reset statsByModel here; we keep cache (condition-aware)
       } catch (e) {
         if (!ignore && e.name !== "AbortError") setErr("Failed to load results. Please try again.");
       } finally {
@@ -426,10 +454,13 @@ export default function PuttersPage() {
 
   const toggleExpand = async (model) => {
     setExpanded((prev) => ({ ...prev, [model]: !prev[model] }));
+    // When opening, load per-model analytics and stats if missing
     const willOpen = !expanded[model];
     if (willOpen) {
+      // mark as recently viewed when opening
       pushRecent(model);
 
+      // lazily load lows/series/stats for this group
       if (!lowsByModel[model]) {
         try {
           const r = await fetch(`/api/analytics/lows?model=${encodeURIComponent(model)}`, { cache: "no-store" });
@@ -448,6 +479,7 @@ export default function PuttersPage() {
           setSeriesByModel((prev) => ({ ...prev, [model]: [] }));
         }
       }
+      // Stats (condition-aware)
       try {
         const groupObj = groups.find((x) => x.model === model) || null;
         const condParam = selectedConditionBand(conds) || inferConditionBandFromOffers(groupObj?.offers || []) || "";
@@ -458,7 +490,9 @@ export default function PuttersPage() {
           const j = await r.json();
           setStatsByModel((prev) => ({ ...prev, [statsKey]: j?.stats || null }));
         }
-      } catch {}
+      } catch {
+        // ignore
+      }
     }
   };
 
@@ -488,6 +522,7 @@ export default function PuttersPage() {
     return { domDex, domHead, domLen: domLenVal };
   }
 
+  // quick “Great deal/Good deal” chip (kept for the summary row)
   function fairPriceBadge(best, stats) {
     if (!best || !stats) return null;
     const p10 = Number(stats.p10), p50 = Number(stats.p50);
@@ -507,9 +542,10 @@ export default function PuttersPage() {
   };
 
   /* ============================
-     FLAT VIEW prefetch stats (variant + condition aware)
+     FLAT VIEW: prefetch stats for visible items (variant + base)
      ============================ */
   useEffect(() => {
+    // Only run in flat/advanced mode when we have offers
     if (!q.trim() || loading || err || groupMode || !showAdvanced) return;
     if (!Array.isArray(offers) || offers.length === 0) return;
 
@@ -519,16 +555,14 @@ export default function PuttersPage() {
     const jobs = [];
 
     for (const o of offers) {
-      const modelKey =
-        (typeof o?.model === "string" && o.model.trim()) ? o.model.trim() :
-        (typeof o?.groupModel === "string" && o.groupModel.trim()) ? o.groupModel.trim() :
-        getModelKey(o);
-
+      const modelKey = getModelKey(o);
       const condParam =
-        (o?.conditionBand || o?.condition || "").toUpperCase() || selCond || "";
-
+        (o?.conditionBand || o?.condition || "").toUpperCase() ||
+        selCond ||
+        "";
       const variant = detectVariant(o?.title);
 
+      // 1) Variant key first
       if (variant) {
         const vKey = getStatsKey3(modelKey, variant, condParam);
         if (vKey && !statsByModel[vKey]) {
@@ -555,6 +589,7 @@ export default function PuttersPage() {
         }
       }
 
+      // 2) Base key fallback
       const baseKey = getStatsKey(modelKey, condParam);
       if (baseKey && !statsByModel[baseKey]) {
         const baseUrl =
@@ -579,75 +614,34 @@ export default function PuttersPage() {
       }
     }
 
-    if (jobs.length) Promise.all(jobs).catch(() => {});
+    if (jobs.length) {
+      Promise.all(jobs).catch(() => {});
+    }
+
     return () => { abort = true; };
   }, [q, loading, err, groupMode, showAdvanced, offers, JSON.stringify(conds)]);
 
-  /* ============================
-     UI
-     ============================ */
   return (
-    <main className="mx-auto max-w-6xl px-4 pb-10">
-      {/* Top header */}
-      <div className="pt-6">
-        <h1 className="text-3xl font-semibold tracking-tight">Compare Putter Prices</h1>
-        <p className="mt-1 text-sm text-gray-600">
-          Type a model (e.g., <em>“scotty cameron newport”</em>) or pick a brand.
-        </p>
-        <p className="mt-1 text-xs text-gray-500">
-          Badges are based on recent comps. <a className="text-blue-600 underline" href="/methodology">See methodology</a>.
-        </p>
-      </div>
-
-      {/* Sticky quick controls */}
-      <section className="sticky top-0 z-30 mt-4 -mx-4 border-b bg-white/80 px-4 py-3 backdrop-blur supports-[backdrop-filter]:bg-white/60">
-        <div className="grid grid-cols-1 items-end gap-3 sm:grid-cols-5">
-          <div className="sm:col-span-2">
-            <label className="mb-1 block text-sm font-medium">Search</label>
-            <input
-              type="text"
-              value={q}
-              onChange={(e) => setQ(e.target.value)}
-              placeholder="e.g. scotty cameron newport"
-              className="w-full rounded-md border border-gray-300 px-3 py-2 outline-none focus:ring-2 focus:ring-blue-500"
-            />
-          </div>
-
-          <div>
-            <label className="mb-1 block text-sm font-medium">Sort</label>
-            <select
-              value={sortBy}
-              onChange={(e) => setSortBy(e.target.value)}
-              className="w-full rounded-md border border-gray-300 px-3 py-2"
-            >
-              {SORT_OPTIONS.map((s) => (
-                <option key={s.value} value={s.value}>{s.label}</option>
-              ))}
-            </select>
-          </div>
-
-          <div className="rounded-md border border-gray-200 p-3">
-            <label className="flex items-center gap-2 text-sm">
-              <input type="checkbox" checked={broaden} onChange={(e) => setBroaden(e.target.checked)} />
-              Broaden search (include common variants)
-            </label>
-            <p className="mt-1 text-xs text-gray-500">Pulls more pages from eBay before filtering.</p>
-          </div>
-
-          <div className="flex items-end justify-between gap-3">
-            <button onClick={clearAll} className="w-full rounded-md border border-gray-300 px-3 py-2 text-sm hover:bg-gray-100">
-              Clear
-            </button>
-          </div>
+    <main className="mx-auto max-w-6xl px-4 py-8">
+      <header className="flex flex-col gap-2 sm:flex-row sm:items-end sm:justify-between">
+        <div>
+          <h1 className="text-3xl font-semibold tracking-tight">Compare Putter Prices</h1>
+          <p className="mt-1 text-sm text-gray-500">
+            Type a model (e.g., <em>“scotty cameron newport”</em>) or pick a brand.
+          </p>
+          <p className="mt-1 text-xs text-gray-500">
+            Badges based on recent comps. <a className="text-blue-600 underline" href="/methodology">See methodology</a>.
+          </p>
         </div>
-
         {q.trim() && (
-          <div className="mt-2 text-xs text-gray-500">
-            {groupMode ? "Grouped by model" : "Flat list"} · Page <span className="font-medium">{page}</span> ·{" "}
-            <span className="font-medium">{FIXED_PER_PAGE}</span> {groupMode ? "groups" : "listings"}
+          <div className="text-sm text-gray-500">
+            {groupMode ? "Grouped by model" : "Flat list"} · Page{" "}
+            <span className="font-medium">{page}</span> ·{" "}
+            <span className="font-medium">{FIXED_PER_PAGE}</span>{" "}
+            {groupMode ? "groups" : "listings"}
           </div>
         )}
-      </section>
+      </header>
 
       {/* Recently viewed */}
       {recent.length > 0 && (
@@ -673,7 +667,7 @@ export default function PuttersPage() {
       )}
 
       {/* Brand shortcuts */}
-      <section className="mt-4 flex flex-wrap gap-2">
+      <section className="mt-6 flex flex-wrap gap-2">
         {BRANDS.map((b) => (
           <button
             key={b.label}
@@ -686,191 +680,269 @@ export default function PuttersPage() {
         ))}
       </section>
 
-      {/* Filters (collapsible on mobile/compact) */}
-      <section className="mt-6">
-        <details className="rounded-lg border border-gray-200 bg-white p-4 open:shadow-sm" open>
-          <summary className="cursor-pointer select-none list-none text-sm font-medium text-gray-900 outline-none">
-            Filters
-            <span className="ml-2 align-middle text-xs font-normal text-gray-500">(tap to collapse/expand)</span>
-          </summary>
+      {/* Top controls */}
+      <section className="mt-6 grid grid-cols-1 gap-3 md:grid-cols-5">
+        <div className="md:col-span-2">
+          <label className="mb-1 block text-sm font-medium">Search</label>
+          <input
+            type="text"
+            value={q}
+            onChange={(e) => setQ(e.target.value)}
+            placeholder="e.g. scotty cameron newport"
+            className="w-full rounded-md border border-gray-300 px-3 py-2 outline-none focus:ring-2 focus:ring-blue-500"
+          />
+        </div>
 
-          <div className="mt-3 grid grid-cols-1 gap-4 md:grid-cols-5">
-            {/* Quality */}
-            <div className="rounded-lg border border-gray-200 p-4">
-              <h3 className="mb-3 text-xs font-semibold uppercase tracking-wide text-gray-600">Quality</h3>
-              <label className="flex items-center gap-2 text-sm">
+        <div>
+          <label className="mb-1 block text-sm font-medium">Sort</label>
+          <select
+            value={sortBy}
+            onChange={(e) => setSortBy(e.target.value)}
+            className="w-full rounded-md border border-gray-300 px-3 py-2"
+          >
+            {SORT_OPTIONS.map((s) => (
+              <option key={s.value} value={s.value}>{s.label}</option>
+            ))}
+          </select>
+        </div>
+
+        <div className="rounded-md border border-gray-200 p-3">
+          <label className="flex items-center gap-2 text-sm">
+            <input type="checkbox" checked={broaden} onChange={(e) => setBroaden(e.target.checked)} />
+            Broaden search (include common variants)
+          </label>
+          <p className="mt-1 text-xs text-gray-500">
+            Pulls more pages from eBay before filtering. Helpful for niche models/years.
+          </p>
+        </div>
+	<div className="rounded-md border border-gray-200 p-3">
+  <label className="flex items-center gap-2 text-sm">
+    <input
+      type="checkbox"
+      checked={includeProShops}
+      onChange={(e) => setIncludeProShops(e.target.checked)}
+    />
+    Include pro-shop sites (2nd Swing – beta)
+  </label>
+  <p className="mt-1 text-xs text-gray-500">
+    Adds 2nd Swing listings when enabled.
+  </p>
+</div>
+
+
+        <div className="flex items-end justify-between gap-3">
+          <button onClick={clearAll} className="w-full rounded-md border border-gray-300 px-3 py-2 text-sm hover:bg-gray-100">
+            Clear
+          </button>
+        </div>
+      </section>
+
+      {/* Filters */}
+      <section className="mt-4 grid grid-cols-1 gap-4 md:grid-cols-5">
+        {/* Quality */}
+        <div className="rounded-lg border border-gray-200 p-4">
+          <h3 className="mb-3 text-xs font-semibold uppercase tracking-wide text-gray-600">Quality</h3>
+          <label className="flex items-center gap-2 text-sm">
+            <input
+              type="checkbox"
+              checked={onlyComplete}
+              onChange={(e) => setOnlyComplete(e.target.checked)}
+            />
+            Only show listings with price & image
+          </label>
+        </div>
+
+        {/* Price */}
+        <div className="rounded-lg border border-gray-200 p-4">
+          <h3 className="mb-3 text-xs font-semibold uppercase tracking-wide text-gray-600">Price</h3>
+          <div className="flex items-center gap-2">
+            <input
+              type="number"
+              min="0"
+              placeholder="Min"
+              value={minPrice}
+              onChange={(e) => setMinPrice(e.target.value)}
+              className="w-full rounded-md border border-gray-300 px-2 py-1"
+            />
+            <span className="text-gray-400">—</span>
+            <input
+              type="number"
+              min="0"
+              placeholder="Max"
+              value={maxPrice}
+              onChange={(e) => setMaxPrice(e.target.value)}
+              className="w-full rounded-md border border-gray-300 px-2 py-1"
+            />
+          </div>
+        </div>
+
+        {/* Condition */}
+        <div className="rounded-lg border border-gray-200 p-4">
+          <h3 className="mb-3 text-xs font-semibold uppercase tracking-wide text-gray-600">Condition</h3>
+          <div className="flex flex-col gap-2">
+            {CONDITION_OPTIONS.map((c) => (
+              <label key={c.value} className="flex items-center gap-2 text-sm">
                 <input
                   type="checkbox"
-                  checked={onlyComplete}
-                  onChange={(e) => setOnlyComplete(e.target.checked)}
+                  checked={conds.includes(c.value)}
+                  onChange={() =>
+                    setConds((prev) =>
+                      prev.includes(c.value)
+                        ? prev.filter((v) => v !== c.value)
+                        : [...prev, c.value]
+                    )
+                  }
                 />
-                Only show listings with price & image
+                {c.label}
               </label>
-            </div>
+            ))}
+          </div>
+        </div>
 
-            {/* Price */}
-            <div className="rounded-lg border border-gray-200 p-4">
-              <h3 className="mb-3 text-xs font-semibold uppercase tracking-wide text-gray-600">Price</h3>
-              <div className="flex items-center gap-2">
+        {/* Dexterity */}
+        <div className="rounded-lg border border-gray-200 p-4">
+          <h3 className="mb-3 text-xs font-semibold uppercase tracking-wide text-gray-600">Dexterity</h3>
+          <div className="flex flex-col gap-2 text-sm">
+            <label className="flex items-center gap-2">
+              <input
+                type="radio"
+                name="dex"
+                checked={dex === ""}
+                onChange={() => setDex("")}
+              />
+              Any
+            </label>
+            <label className="flex items-center gap-2">
+              <input
+                type="radio"
+                name="dex"
+                checked={dex === "RIGHT"}
+                onChange={() => setDex("RIGHT")}
+              />
+              Right-handed
+            </label>
+            <label className="flex items-center gap-2">
+              <input
+                type="radio"
+                name="dex"
+                checked={dex === "LEFT"}
+                onChange={() => setDex("LEFT")}
+              />
+              Left-handed
+            </label>
+          </div>
+        </div>
+
+        {/* Head Type */}
+        <div className="rounded-lg border border-gray-200 p-4">
+          <h3 className="mb-3 text-xs font-semibold uppercase tracking-wide text-gray-600">Head Type</h3>
+          <div className="flex flex-col gap-2 text-sm">
+            <label className="flex items-center gap-2">
+              <input
+                type="radio"
+                name="head"
+                checked={head === ""}
+                onChange={() => setHead("")}
+              />
+              Any
+            </label>
+            <label className="flex items-center gap-2">
+              <input
+                type="radio"
+                name="head"
+                checked={head === "BLADE"}
+                onChange={() => setHead("BLADE")}
+              />
+              Blade
+            </label>
+            <label className="flex items-center gap-2">
+              <input
+                type="radio"
+                name="head"
+                checked={head === "MALLET"}
+                onChange={() => setHead("MALLET")}
+              />
+              Mallet
+            </label>
+          </div>
+        </div>
+
+        {/* Length (common) */}
+        <div className="rounded-lg border border-gray-200 p-4 md:col-span-2">
+          <h3 className="mb-3 text-xs font-semibold uppercase tracking-wide text-gray-600">Length (common)</h3>
+          <div className="flex flex-wrap gap-3 text-sm">
+            {[33,34,35,36].map(L => (
+              <label key={L} className="flex items-center gap-2">
                 <input
-                  type="number"
-                  min="0"
-                  placeholder="Min"
-                  value={minPrice}
-                  onChange={(e) => setMinPrice(e.target.value)}
-                  className="w-full rounded-md border border-gray-300 px-2 py-1"
+                  type="checkbox"
+                  checked={lengths.includes(L)}
+                  onChange={() => {
+                    setLengths(prev => prev.includes(L) ? prev.filter(x => x !== L) : [...prev, L]);
+                  }}
                 />
-                <span className="text-gray-400">—</span>
-                <input
-                  type="number"
-                  min="0"
-                  placeholder="Max"
-                  value={maxPrice}
-                  onChange={(e) => setMaxPrice(e.target.value)}
-                  className="w-full rounded-md border border-gray-300 px-2 py-1"
-                />
-              </div>
-            </div>
-
-            {/* Condition */}
-            <div className="rounded-lg border border-gray-200 p-4">
-              <h3 className="mb-3 text-xs font-semibold uppercase tracking-wide text-gray-600">Condition</h3>
-              <div className="flex flex-col gap-2">
-                {CONDITION_OPTIONS.map((c) => (
-                  <label key={c.value} className="flex items-center gap-2 text-sm">
-                    <input
-                      type="checkbox"
-                      checked={conds.includes(c.value)}
-                      onChange={() =>
-                        setConds((prev) =>
-                          prev.includes(c.value)
-                            ? prev.filter((v) => v !== c.value)
-                            : [...prev, c.value]
-                        )
-                      }
-                    />
-                    {c.label}
-                  </label>
-                ))}
-              </div>
-            </div>
-
-            {/* Dexterity */}
-            <div className="rounded-lg border border-gray-200 p-4">
-              <h3 className="mb-3 text-xs font-semibold uppercase tracking-wide text-gray-600">Dexterity</h3>
-              <div className="flex flex-col gap-2 text-sm">
-                <label className="flex items-center gap-2">
-                  <input type="radio" name="dex" checked={dex === ""} onChange={() => setDex("")} />
-                  Any
-                </label>
-                <label className="flex items-center gap-2">
-                  <input type="radio" name="dex" checked={dex === "RIGHT"} onChange={() => setDex("RIGHT")} />
-                  Right-handed
-                </label>
-                <label className="flex items-center gap-2">
-                  <input type="radio" name="dex" checked={dex === "LEFT"} onChange={() => setDex("LEFT")} />
-                  Left-handed
-                </label>
-              </div>
-            </div>
-
-            {/* Head Type */}
-            <div className="rounded-lg border border-gray-200 p-4">
-              <h3 className="mb-3 text-xs font-semibold uppercase tracking-wide text-gray-600">Head Type</h3>
-              <div className="flex flex-col gap-2 text-sm">
-                <label className="flex items-center gap-2">
-                  <input type="radio" name="head" checked={head === ""} onChange={() => setHead("")} />
-                  Any
-                </label>
-                <label className="flex items-center gap-2">
-                  <input type="radio" name="head" checked={head === "BLADE"} onChange={() => setHead("BLADE")} />
-                  Blade
-                </label>
-                <label className="flex items-center gap-2">
-                  <input type="radio" name="head" checked={head === "MALLET"} onChange={() => setHead("MALLET")} />
-                  Mallet
-                </label>
-              </div>
-            </div>
-
-            {/* Length */}
-            <div className="rounded-lg border border-gray-200 p-4 md:col-span-2">
-              <h3 className="mb-3 text-xs font-semibold uppercase tracking-wide text-gray-600">Length (common)</h3>
-              <div className="flex flex-wrap gap-3 text-sm">
-                {[33,34,35,36].map(L => (
-                  <label key={L} className="flex items-center gap-2">
-                    <input
-                      type="checkbox"
-                      checked={lengths.includes(L)}
-                      onChange={() => {
-                        setLengths(prev => prev.includes(L) ? prev.filter(x => x !== L) : [...prev, L]);
-                      }}
-                    />
-                    {L}&quot;
-                  </label>
-                ))}
-                <div className="basis-full text-xs text-gray-500">
-                  We match titles within ±0.5&quot; of the selected length(s).
-                </div>
-              </div>
-            </div>
-
-            {/* Buying Options + Advanced */}
-            <div className="rounded-lg border border-gray-200 p-4 md:col-span-3">
-              <h3 className="mb-3 text-xs font-semibold uppercase tracking-wide text-gray-600">Buying Options</h3>
-              <div className="flex flex-wrap gap-3">
-                {BUYING_OPTIONS.map((b) => (
-                  <label key={b.value} className="flex items-center gap-2 text-sm">
-                    <input
-                      type="checkbox"
-                      checked={buying.includes(b.value)}
-                      onChange={() =>
-                        setBuying((prev) =>
-                          prev.includes(b.value)
-                            ? prev.filter((v) => v !== b.value)
-                            : [...prev, b.value]
-                        )
-                      }
-                    />
-                    {b.label}
-                  </label>
-                ))}
-              </div>
-
-              <div className="mt-4 space-y-2">
-                <label className="flex items-center gap-2 text-sm">
-                  <input
-                    type="checkbox"
-                    checked={showAdvanced}
-                    onChange={(e) => setShowAdvanced(e.target.checked)}
-                  />
-                  Show advanced options
-                </label>
-
-                {showAdvanced && (
-                  <label className="flex items-center gap-2 text-sm">
-                    <input
-                      type="checkbox"
-                      checked={groupMode}
-                      onChange={(e) => setGroupMode(e.target.checked)}
-                    />
-                    Group similar listings (model cards)
-                  </label>
-                )}
-              </div>
+                {L}&quot;
+              </label>
+            ))}
+            <div className="text-xs text-gray-500 basis-full">
+              We match titles within ±0.5&quot; of the selected length(s).
             </div>
           </div>
-        </details>
+        </div>
+
+        {/* Buying Options + Advanced */}
+        <div className="rounded-lg border border-gray-200 p-4 md:col-span-3">
+          <h3 className="mb-3 text-xs font-semibold uppercase tracking-wide text-gray-600">Buying Options</h3>
+          <div className="flex flex-wrap gap-3">
+            {BUYING_OPTIONS.map((b) => (
+              <label key={b.value} className="flex items-center gap-2 text-sm">
+                <input
+                  type="checkbox"
+                  checked={buying.includes(b.value)}
+                  onChange={() =>
+                    setBuying((prev) =>
+                      prev.includes(b.value)
+                        ? prev.filter((v) => v !== b.value)
+                        : [...prev, b.value]
+                    )
+                  }
+                />
+                {b.label}
+              </label>
+            ))}
+          </div>
+
+          <div className="mt-4">
+            <label className="flex items-center gap-2 text-sm">
+              <input
+                type="checkbox"
+                checked={showAdvanced}
+                onChange={(e) => setShowAdvanced(e.target.checked)}
+              />
+              Show advanced options
+            </label>
+
+            {showAdvanced && (
+              <label className="mt-3 flex items-center gap-2 text-sm">
+                <input
+                  type="checkbox"
+                  checked={groupMode}
+                  onChange={(e) => setGroupMode(e.target.checked)}
+                />
+                Group similar listings (model cards)
+              </label>
+            )}
+          </div>
+        </div>
       </section>
 
       {!q.trim() && (
-        <div className="mt-6 rounded-md border border-gray-200 bg-white p-6 text-center text-sm text-gray-600">
+        <div className="mt-8 rounded-md border border-gray-200 bg-white p-6 text-center text-sm text-gray-600">
           Start by typing a putter model or choose a brand above to see grouped price comparisons.
         </div>
       )}
 
       {q.trim() && !loading && !err && (
-        <div className="mt-3 text-sm text-gray-600">
+        <div className="mt-2 text-sm text-gray-600">
           Showing{" "}
           <span className="font-medium">{groupMode ? groups?.length ?? 0 : offers?.length ?? 0}</span>{" "}
           {groupMode ? "model groups" : "listings"}
@@ -907,13 +979,13 @@ export default function PuttersPage() {
       {/* GROUPED VIEW */}
       {q.trim() && !loading && !err && groupMode && (
         <>
-          <section className="mt-6 grid grid-cols-1 gap-5 sm:grid-cols-2 lg:grid-cols-2">
+          <section className="mt-6 grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-2">
             {sortedGroups.map((g) => {
               const isOpen = !!expanded[g.model];
 
               const ordered =
                 sortBy === "best_price_desc"
-                  ? [...g.offers].sort((a,b) => (b.price ?? -Infinity) - (a.price ?? Infinity))
+                  ? [...g.offers].sort((a,b) => (b.price ?? -Infinity) - (a.price ?? -Infinity))
                   : [...g.offers].sort((a,b) => (a.price ?? Infinity) - (b.price ?? Infinity));
 
               const nums = ordered.map(o => o?.price).filter(x => typeof x === "number").sort((a,b)=>a-b);
@@ -924,6 +996,7 @@ export default function PuttersPage() {
                 : null;
 
               const { domDex, domHead, domLen } = summarizeDexHead(g);
+
               const showAll = !!showAllOffersByModel[g.model];
               const list = isOpen ? (showAll ? ordered : ordered.slice(0, 10)) : [];
 
@@ -934,15 +1007,19 @@ export default function PuttersPage() {
               const stats = statsByModel[statsKey] || null;
 
               const bestUrl = ordered.length ? ordered[0]?.url : null;
+
               const fair = fairPriceBadge(g.bestPrice, stats);
 
               return (
-                <article key={g.model} className="overflow-hidden rounded-xl border border-gray-200 bg-white shadow-sm transition-shadow hover:shadow-md">
+                <article key={g.model} className="overflow-hidden rounded-xl border border-gray-200 bg-white shadow-sm">
                   <div className="relative aspect-[4/3] w-full max-h-48 bg-gray-50">
                     {g.image ? (
+                      // eslint-disable-next-line @next/next/no-img-element
                       <img src={g.image} alt={g.model} className="h-full w-full object-contain" loading="lazy" />
                     ) : (
-                      <div className="flex h-full w-full items-center justify-center text-xs text-gray-400">No image</div>
+                      <div className="flex h-full w-full items-center justify-center text-xs text-gray-400">
+                        No image
+                      </div>
                     )}
                   </div>
 
@@ -972,8 +1049,10 @@ export default function PuttersPage() {
                             </span>
                           )}
 
+                          {/* Group header price badge */}
                           <SmartPriceBadge price={Number(g.bestPrice)} baseStats={stats} className="ml-1" />
 
+                          {/* Optional quick chip */}
                           {fair && (
                             <span className={`rounded-full px-2 py-0.5 text-[11px] font-medium text-white ${fair.tone === "emerald" ? "bg-emerald-600" : "bg-green-600"}`}>
                               {fair.label}
@@ -981,7 +1060,7 @@ export default function PuttersPage() {
                           )}
                         </div>
 
-                        {/* Smarter first-listing badge helper */}
+                        {/* Helper badge (variant-aware from first listing) */}
                         <div className="mt-2">
                           {(() => {
                             const first = ordered?.[0];
@@ -1007,6 +1086,7 @@ export default function PuttersPage() {
                           })()}
                         </div>
 
+                        {/* Lows row (on expand) */}
                         {isOpen && (
                           <div className="mt-2 text-xs text-gray-600">
                             <span className="mr-2">Lows:</span>
@@ -1030,6 +1110,7 @@ export default function PuttersPage() {
                           </div>
                         )}
 
+                        {/* Copy best link */}
                         <button
                           disabled={!bestUrl}
                           onClick={async () => {
@@ -1038,7 +1119,7 @@ export default function PuttersPage() {
                             setCopiedFor(g.model);
                             setTimeout(() => setCopiedFor((c) => (c === g.model ? "" : c)), 1500);
                           }}
-                          className={`mt-1 rounded-md border px-2 py-1 text-[11px] ${bestUrl ? "hover:bg-gray-50" : "cursor-not-allowed opacity-50"}`}
+                          className={`mt-1 rounded-md border px-2 py-1 text-[11px] ${bestUrl ? "hover:bg-gray-50" : "opacity-50 cursor-not-allowed"}`}
                           title="Copy best listing link"
                         >
                           {copiedFor === g.model ? "Copied!" : "Copy best"}
@@ -1046,6 +1127,7 @@ export default function PuttersPage() {
                       </div>
                     </div>
 
+                    {/* Sparkline */}
                     {isOpen && Array.isArray(series) && series.length > 1 && (
                       <div className="mt-3">
                         <PriceSparkline data={series} height={70} showAverage showMedian className="h-[70px]" />
@@ -1069,11 +1151,16 @@ export default function PuttersPage() {
                       )}
                     </div>
 
+                    {/* Expanded listings */}
                     {isOpen && (
                       <ul className="mt-3 space-y-2">
                         {list.map((o) => {
-                          const condParam = (o?.conditionBand || o?.condition || "").toUpperCase() || selectedConditionBand(conds) || "";
+                          const condParam =
+                            (o?.conditionBand || o?.condition || "").toUpperCase() ||
+                            selectedConditionBand(conds) ||
+                            "";
 
+                          // Variant-aware stats lookup
                           const modelKey   = getModelKey(o);
                           const variant    = detectVariant(o?.title);
                           const variantKey = getStatsKey3(modelKey, variant, condParam);
@@ -1081,11 +1168,21 @@ export default function PuttersPage() {
                           const perOfferStats = statsByModel[variantKey] ?? statsByModel[baseKey] ?? stats;
 
                           return (
-                            <li key={o.productId + o.url} className="flex items-center justify-between gap-3 rounded border border-gray-100 p-2">
+                            <li
+                              key={o.productId + o.url}
+                              className="flex items-center justify-between gap-3 rounded border border-gray-100 p-2"
+                            >
+                              {/* LEFT: logo + retailer/seller */}
                               <div className="flex min-w-0 items-center gap-2">
                                 {retailerLogos[o.retailer] && (
-                                  <img src={retailerLogos[o.retailer]} alt={o.retailer} className="h-4 w-12 object-contain" />
+                                  // eslint-disable-next-line @next/next/no-img-element
+                                  <img
+                                    src={retailerLogos[o.retailer]}
+                                    alt={o.retailer}
+                                    className="h-4 w-12 object-contain"
+                                  />
                                 )}
+
                                 <div className="min-w-0">
                                   <div className="truncate text-sm font-medium">
                                     {o.retailer}
@@ -1120,6 +1217,7 @@ export default function PuttersPage() {
                                 </div>
                               </div>
 
+                              {/* RIGHT: badge + price + view */}
                               <div className="flex items-center gap-3">
                                 <SmartPriceBadge
                                   price={Number(o.price)}
@@ -1144,6 +1242,7 @@ export default function PuttersPage() {
                             </li>
                           );
                         })}
+
                         {!showAll && g.count > 10 && (
                           <li className="px-2 pt-1 text-xs text-gray-500">Showing top 10 offers.</li>
                         )}
@@ -1181,7 +1280,7 @@ export default function PuttersPage() {
       {/* FLAT VIEW (advanced) */}
       {q.trim() && !loading && !err && !groupMode && showAdvanced && (
         <>
-          <section className="mt-6 grid grid-cols-1 gap-5 sm:grid-cols-2 lg:grid-cols-3">
+          <section className="mt-6 grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
             {offers.map((o) => {
               const modelKey = getModelKey(o);
               const condParam =
@@ -1194,9 +1293,10 @@ export default function PuttersPage() {
               const stats      = statsByModel[variantKey] ?? statsByModel[baseKey] ?? null;
 
               return (
-                <article key={o.productId + o.url} className="overflow-hidden rounded-xl border border-gray-200 bg-white shadow-sm transition-shadow hover:shadow-md">
+                <article key={o.productId + o.url} className="overflow-hidden rounded-xl border border-gray-200 bg-white shadow-sm">
                   <div className="relative aspect-[4/3] w-full bg-gray-50">
                     {o.image ? (
+                      // eslint-disable-next-line @next/next/no-img-element
                       <img src={o.image} alt={o.title} className="h-full w-full object-contain" loading="lazy" />
                     ) : (
                       <div className="flex h-full w-full items-center justify-center text-xs text-gray-400">No image</div>
@@ -1231,7 +1331,10 @@ export default function PuttersPage() {
                           brand={o.brand || ""}
                           className="mr-2"
                         />
+
                         <span className="text-base font-semibold">{formatPrice(o.price, o.currency)}</span>
+
+                        {/* Optional Save $ chip if below median */}
                         {(() => {
                           const p50 = stats?.p50;
                           if (Number.isFinite(Number(p50)) && typeof o.price === "number" && o.price < Number(p50)) {
@@ -1250,6 +1353,7 @@ export default function PuttersPage() {
                         })()}
                       </div>
 
+                      {/* Affiliate/outbound link UNCHANGED */}
                       <a
                         href={o.url}
                         target="_blank"
@@ -1290,4 +1394,3 @@ export default function PuttersPage() {
     </main>
   );
 }
-// (badge utils are inline-only; business logic unchanged)
