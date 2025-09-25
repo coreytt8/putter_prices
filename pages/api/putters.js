@@ -643,13 +643,25 @@ export default async function handler(req, res) {
       });
     }
 
-    if (sort === "newlylisted") {
-      mergedOffers.sort((a, b) => {
-        const ta = a.createdAt ? new Date(a.createdAt).getTime() : 0;
-        const tb = b.createdAt ? new Date(b.createdAt).getTime() : 0;
-        return tb - ta;
-      });
-    }
+    // ----- server-side sort BEFORE slicing so other sources can appear on page 1 -----
+if (sort === "newlylisted") {
+  mergedOffers.sort((a, b) => {
+    const ta = a.createdAt ? new Date(a.createdAt).getTime() : 0;
+    const tb = b.createdAt ? new Date(b.createdAt).getTime() : 0;
+    return tb - ta;
+  });
+} else if (sort === "best_price_desc") {
+  mergedOffers.sort((a, b) => (b.price ?? -Infinity) - (a.price ?? -Infinity));
+} else if (sort === "model_asc") {
+  // Use title as a proxy for model in flat view
+  mergedOffers.sort((a, b) => (a.title || "").localeCompare(b.title || ""));
+} else if (sort === "count_desc") {
+  // Not meaningful in flat view; keep as no-op
+} else {
+  // default = best_price_asc to match UI default
+  mergedOffers.sort((a, b) => (a.price ?? Infinity) - (b.price ?? Infinity));
+}
+
 
     const keptCount = mergedOffers.length;
 
