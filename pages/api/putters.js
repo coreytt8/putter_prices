@@ -496,8 +496,8 @@ export default async function handler(req, res) {
 
     const fetchedCount = items.length;
 
-    // Map → offers
-    let offers = items.map((item) => {
+    // --- Map eBay → offers (UNCHANGED LOGIC) ---
+    let ebayOffers = items.map((item) => {
       const image = item?.image?.imageUrl || item?.thumbnailImages?.[0]?.imageUrl || null;
 
       const shipping = pickCheapestShipping(item?.shippingOptions);
@@ -550,45 +550,48 @@ export default async function handler(req, res) {
         __model: modelKey,
       };
     });
-	// ===== Append pro-shop sources (guarded) =====
-const includePro = sp.pro === "true"; // sp = your URLSearchParams for req.query
-if (includePro && process.env.ENABLE_2NDSWING === "true") {
-  try {
-    const origin =
-      (req.headers["x-forwarded-proto"]
-        ? `${req.headers["x-forwarded-proto"]}://`
-        : "https://") + req.headers.host;
 
-    const url2s = `${origin}/api/sources/2ndswing?q=${encodeURIComponent(q)}&limit=48`;
-    const r2 = await fetch(url2s, {
-      headers: { "user-agent": req.headers["user-agent"] || "Mozilla/5.0" },
-      cache: "no-store",
-    });
+    // ===== Append pro-shop sources (guarded) → mergedOffers =====
+    let mergedOffers = Array.isArray(ebayOffers) ? ebayOffers.slice() : [];
 
-    if (r2.ok) {
-      const secondSwing = await r2.json();
-      if (Array.isArray(secondSwing) && secondSwing.length) {
-        // Append to eBay offers
-        offers = offers.concat(secondSwing);
+    const includePro =
+      sp.pro === "true" || sp.includePro === "true" || process.env.FORCE_INCLUDE_PRO === "true";
 
-        // Cross-source de-dupe by URL (case-insensitive)
-        const seenUrl = new Set();
-        offers = offers.filter((o) => {
-          const u = (o.url || "").toLowerCase();
-          if (!u || seenUrl.has(u)) return false;
-          seenUrl.add(u);
-          return true;
+    if (includePro && process.env.ENABLE_2NDSWING === "true") {
+      try {
+        const origin =
+          (req.headers["x-forwarded-proto"] ? `${req.headers["x-forwarded-proto"]}://` : "https://") +
+          req.headers.host;
+
+        const url2s = `${origin}/api/sources/2ndswing?q=${encodeURIComponent(q)}&limit=48`;
+        const r2 = await fetch(url2s, {
+          headers: { "user-agent": req.headers["user-agent"] || "Mozilla/5.0", "cache-control": "no-cache" },
+          cache: "no-store",
         });
+
+        if (r2.ok) {
+          let proOffers = await r2.json();
+          if (!Array.isArray(proOffers)) proOffers = [];
+
+          // Merge then de-dupe by URL (case-insensitive)
+          mergedOffers = mergedOffers.concat(proOffers);
+          const seenUrl = new Set();
+          mergedOffers = mergedOffers.filter((o) => {
+            const u = (o?.url || "").toLowerCase();
+            if (!u || seenUrl.has(u)) return false;
+            seenUrl.add(u);
+            return true;
+          });
+        }
+      } catch {
+        // Never let a flaky source break eBay results
       }
     }
-  } catch {
-    // Never let a flaky source break eBay results
-  }
-}
-// ===== end pro-shop append =====
+    // ===== end pro-shop append =====
+
     // De-dupe obvious clones (same seller + same title + same price)
     const seen = new Set();
-    offers = offers.filter((o) => {
+    mergedOffers = mergedOffers.filter((o) => {
       const key = `${(o.seller?.username || "").toLowerCase()}|${(o.title || "").toLowerCase()}|${o.price ?? "?"}`;
       if (seen.has(key)) return false;
       seen.add(key);
@@ -600,7 +603,7 @@ if (includePro && process.env.ENABLE_2NDSWING === "true") {
     let droppedNoImage = 0;
 
     if (onlyComplete) {
-      offers = offers.filter((o) => {
+      mergedOffers = mergedOffers.filter((o) => {
         const ok = typeof o.price === "number" && o.image;
         if (!ok) {
           if (typeof o.price !== "number") droppedNoPrice++;
@@ -610,30 +613,30 @@ if (includePro && process.env.ENABLE_2NDSWING === "true") {
       });
     }
 
-    if (minPrice != null) offers = offers.filter((o) => typeof o.price === "number" && o.price >= minPrice);
-    if (maxPrice != null) offers = offers.filter((o) => typeof o.price === "number" && o.price <= maxPrice);
+    if (minPrice != null) mergedOffers = mergedOffers.filter((o) => typeof o.price === "number" && o.price >= minPrice);
+    if (maxPrice != null) mergedOffers = mergedOffers.filter((o) => typeof o.price === "number" && o.price <= maxPrice);
 
     if (conds.length) {
       const set = new Set(conds.map((s) => s.toUpperCase()));
-      offers = offers.filter((o) => o?.condition && set.has(String(o.condition).toUpperCase()));
+      mergedOffers = mergedOffers.filter((o) => o?.condition && set.has(String(o.condition).toUpperCase()));
     }
 
     if (buyingOptions.length) {
       const set = new Set(buyingOptions.map((s) => s.toUpperCase()));
-      offers = offers.filter((o) => {
+      mergedOffers = mergedOffers.filter((o) => {
         const types = Array.isArray(o?.buying?.types) ? o.buying.types : [];
         return types.some((t) => set.has(String(t).toUpperCase()));
       });
     }
 
     if (dex === "LEFT" || dex === "RIGHT") {
-      offers = offers.filter((o) => (o?.specs?.dexterity || "").toUpperCase() === dex);
+      mergedOffers = mergedOffers.filter((o) => (o?.specs?.dexterity || "").toUpperCase() === dex);
     }
     if (head === "BLADE" || head === "MALLET") {
-      offers = offers.filter((o) => (o?.specs?.headType || "").toUpperCase() === head);
+      mergedOffers = mergedOffers.filter((o) => (o?.specs?.headType || "").toUpperCase() === head);
     }
     if (lengthList.length) {
-      offers = offers.filter((o) => {
+      mergedOffers = mergedOffers.filter((o) => {
         const L = Number(o?.specs?.length);
         if (!Number.isFinite(L)) return false;
         return lengthList.some((sel) => Math.abs(L - sel) <= 0.5);
@@ -641,21 +644,21 @@ if (includePro && process.env.ENABLE_2NDSWING === "true") {
     }
 
     if (sort === "newlylisted") {
-      offers.sort((a, b) => {
+      mergedOffers.sort((a, b) => {
         const ta = a.createdAt ? new Date(a.createdAt).getTime() : 0;
         const tb = b.createdAt ? new Date(b.createdAt).getTime() : 0;
         return tb - ta;
       });
     }
 
-    const keptCount = offers.length;
+    const keptCount = mergedOffers.length;
 
     // lightweight analytics for the snapshot
     const analytics = (() => {
       const byHead = { BLADE: 0, MALLET: 0 };
       const byDex = { LEFT: 0, RIGHT: 0 };
       const byLen = { 33: 0, 34: 0, 35: 0, 36: 0 };
-      for (const o of offers) {
+      for (const o of mergedOffers) {
         const h = (o?.specs?.headType || "").toUpperCase();
         if (h === "BLADE" || h === "MALLET") byHead[h]++;
         const d = (o?.specs?.dexterity || "").toUpperCase();
@@ -669,9 +672,10 @@ if (includePro && process.env.ENABLE_2NDSWING === "true") {
       return { snapshot: { byHead, byDex, byLen } };
     })();
 
+    // ===== FLAT MODE =====
     if (!group) {
       const start = (page - 1) * perPage;
-      const pageOffers = offers.slice(start, start + perPage);
+      const pageOffers = mergedOffers.slice(start, start + perPage);
       return res.status(200).json({
         ok: true,
         offers: pageOffers,
@@ -687,17 +691,17 @@ if (includePro && process.env.ENABLE_2NDSWING === "true") {
           page,
           perPage,
           sort: sort || "default",
-          source: "ebay-browse",
-          // keep debug minimal to avoid leaking in UI; you can expand if needed
+          source: "merged",
+          sources: Array.from(new Set(mergedOffers.map(o => o.retailer))).sort(),
           debug: { droppedNoPrice, droppedNoImage, totalFromEbay }
         },
         analytics,
       });
     }
 
-    // Grouped view
+    // ===== GROUPED MODE =====
     const groupsMap = new Map();
-    for (const o of offers) {
+    for (const o of mergedOffers) {
       const key = o.__model || "unknown";
       if (!groupsMap.has(key)) {
         groupsMap.set(key, {
@@ -733,10 +737,16 @@ if (includePro && process.env.ENABLE_2NDSWING === "true") {
           ? Math.max(...a.offers.map((o) => (o.createdAt ? new Date(o.createdAt).getTime() : 0)))
           : 0;
         const tb = b.offers.length
-          ? Math.max(...b.offers.map((o) => (o.createdAt ? new Date(b.createdAt).getTime() : 0)))
+          ? Math.max(...b.offers.map((o) => (o.createdAt ? new Date(o.createdAt).getTime() : 0)))
           : 0;
-        return tb - ta;
+        return tb - ta; // newest groups first
       });
+    } else if (sort === "best_price_desc") {
+      groups.sort((a, b) => (b.bestPrice ?? -Infinity) - (a.bestPrice ?? -Infinity));
+    } else if (sort === "model_asc") {
+      groups.sort((a, b) => (a.model || "").localeCompare(b.model || ""));
+    } else if (sort === "count_desc") {
+      groups.sort((a, b) => (b.count ?? 0) - (a.count ?? 0));
     } else {
       groups.sort((a, b) => (a.bestPrice ?? Infinity) - (b.bestPrice ?? Infinity));
     }
@@ -759,7 +769,8 @@ if (includePro && process.env.ENABLE_2NDSWING === "true") {
         page,
         perPage,
         sort: sort || "bestprice",
-        source: "ebay-browse",
+        source: "merged",
+        sources: Array.from(new Set(mergedOffers.map(o => o.retailer))).sort(),
         debug: { droppedNoPrice, droppedNoImage, totalFromEbay },
       },
       analytics,
