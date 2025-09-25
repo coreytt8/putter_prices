@@ -1,4 +1,3 @@
-
 // pages/api/sources/2ndswing.js
 
 // Use CommonJS here for reliability in Next API routes
@@ -8,8 +7,8 @@ const cheerio = require("cheerio");
 // ---- Tunables ----
 const UA =
   "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/126 Safari/537.36";
-const MAX_PAGES = 5;          // crawl up to 5 catalog pages
-const REQUEST_TIMEOUT_MS = 8000;
+const MAX_PAGES = 5;                // hard ceiling
+const REQUEST_TIMEOUT_MS = 8000;    // per-request timeout
 
 function parsePrice(text) {
   const m = String(text || "")
@@ -35,8 +34,7 @@ function parseSearchHTML(html) {
   const $ = cheerio.load(html);
   const out = [];
 
-  // Try to be generous with selectors; 2nd Swing uses Magento-like markup.
-  // We anchor on product cards and then look for link, image, and price nearby.
+  // Product card selectors (Magento-like)
   $(".product-item, li.product-item, .products-grid .product-item").each((_, el) => {
     const $card = $(el);
 
@@ -101,7 +99,10 @@ function parseProductHTML(html, url) {
       $("title").text() ||
       "").trim();
 
-  const img = $("img.product-image-photo[src]").attr("src") || $("img[src]").first().attr("src") || null;
+  const img =
+    $("img.product-image-photo[src]").attr("src") ||
+    $("img[src]").first().attr("src") ||
+    null;
 
   let price = null;
   const priceNode = $(".price, .price-box [data-price-amount]").first();
@@ -118,23 +119,49 @@ async function fetchWithTimeout(url, ms, headers = {}) {
   const ctrl = new AbortController();
   const t = setTimeout(() => ctrl.abort(), ms);
   try {
-    const r = await fetch(url, { headers: { "user-agent": UA, ...headers }, signal: ctrl.signal });
+    const r = await fetch(url, { headers: { "user-agent": UA, ...headers }, signal: ctrl.signal, cache: "no-store" });
     return r;
   } finally {
     clearTimeout(t);
   }
 }
 
-async function fetchSearchPage(q, page) {
-  const url = `https://www.2ndswing.com/catalogsearch/result/?q=${encodeURIComponent(q)}&p=${page}`;
-  const r = await fetchWithTimeout(url, REQUEST_TIMEOUT_MS);
-  if (!r || !r.ok) return { items: [], status: r ? r.status : 0 };
-  const html = await r.text();
-  const items = parseSearchHTML(html);
-  return { items, status: 200 };
+// === New: retry with backoff for 429/rate limiting ===
+async function fetchHtmlWithRetry(url, tries = 3) {
+  let lastErr;
+  for (let i = 0; i < tries; i++) {
+    try {
+      const r = await fetchWithTimeout(url, REQUEST_TIMEOUT_MS, { "accept-language": "en-US,en;q=0.9" });
+      // If rate-limited, back off and retry
+      if (r && r.status === 429) {
+        const wait = 800 * Math.pow(2, i) + Math.random() * 400;
+        await new Promise((res) => setTimeout(res, wait));
+        continue;
+      }
+      if (!r || !r.ok) throw new Error(`HTTP ${r ? r.status : 0}`);
+      return await r.text();
+    } catch (e) {
+      lastErr = e;
+      const wait = 400 * Math.pow(2, i) + Math.random() * 200;
+      await new Promise((res) => setTimeout(res, wait));
+    }
+  }
+  throw lastErr;
 }
 
-export default async function handler(req, res) {
+async function fetchSearchPage(q, page) {
+  const url = `https://www.2ndswing.com/catalogsearch/result/?q=${encodeURIComponent(q)}&p=${page}`;
+  try {
+    const html = await fetchHtmlWithRetry(url, 3);
+    const items = parseSearchHTML(html);
+    return { items, status: 200 };
+  } catch (e) {
+    // if we got here, we exhausted retries
+    return { items: [], status: 0 };
+  }
+}
+
+module.exports = async function handler(req, res) {
   try {
     if (process.env.ENABLE_2NDSWING !== "true") {
       return res.status(200).json([]); // disabled by env flag
@@ -146,9 +173,13 @@ export default async function handler(req, res) {
 
     if (!q) return res.status(200).json([]);
 
-    // ---- 1) Crawl multiple catalog pages ----
+    // How many catalog pages to crawl (default 1; soft-cap 3; hard-cap MAX_PAGES)
+    const pagesParam = Math.max(1, Math.min(3, Number(req.query.pages || 1)));
+    const pagesToFetch = Math.min(pagesParam, MAX_PAGES);
+
+    // ---- 1) Crawl multiple catalog pages (serial, retrying) ----
     let raw = [];
-    for (let p = 1; p <= MAX_PAGES; p++) {
+    for (let p = 1; p <= pagesToFetch; p++) {
       const { items, status } = await fetchSearchPage(q, p);
       log.pages.push({ page: p, count: items.length, status });
       if (items.length === 0) {
@@ -156,7 +187,7 @@ export default async function handler(req, res) {
         break;
       }
       raw = raw.concat(items);
-      // Small safety: if we already have a lot of items, stop early
+      // Safety: stop early if we already have a lot
       if (raw.length >= 200) break;
     }
     log.counts.raw = raw.length;
@@ -184,15 +215,15 @@ export default async function handler(req, res) {
     }
 
     // ---- 3) Normalize & filter ----
-    const norm = normalize(raw);
-    let filtered = applySearchFilter(q, norm);
+    const normd = normalize(raw);
+    let filtered = applySearchFilter(q, normd);
     log.counts.filtered_primary = filtered.length;
 
-    // Looser fallback if model-first filter was too strict
+    // Optional: loose fallback if strict filter was too tight
     if (filtered.length < 6) {
       const toks = q.toLowerCase().split(/\s+/).filter(Boolean);
-      const seen = new Set(filtered.map((x) => x.url.toLowerCase()));
-      const loose = norm.filter((it) => {
+      const seen = new Set(filtered.map((x) => (x.url || "").toLowerCase()));
+      const loose = normd.filter((it) => {
         const T = (it.title || "").toLowerCase();
         const U = (it.url || "").toLowerCase();
         return toks.some((t) => T.includes(t) || U.includes(t));
@@ -249,4 +280,4 @@ export default async function handler(req, res) {
     // Fail soft
     return res.status(200).json([]);
   }
-}
+};
