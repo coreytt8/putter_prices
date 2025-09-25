@@ -262,7 +262,6 @@ export default function PuttersPage() {
   const [dex, setDex] = useState("");            // "", "LEFT", "RIGHT"
   const [head, setHead] = useState("");          // "", "BLADE", "MALLET"
   const [lengths, setLengths] = useState([]);    // [] or [33,34,35,36]
-  const [showAdvanced, setShowAdvanced] = useState(false);
   const [groupMode, setGroupMode] = useState(true);
   const [sortBy, setSortBy] = useState("best_price_asc");
   const [page, setPage] = useState(1);
@@ -368,32 +367,100 @@ export default function PuttersPage() {
   }, [q, onlyComplete, minPrice, maxPrice, conds, buying, sortBy, groupMode, broaden, dex, head, lengths]);
 
   // Fetch results
-  useEffect(() => {
-    if (!q.trim()) {
-      setGroups([]); setOffers([]);
-      setHasNext(false); setHasPrev(false);
-      setFetchedCount(null); setKeptCount(null);
-      setApiData(null);
-      setErr("");
-      return;
-    }
-    const ctrl = new AbortController();
-    let ignore = false;
+useEffect(() => {
+  if (!q.trim()) {
+    setGroups([]); setOffers([]);
+    setHasNext(false); setHasPrev(false);
+    setFetchedCount(null); setKeptCount(null);
+    setApiData(null);
+    setErr("");
+    return;
+  }
 
-    const t = setTimeout(async () => {
-      setLoading(true); setErr("");
-      try {
-        const res = await fetch(apiUrl, {
-          cache: "no-store",
-          signal: ctrl.signal,
-          headers: { pragma: "no-cache", "cache-control": "no-cache" },
-        });
-        const data = await res.json();
-        if (ignore) return;
+  const ctrl = new AbortController();
+  let ignore = false;
 
-        const nextGroups = Array.isArray(data.groups) ? data.groups : [];
-        let pageOffers = Array.isArray(data.offers) ? data.offers : [];
+  const MAX_FLAT_AGG_PAGES = 6;   // cap to keep things snappy (6 * perPage server items)
 
+  const run = async () => {
+    setLoading(true); setErr("");
+
+    try {
+      // 1) fetch the current page from the API as usual
+      const res = await fetch(apiUrl, {
+        cache: "no-store",
+        signal: ctrl.signal,
+        headers: { pragma: "no-cache", "cache-control": "no-cache" },
+      });
+      const data = await res.json();
+      if (ignore) return;
+
+      const nextGroups = Array.isArray(data.groups) ? data.groups : [];
+      let pageOffers = Array.isArray(data.offers) ? data.offers : [];
+
+      // By default (Grouped) we keep server paging; in Flat view we *may* aggregate pages.
+      const wantGlobalPriceSort =
+        !groupMode && (sortBy === "best_price_asc" || sortBy === "best_price_desc");
+
+      if (wantGlobalPriceSort) {
+        // 2) Aggregate multiple pages client-side so we can globally sort by price.
+        //    We use the same query, but walk page=1..N until hasNext=false or cap.
+        const params = new URL(apiUrl, window.location.origin); // apiUrl already has all filters
+        const base = new URLSearchParams(params.search);
+
+        // ensure server returns decent chunks while we aggregate
+        base.set("perPage", "50"); // larger chunks reduce round-trips
+        base.set("page", "1");
+        const mkUrl = (p) => {
+          const s = new URLSearchParams(base);
+          s.set("page", String(p));
+          return `${params.pathname}?${s.toString()}`;
+        };
+
+        let all = [];
+        let p = 1;
+        let hasNext = true;
+
+        // If we’re not on page 1, we still aggregate from page 1 to have *global* ordering,
+        // then we slice client-side for the user’s current page selection.
+        while (!ignore && hasNext && p <= MAX_FLAT_AGG_PAGES) {
+          const url = mkUrl(p);
+          const r = await fetch(url, {
+            cache: "no-store",
+            signal: ctrl.signal,
+            headers: { pragma: "no-cache", "cache-control": "no-cache" },
+          }).catch(() => null);
+
+          if (!r || !r.ok) break;
+          const j = await r.json().catch(() => ({}));
+          const arr = Array.isArray(j.offers) ? j.offers : [];
+          all = all.concat(arr);
+          hasNext = Boolean(j.hasNext);
+          p += 1;
+        }
+
+        // 3) Global price sort
+        if (sortBy === "best_price_desc") {
+          all.sort((a, b) => (b.price ?? -Infinity) - (a.price ?? -Infinity));
+        } else {
+          all.sort((a, b) => (a.price ?? Infinity) - (b.price ?? Infinity));
+        }
+
+        // 4) Client-side pagination after global sort
+        const start = (page - 1) * FIXED_PER_PAGE;
+        const end = start + FIXED_PER_PAGE;
+        const pageSlice = all.slice(start, end);
+
+        setGroups([]);               // flat view only here
+        setOffers(pageSlice);
+        setHasPrev(page > 1);
+        setHasNext(end < all.length);
+        setFetchedCount(typeof data.fetchedCount === "number" ? data.fetchedCount : null);
+        setKeptCount(all.length);    // we aggregated; show total after filter/merge
+        setApiData(data);
+
+      } else {
+        // --- ORIGINAL behavior (Grouped, or Flat but non-price sort) ---
         if (!groupMode && pageOffers.length) {
           if (sortBy === "best_price_asc") {
             pageOffers = [...pageOffers].sort((a,b) => (a.price ?? Infinity) - (b.price ?? Infinity));
@@ -407,28 +474,31 @@ export default function PuttersPage() {
         setGroups(nextGroups);
         setOffers(pageOffers);
         setHasNext(Boolean(data.hasNext));
-        setHasPrev(Boolean(data.hasPrev));
+        setHasPrev(Boolean(data.hasPrev) && page > 1);
         setFetchedCount(typeof data.fetchedCount === "number" ? data.fetchedCount : null);
         setKeptCount(typeof data.keptCount === "number" ? data.keptCount : null);
         setApiData(data);
-
-        // reset per-model show-all + lows/series cache for fresh groups
-        const nextShowAll = {};
-        const resetNulls = {};
-        nextGroups.forEach(g => { nextShowAll[g.model] = false; resetNulls[g.model] = null; });
-        setShowAllOffersByModel(nextShowAll);
-        setLowsByModel((prev) => ({ ...resetNulls }));
-        setSeriesByModel((prev) => ({ ...resetNulls }));
-        // DO NOT reset statsByModel here; we keep cache (condition-aware)
-      } catch (e) {
-        if (!ignore && e.name !== "AbortError") setErr("Failed to load results. Please try again.");
-      } finally {
-        if (!ignore) setLoading(false);
       }
-    }, 150);
 
-    return () => { ignore = true; clearTimeout(t); ctrl.abort(); };
-  }, [apiUrl, groupMode, sortBy, q]);
+      // reset per-model expand/show-all caches for fresh groups
+      const nextShowAll = {};
+      const resetNulls = {};
+      nextGroups.forEach(g => { nextShowAll[g.model] = false; resetNulls[g.model] = null; });
+      setShowAllOffersByModel(nextShowAll);
+      setLowsByModel((prev) => ({ ...resetNulls }));
+      setSeriesByModel((prev) => ({ ...resetNulls }));
+      // keep statsByModel cache
+
+    } catch (e) {
+      if (!ignore && e.name !== "AbortError") setErr("Failed to load results. Please try again.");
+    } finally {
+      if (!ignore) setLoading(false);
+    }
+  };
+
+  const t = setTimeout(run, 150);
+  return () => { ignore = true; clearTimeout(t); ctrl.abort(); };
+}, [apiUrl, groupMode, sortBy, q, page]);
 
   const sortedGroups = useMemo(() => {
     const arr = [...groups];
@@ -930,16 +1000,7 @@ export default function PuttersPage() {
             ))}
           </div>
 
-          <div className="mt-4">
-            <label className="flex items-center gap-2 text-sm">
-              <input
-                type="checkbox"
-                checked={showAdvanced}
-                onChange={(e) => setShowAdvanced(e.target.checked)}
-              />
-              Show advanced options
-            </label>
-          </div>
+         
         </div>
       </section>
 
