@@ -266,7 +266,10 @@ export default function PuttersPage() {
   const [sortBy, setSortBy] = useState("best_price_asc");
   const [page, setPage] = useState(1);
   const [q, setQ] = useState("");
-  const [broaden, setBroaden] = useState(false);
+  const [broaden, setBroaden] = useState(false); 
+  const [includeProShops, setIncludeProShops] = useState(false);
+
+
 
   // data
   const [groups, setGroups] = useState([]);
@@ -282,7 +285,8 @@ export default function PuttersPage() {
   // UI state
   const [expanded, setExpanded] = useState({});
   const [showAllOffersByModel, setShowAllOffersByModel] = useState({});
-  const [copiedFor, setCopiedFor] = useState("");
+  const [copiedFor, setCopiedFor] = useState("")
+
 
   // Per-model caches
   const [lowsByModel, setLowsByModel] = useState({});   // model -> lows
@@ -310,6 +314,7 @@ export default function PuttersPage() {
     if (sp.has("sort")) setSortBy(sp.get("sort") === "newlylisted" ? "recent" : "best_price_asc");
     if (sp.has("group")) setGroupMode(sp.get("group") === "true");
     if (sp.has("broaden")) setBroaden(sp.get("broaden") === "true");
+    if (sp.has("pro")) setIncludeProShops(sp.get("pro") === "true");
     if (sp.has("page")) setPage(Math.max(1, Number(sp.get("page") || "1")));
   }, []);
 
@@ -327,6 +332,7 @@ export default function PuttersPage() {
     if (dex) params.set("dex", dex);
     if (head) params.set("head", head);
     if (lengths.length) params.set("lengths", lengths.join(","));
+    if (includeProShops) params.set("pro","true");
     params.set("page", String(page));
     params.set("group", groupMode ? "true" : "false");
 
@@ -347,6 +353,7 @@ export default function PuttersPage() {
     if (sortBy === "recent") params.set("sort", "newlylisted");
     if (broaden) params.set("broaden", "true");
     if (dex) params.set("dex", dex);
+    if (includeProShops) params.set("pro","true");
     if (head) params.set("head", head);
     if (lengths.length) params.set("lengths", lengths.join(","));
     params.set("page", String(page));
@@ -708,6 +715,20 @@ export default function PuttersPage() {
             Pulls more pages from eBay before filtering. Helpful for niche models/years.
           </p>
         </div>
+	<div className="rounded-md border border-gray-200 p-3">
+  <label className="flex items-center gap-2 text-sm">
+    <input
+      type="checkbox"
+      checked={includeProShops}
+      onChange={(e) => setIncludeProShops(e.target.checked)}
+    />
+    Include pro-shop sites (2nd Swing – beta)
+  </label>
+  <p className="mt-1 text-xs text-gray-500">
+    Adds 2nd Swing listings when enabled.
+  </p>
+</div>
+
 
         <div className="flex items-end justify-between gap-3">
           <button onClick={clearAll} className="w-full rounded-md border border-gray-300 px-3 py-2 text-sm hover:bg-gray-100">

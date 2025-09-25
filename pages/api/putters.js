@@ -550,7 +550,42 @@ export default async function handler(req, res) {
         __model: modelKey,
       };
     });
+	// ===== Append pro-shop sources (guarded) =====
+const includePro = sp.pro === "true"; // sp = your URLSearchParams for req.query
+if (includePro && process.env.ENABLE_2NDSWING === "true") {
+  try {
+    const origin =
+      (req.headers["x-forwarded-proto"]
+        ? `${req.headers["x-forwarded-proto"]}://`
+        : "https://") + req.headers.host;
 
+    const url2s = `${origin}/api/sources/2ndswing?q=${encodeURIComponent(q)}&limit=48`;
+    const r2 = await fetch(url2s, {
+      headers: { "user-agent": req.headers["user-agent"] || "Mozilla/5.0" },
+      cache: "no-store",
+    });
+
+    if (r2.ok) {
+      const secondSwing = await r2.json();
+      if (Array.isArray(secondSwing) && secondSwing.length) {
+        // Append to eBay offers
+        offers = offers.concat(secondSwing);
+
+        // Cross-source de-dupe by URL (case-insensitive)
+        const seenUrl = new Set();
+        offers = offers.filter((o) => {
+          const u = (o.url || "").toLowerCase();
+          if (!u || seenUrl.has(u)) return false;
+          seenUrl.add(u);
+          return true;
+        });
+      }
+    }
+  } catch {
+    // Never let a flaky source break eBay results
+  }
+}
+// ===== end pro-shop append =====
     // De-dupe obvious clones (same seller + same title + same price)
     const seen = new Set();
     offers = offers.filter((o) => {
