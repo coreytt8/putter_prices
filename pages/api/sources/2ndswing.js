@@ -1,7 +1,10 @@
 
 // pages/api/sources/2ndswing.js
-import { applySearchFilter } from "../../../lib/searchFilter";
-import * as cheerio from "cheerio";
+
+// pages/api/sources/2ndswing.js
+const { applySearchFilter } = require("../../../lib/searchfilter");
+const cheerio = require("cheerio");
+
 
 const UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/126 Safari/537.36";
 
