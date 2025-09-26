@@ -1200,40 +1200,81 @@ useEffect(() => {
               {/* Expanded offers */}
               {isOpen && (
                 <ul className="mt-3 space-y-2">
-                  {list.map((o) => (
-                    <li
-                      key={o.productId + o.url}
-                      className="flex items-center justify-between gap-3 rounded border border-gray-100 p-2"
-                    >
-                      {/* LEFT: retailer/seller */}
-                      <div className="min-w-0">
-                        <div className="truncate text-sm font-medium">
-                          {o.retailer}
-                          {o?.seller?.username && (
-                            <span className="ml-2 text-xs text-gray-500">@{o.seller.username}</span>
-                          )}
-                        </div>
-                      </div>
+                  {list.map((o) => {
+  // Condition band from offer or current filter
+  const condParam =
+    (o?.conditionBand || o?.condition || "").toUpperCase() ||
+    selectedConditionBand(conds) ||
+    "";
 
-                      {/* RIGHT: badge + price + view */}
-                      <div className="flex items-center gap-3">
-                        <SmartPriceBadge total={_totalOf(o)} stats={stats} />
-                        <span className="text-sm font-semibold">
-                          {Number.isFinite(Number(o.price)) ? formatPrice(o.price, o.currency) : "—"}
-                        </span>
-                        <a
-                          href={o.url}
-                          target="_blank"
-                          rel="noreferrer"
-                          className="rounded-md border px-2 py-1 text-xs hover:bg-gray-50"
-                        >
-                          View
-                        </a>
-                      </div>
-                    </li>
-                  ))}
-                </ul>
-              )}
+  // Build stats lookup keys
+  const modelKey   = getModelKey(o);
+  const canonKey   = toCanonKey(modelKey || g.model || "");
+  const variant    = detectVariant(o?.title);
+  const variantKey = getStatsKey3(modelKey, variant, condParam);
+  const baseKey    = getStatsKey(modelKey, condParam);
+
+  // Prefer canonical (::key) → variantKey → baseKey → group stats
+  const perOfferStats =
+    statsByModel[canonKey] ??
+    statsByModel[variantKey] ??
+    statsByModel[baseKey] ??
+    (statsByModel[toCanonKey(g.modelKey || g.model || "")] || null);
+
+  const total = _totalOf(o);
+
+  return (
+    <li
+      key={o.productId + o.url}
+      className="flex items-center justify-between gap-3 rounded border border-gray-100 p-2"
+    >
+      {/* LEFT: retailer + seller */}
+      <div className="min-w-0">
+        <div className="truncate text-sm font-medium">
+          {o.retailer}
+          {o?.seller?.username && (
+            <span className="ml-2 text-xs text-gray-600">@{o.seller.username}</span>
+          )}
+          {typeof o?.seller?.feedbackPct === "number" && (
+            <span className="ml-2 rounded-full bg-gray-100 px-2 py-[2px] text-[11px] font-medium text-gray-700">
+              {o.seller.feedbackPct.toFixed(1)}%
+            </span>
+          )}
+        </div>
+
+        {/* quick spec line */}
+        <div className="mt-0.5 truncate text-xs text-gray-500">
+          {(o.specs?.dexterity || "").toUpperCase() || "—"} · {(o.specs?.headType || "").toUpperCase() || "—"} ·
+          {Number.isFinite(Number(o?.specs?.length)) ? ` ${o.specs.length}"` : " —"}
+        </div>
+      </div>
+
+      {/* RIGHT: badge + price + link */}
+      <div className="flex items-center gap-3">
+        <SmartPriceBadge
+          total={total}
+          stats={perOfferStats}
+        />
+        <div className="text-right">
+          <div className="text-sm font-semibold">
+            {formatPrice(total, o.currency)}
+          </div>
+          <div className="text-[11px] text-gray-500">
+            ({formatPrice(o.price, o.currency)} + {formatPrice(_shipCost(o), o.currency)} ship)
+          </div>
+        </div>
+        <a
+          href={o.url}
+          target="_blank"
+          rel="noreferrer"
+          className="rounded-md border px-2 py-1 text-xs hover:bg-gray-50"
+        >
+          View
+        </a>
+      </div>
+    </li>
+  );
+})}
 
               {/* Copy best link (optional) */}
               {bestUrl && (
