@@ -112,19 +112,19 @@ function makeSmartBadge({ listingPrice, stats, windowDays = 60 }) {
     insufficient: "bg-zinc-100 text-zinc-700 ring-zinc-200",
   };
   const ICONS = {
-    great_deal: "✅",
-    good_price: "👍",
-    fair: "⚖️",
-    above_market: "⬆️",
-    overpriced: "⚠️",
-    insufficient: "？",
+    great_deal: "âœ…",
+    good_price: "ðŸ‘",
+    fair: "âš–ï¸",
+    above_market: "â¬†ï¸",
+    overpriced: "âš ï¸",
+    insufficient: "ï¼Ÿ",
   };
 
   const pctAbs = Math.abs(deltaPct * 100);
   const vsText = deltaPct < 0 ? `~${pctAbs.toFixed(0)}% below`
                : deltaPct > 0 ? `~${pctAbs.toFixed(0)}% above`
                : "near";
-  const nText = n ? `${n}` : "—";
+  const nText = n ? `${n}` : "â€”";
   const condLabel = stats?.condition ? ` (${String(stats.condition).replace(/_/g," ").toLowerCase()})` : "";
   const tooltip = tier === "insufficient"
     ? "Not enough comparable sales to estimate a fair market price confidently."
@@ -147,7 +147,7 @@ function makeSmartBadge({ listingPrice, stats, windowDays = 60 }) {
    ORIGINAL HELPERS
    ============================ */
 function formatPrice(value, currency = "USD") {
-  if (typeof value !== "number" || !isFinite(value)) return "—";
+  if (typeof value !== "number" || !isFinite(value)) return "â€”";
   try {
     return new Intl.NumberFormat("en-US", { style: "currency", currency }).format(value);
   } catch {
@@ -212,11 +212,11 @@ const BUYING_OPTIONS = [
 ];
 
 const SORT_OPTIONS = [
-  { label: "Best Price: Low → High", value: "best_price_asc" },
-  { label: "Best Price: High → Low", value: "best_price_desc" },
+  { label: "Best Price: Low â†’ High", value: "best_price_asc" },
+  { label: "Best Price: High â†’ Low", value: "best_price_desc" },
   { label: "Recently listed", value: "recent" },
   { label: "Most Offers", value: "count_desc" },
-  { label: "A → Z (Model)", value: "model_asc" },
+  { label: "A â†’ Z (Model)", value: "model_asc" },
 ];
 
 const FIXED_PER_PAGE = 10;
@@ -353,7 +353,7 @@ export default function PuttersPage() {
     if (sp.has("page")) setPage(Math.max(1, Number(sp.get("page") || "1")));
   }, []);
 
-  // reflect state → URL
+  // reflect state â†’ URL
   useEffect(() => {
     const params = new URLSearchParams();
     if (q.trim()) params.set("q", q.trim());
@@ -404,7 +404,7 @@ export default function PuttersPage() {
     setPage(1);
   }, [q, onlyComplete, minPrice, maxPrice, conds, buying, sortBy, groupMode, broaden, dex, head, lengths]);
 
-// Fetch results (grouped vs flat) — clean & balanced
+// Fetch results (grouped vs flat) â€” clean & balanced
 useEffect(() => {
   if (!q.trim()) {
     setGroups([]); setOffers([]);
@@ -538,16 +538,38 @@ useEffect(() => {
     }
   } // end run()
 
-  const t = setTimeout(run, 150);
-  // Base-model market stats (excludes variants like Circle T, limited, tour)
-  const baseStatsByModel = useMemo(() => {
-    const listings = groupMode ? (Array.isArray(groups) ? groups.flatMap(g => g.offers || []) : []) 
-                               : (Array.isArray(offers) ? offers : []);
-    return buildBaseStats(listings);
-  }, [groupMode, groups, offers]);
+  useEffect(() => {
+  let ignore = false;
+  const ctrl = new AbortController();
 
-  return () => { ignore = true; clearTimeout(t); ctrl.abort(); };
+  const run = async () => {
+    // ... your fetch logic ...
+  };
+
+  const t = setTimeout(run, 150);
+
+  // âŒ REMOVE these from inside the effect:
+  // const baseStatsByModel = useMemo(() => { ... }, [groupMode, groups, offers]);
+
+  return () => { 
+    ignore = true; 
+    clearTimeout(t); 
+    ctrl.abort(); 
+  };
 }, [apiUrl, groupMode, sortBy, q, page]); // <-- END of Fetch results effect
+
+// Safely derive the listings used for stats (no early returns needed)
+const listingsForStats = useMemo(() => {
+  const safeGroups = Array.isArray(groups) ? groups : [];
+  const safeOffers = Array.isArray(offers) ? offers : [];
+  return groupMode ? safeGroups.flatMap(g => g.offers || []) : safeOffers;
+}, [groupMode, groups, offers]);
+
+// Base-model market stats (excludes variants like Circle T, limited, tour)
+const baseStatsByModel = useMemo(() => {
+  return buildBaseStats(listingsForStats);
+}, [listingsForStats]);
+
 
 
 /* ============================
@@ -576,7 +598,7 @@ useEffect(() => {
       if (!d || typeof d !== "object") return;
       setStatsByModel(prev => ({ ...prev, ...d }));
     })
-    .catch(() => { /* ignore; badge will show "—" if missing */ });
+    .catch(() => { /* ignore; badge will show "â€”" if missing */ });
 
   return () => ctrl.abort();
 }, [groups]); // <-- END of Grouped stats effect
@@ -676,7 +698,7 @@ useEffect(() => {
     return { domDex, domHead, domLen: domLenVal };
   }
 
-  // quick “Great deal/Good deal” chip (kept for the summary row)
+  // quick â€œGreat deal/Good dealâ€ chip (kept for the summary row)
   function fairPriceBadge(best, stats) {
     if (!best || !stats) return null;
     const p10 = Number(stats.p10), p50 = Number(stats.p50);
@@ -714,7 +736,7 @@ useEffect(() => {
   if (need.length === 0) return;
 
   const ctrl = new AbortController();
-  const qs = need.map(m => `model=${encodeURIComponent(m)}`).join("&");  // ✅ define qs
+  const qs = need.map(m => `model=${encodeURIComponent(m)}`).join("&");  // âœ… define qs
 
   fetch(`/api/model-stats?${qs}`, { signal: ctrl.signal, cache: "no-store" })
     .then(r => (r.ok ? r.json() : Promise.reject()))
@@ -735,7 +757,7 @@ useEffect(() => {
         <div>
           <h1 className="text-3xl font-semibold tracking-tight">Compare Putter Prices</h1>
           <p className="mt-1 text-sm text-gray-500">
-            Type a model (e.g., <em>“scotty cameron newport”</em>) or pick a brand.
+            Type a model (e.g., <em>â€œscotty cameron newportâ€</em>) or pick a brand.
           </p>
           <p className="mt-1 text-xs text-gray-500">
             Badges based on recent comps. <a className="text-blue-600 underline" href="/methodology">See methodology</a>.
@@ -743,8 +765,8 @@ useEffect(() => {
         </div>
         {q.trim() && (
           <div className="text-sm text-gray-500">
-            {groupMode ? "Grouped by model" : "Flat list"} · Page{" "}
-            <span className="font-medium">{page}</span> ·{" "}
+            {groupMode ? "Grouped by model" : "Flat list"} Â· Page{" "}
+            <span className="font-medium">{page}</span> Â·{" "}
             <span className="font-medium">{FIXED_PER_PAGE}</span>{" "}
             {groupMode ? "groups" : "listings"}
           </div>
@@ -852,7 +874,7 @@ useEffect(() => {
               checked={includeProShops}
               onChange={(e) => setIncludeProShops(e.target.checked)}
             />
-            Include pro-shop sites (2nd Swing – beta)
+            Include pro-shop sites (2nd Swing â€“ beta)
           </label>
           <p className="mt-1 text-xs text-gray-500">
             Adds 2nd Swing listings when enabled.
@@ -893,7 +915,7 @@ useEffect(() => {
               onChange={(e) => setMinPrice(e.target.value)}
               className="w-full rounded-md border border-gray-300 px-2 py-1"
             />
-            <span className="text-gray-400">—</span>
+            <span className="text-gray-400">â€”</span>
             <input
               type="number"
               min="0"
@@ -1013,7 +1035,7 @@ useEffect(() => {
               </label>
             ))}
             <div className="text-xs text-gray-500 basis-full">
-              We match titles within ±0.5&quot; of the selected length(s).
+              We match titles within Â±0.5&quot; of the selected length(s).
             </div>
           </div>
         </div>
@@ -1137,7 +1159,7 @@ useEffect(() => {
                       <div className="min-w-0">
                         <h3 className="text-lg font-semibold leading-tight">{g.model}</h3>
                         <p className="mt-1 text-xs text-gray-500">
-                          {g.count} offer{g.count === 1 ? "" : "s"} · {g.retailers.join(", ")}
+                          {g.count} offer{g.count === 1 ? "" : "s"} Â· {g.retailers.join(", ")}
                         </p>
 
                         {/* Dominant chips + BADGES */}
@@ -1223,7 +1245,7 @@ useEffect(() => {
                         {bestDelta && (
                           <div
                             className="rounded-full bg-emerald-50 px-3 py-1 text-[11px] font-medium text-emerald-700"
-                            title={`Median ${formatPrice(med)} · Save ~${formatPrice(bestDelta.diff)} (~${bestDelta.pct.toFixed(0)}%)`}
+                            title={`Median ${formatPrice(med)} Â· Save ~${formatPrice(bestDelta.diff)} (~${bestDelta.pct.toFixed(0)}%)`}
                           >
                             Save {formatPrice(bestDelta.diff)} (~{bestDelta.pct.toFixed(0)}%)
                           </div>
@@ -1318,20 +1340,20 @@ useEffect(() => {
                                   {/* Enhanced spec line */}
                                   <div className="mt-0.5 truncate text-xs text-gray-500">
                                     {(o.specs?.dexterity || "").toUpperCase() === "LEFT" ? "LH" :
-                                     (o.specs?.dexterity || "").toUpperCase() === "RIGHT" ? "RH" : "—"}
-                                    {" · "}
-                                    {(o.specs?.headType || "").toUpperCase() || "—"}
-                                    {" · "}
-                                    {Number.isFinite(Number(o?.specs?.length)) ? `${o.specs.length}"` : "—"}
-                                    {o?.specs?.shaft && <> · {String(o.specs.shaft).toLowerCase()}</>}
-                                    {o?.specs?.hosel && <> · {o.specs.hosel}</>}
-                                    {o?.specs?.face && <> · {o.specs.face}</>}
-                                    {o?.specs?.grip && <> · {o.specs.grip}</>}
-                                    {o?.specs?.hasHeadcover && <> · HC</>}
-                                    {o?.specs?.toeHang && <> · {o.specs.toeHang} toe</>}
-                                    {Number.isFinite(Number(o?.specs?.loft)) && <> · {o.specs.loft}° loft</>}
-                                    {Number.isFinite(Number(o?.specs?.lie)) && <> · {o.specs.lie}° lie</>}
-                                    {o.createdAt && (<> · listed {timeAgo(new Date(o.createdAt).getTime())}</>)}
+                                     (o.specs?.dexterity || "").toUpperCase() === "RIGHT" ? "RH" : "â€”"}
+                                    {" Â· "}
+                                    {(o.specs?.headType || "").toUpperCase() || "â€”"}
+                                    {" Â· "}
+                                    {Number.isFinite(Number(o?.specs?.length)) ? `${o.specs.length}"` : "â€”"}
+                                    {o?.specs?.shaft && <> Â· {String(o.specs.shaft).toLowerCase()}</>}
+                                    {o?.specs?.hosel && <> Â· {o.specs.hosel}</>}
+                                    {o?.specs?.face && <> Â· {o.specs.face}</>}
+                                    {o?.specs?.grip && <> Â· {o.specs.grip}</>}
+                                    {o?.specs?.hasHeadcover && <> Â· HC</>}
+                                    {o?.specs?.toeHang && <> Â· {o.specs.toeHang} toe</>}
+                                    {Number.isFinite(Number(o?.specs?.loft)) && <> Â· {o.specs.loft}Â° loft</>}
+                                    {Number.isFinite(Number(o?.specs?.lie)) && <> Â· {o.specs.lie}Â° lie</>}
+                                    {o.createdAt && (<> Â· listed {timeAgo(new Date(o.createdAt).getTime())}</>)}
                                   </div>
                                 </div>
                               </div>
@@ -1347,7 +1369,7 @@ useEffect(() => {
                                   brand={g?.brand}
                                 />
                                 <span className="text-sm font-semibold">
-                                  {typeof o.price === "number" ? formatPrice(o.price, o.currency) : "—"}
+                                  {typeof o.price === "number" ? formatPrice(o.price, o.currency) : "â€”"}
                                 </span>
                                 <a
                                   href={o.url}
@@ -1380,17 +1402,17 @@ useEffect(() => {
               onClick={() => setPage((p) => Math.max(1, p - 1))}
               className={`rounded-md border px-3 py-2 text-sm ${canPrev ? "hover:bg-gray-100" : "cursor-not-allowed opacity-50"}`}
             >
-              ← Prev
+              â† Prev
             </button>
             <div className="text-sm text-gray-600">
-              Page <span className="font-medium">{page}</span> · {FIXED_PER_PAGE} groups per page
+              Page <span className="font-medium">{page}</span> Â· {FIXED_PER_PAGE} groups per page
             </div>
             <button
               disabled={!canNext}
               onClick={() => setPage((p) => p + 1)}
               className={`rounded-md border px-3 py-2 text-sm ${canNext ? "hover:bg-gray-100" : "cursor-not-allowed opacity-50"}`}
             >
-              Next →
+              Next â†’
             </button>
           </div>
         </>
@@ -1404,7 +1426,7 @@ useEffect(() => {
               const modelKey = getModelKey(o);
               const condParam =
                 (o?.conditionBand || o?.condition || "").toUpperCase() ||
-                selectedConditionBand(conds) ||
+                selected{groups.map((g) => (ConditionBand(conds) ||
                 "";
               const variant    = detectVariant(o?.title);
               const variantKey = getStatsKey3(modelKey, variant, condParam);
@@ -1424,19 +1446,19 @@ useEffect(() => {
                   <div className="p-4">
                     <h3 className="line-clamp-2 text-sm font-semibold">{o.title}</h3>
                     <p className="mt-1 text-xs text-gray-500">
-                      {o?.seller?.username && <>@{o.seller.username} · </>}
-                      {typeof o?.seller?.feedbackPct === "number" && <>{o.seller.feedbackPct.toFixed(1)}% · </>}
-                      {(o.specs?.dexterity || "").toUpperCase() || "—"} · {(o.specs?.headType || "").toUpperCase() || "—"} ·
-                      {Number.isFinite(Number(o?.specs?.length)) ? `${o.specs.length}"` : "—"}
-                      {o?.specs?.shaft && <> · {String(o.specs.shaft).toLowerCase()}</>}
-                      {o?.specs?.hosel && <> · {o.specs.hosel}</>}
-                      {o?.specs?.face && <> · {o.specs.face}</>}
-                      {o?.specs?.grip && <> · {o.specs.grip}</>}
-                      {o?.specs?.hasHeadcover && <> · HC</>}
-                      {o?.specs?.toeHang && <> · {o.specs.toeHang} toe</>}
-                      {Number.isFinite(Number(o?.specs?.loft)) && <> · {o.specs.loft}° loft</>}
-                      {Number.isFinite(Number(o?.specs?.lie)) && <> · {o.specs.lie}° lie</>}
-                      {o.createdAt && (<> · listed {timeAgo(new Date(o.createdAt).getTime())}</>)}
+                      {o?.seller?.username && <>@{o.seller.username} Â· </>}
+                      {typeof o?.seller?.feedbackPct === "number" && <>{o.seller.feedbackPct.toFixed(1)}% Â· </>}
+                      {(o.specs?.dexterity || "").toUpperCase() || "â€”"} Â· {(o.specs?.headType || "").toUpperCase() || "â€”"} Â·
+                      {Number.isFinite(Number(o?.specs?.length)) ? `${o.specs.length}"` : "â€”"}
+                      {o?.specs?.shaft && <> Â· {String(o.specs.shaft).toLowerCase()}</>}
+                      {o?.specs?.hosel && <> Â· {o.specs.hosel}</>}
+                      {o?.specs?.face && <> Â· {o.specs.face}</>}
+                      {o?.specs?.grip && <> Â· {o.specs.grip}</>}
+                      {o?.specs?.hasHeadcover && <> Â· HC</>}
+                      {o?.specs?.toeHang && <> Â· {o.specs.toeHang} toe</>}
+                      {Number.isFinite(Number(o?.specs?.loft)) && <> Â· {o.specs.loft}Â° loft</>}
+                      {Number.isFinite(Number(o?.specs?.lie)) && <> Â· {o.specs.lie}Â° lie</>}
+                      {o.createdAt && (<> Â· listed {timeAgo(new Date(o.createdAt).getTime())}</>)}
                     </p>
 
                     <div className="mt-3 flex items-center justify-between">
@@ -1466,7 +1488,7 @@ useEffect(() => {
                             return (
                               <span
                                 className="rounded-full bg-emerald-50 px-2 py-0.5 text-[11px] font-medium text-emerald-700"
-                                title={`Median ${formatPrice(Number(p50))} · Save ~${formatPrice(save)} (~${pct}%)`}
+                                title={`Median ${formatPrice(Number(p50))} Â· Save ~${formatPrice(save)} (~${pct}%)`}
                               >
                                 Save {formatPrice(save)}
                               </span>
@@ -1499,17 +1521,17 @@ useEffect(() => {
               onClick={() => setPage((p) => Math.max(1, p - 1))}
               className={`rounded-md border px-3 py-2 text-sm ${hasPrev && page > 1 && !loading ? "hover:bg-gray-100" : "cursor-not-allowed opacity-50"}`}
             >
-              ← Prev
+              â† Prev
             </button>
             <div className="text-sm text-gray-600">
-              Page <span className="font-medium">{page}</span> · {FIXED_PER_PAGE} listings per page
+              Page <span className="font-medium">{page}</span> Â· {FIXED_PER_PAGE} listings per page
             </div>
             <button
               disabled={!hasNext || loading}
               onClick={() => setPage((p) => p + 1)}
               className={`rounded-md border px-3 py-2 text-sm ${hasNext && !loading ? "hover:bg-gray-100" : "cursor-not-allowed opacity-50"}`}
             >
-              Next →
+              Next â†’
             </button>
           </div>
         </>
