@@ -1424,10 +1424,11 @@ useEffect(() => {
           <section className="mt-6 grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
             {offers.map((o) => {
               const modelKey = getModelKey(o);
-              const condParam =
-                (o?.conditionBand || o?.condition || "").toUpperCase() ||
-                selected{groups.map((g) => (ConditionBand(conds) ||
-                "";
+            const condParam =
+  (o?.conditionBand || o?.condition || "").toUpperCase() ||
+  selectedConditionBand(conds) ||
+  "";
+
               const variant    = detectVariant(o?.title);
               const variantKey = getStatsKey3(modelKey, variant, condParam);
               const baseKey    = getStatsKey(modelKey, condParam);
