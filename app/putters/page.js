@@ -404,7 +404,7 @@ export default function PuttersPage() {
     setPage(1);
   }, [q, onlyComplete, minPrice, maxPrice, conds, buying, sortBy, groupMode, broaden, dex, head, lengths]);
 
-// Fetch results (grouped vs flat) â€” clean & balanced
+// Fetch results (grouped vs flat) — clean & balanced
 useEffect(() => {
   if (!q.trim()) {
     setGroups([]); setOffers([]);
@@ -417,6 +417,7 @@ useEffect(() => {
 
   const ctrl = new AbortController();
   let ignore = false;
+  let t = null;
 
   async function run() {
     setLoading(true);
@@ -538,23 +539,12 @@ useEffect(() => {
     }
   } // end run()
 
-  useEffect(() => {
-  let ignore = false;
-  const ctrl = new AbortController();
+  run();
 
-  const run = async () => {
-    // ... your fetch logic ...
-  };
-
-  const t = setTimeout(run, 150);
-
-  // âŒ REMOVE these from inside the effect:
-  // const baseStatsByModel = useMemo(() => { ... }, [groupMode, groups, offers]);
-
-  return () => { 
-    ignore = true; 
-    clearTimeout(t); 
-    ctrl.abort(); 
+  return () => {
+    ignore = true;
+    ctrl.abort();
+    clearTimeout(t);
   };
 }, [apiUrl, groupMode, sortBy, q, page]); // <-- END of Fetch results effect
 
