@@ -1464,13 +1464,6 @@ return (
       ({formatPrice(o.price, o.currency)} + {formatPrice(_shipCost(o), o.currency)} ship)
     </span>
   </div>
-
-  {/* keep any buttons/links for this card here */}
-</div>
-
-        {/* keep any other buttons/links here */}
-      </div>
-    </div>
   </article>
 );
 
