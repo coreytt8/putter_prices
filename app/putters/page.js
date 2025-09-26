@@ -7,6 +7,26 @@ import SmartPriceBadge from "@/components/SmartPriceBadge";
 import { detectVariant } from "@/lib/variantMap";
 
 /* ============================
+   PRICE HELPERS (Total-to-Door)
+   ============================ */
+function _safeNum(v){ const n = Number(v); return Number.isFinite(n) ? n : 0; }
+function _shipCost(o){
+  // try common shapes; default 0 if unknown
+  if (!o) return 0;
+  if (typeof o.shipping === "number") return _safeNum(o.shipping);
+  if (o.shipping && typeof o.shipping.cost === "number") return _safeNum(o.shipping.cost);
+  if (o.shippingCost != null) return _safeNum(o.shippingCost);
+  if (o?.shippingOptions?.[0]?.shippingCost?.value != null) return _safeNum(o.shippingOptions[0].shippingCost.value);
+  return 0;
+}
+function _totalOf(o){ return _safeNum(o?.price) + _shipCost(o); }
+
+
+
+
+
+
+/* ============================
    SMART FAIR-PRICE BADGE (inline, JS/JSX)
    ============================ */
 
@@ -440,11 +460,13 @@ useEffect(() => {
         }
 
         // 3) Global price sort
-        if (sortBy === "best_price_desc") {
-          all.sort((a, b) => (b.price ?? -Infinity) - (a.price ?? -Infinity));
-        } else {
-          all.sort((a, b) => (a.price ?? Infinity) - (b.price ?? Infinity));
-        }
+        // 3) Global price sort (Total-to-Door)
+if (sortBy === "best_price_desc") {
+  all.sort((a, b) => (_totalOf(b) ?? -Infinity) - (_totalOf(a) ?? -Infinity));
+} else {
+  all.sort((a, b) => (_totalOf(a) ?? Infinity) - (_totalOf(b) ?? Infinity));
+}
+
 
         // 4) Client-side pagination after global sort
         const start = (page - 1) * FIXED_PER_PAGE;
@@ -463,13 +485,11 @@ useEffect(() => {
         // --- ORIGINAL behavior (Grouped, or Flat but non-price sort) ---
         if (!groupMode && pageOffers.length) {
           if (sortBy === "best_price_asc") {
-            pageOffers = [...pageOffers].sort((a,b) => (a.price ?? Infinity) - (b.price ?? Infinity));
-          } else if (sortBy === "best_price_desc") {
-            pageOffers = [...pageOffers].sort((a,b) => (b.price ?? -Infinity) - (a.price ?? -Infinity));
-          } else if (sortBy === "model_asc") {
-            pageOffers = [...pageOffers].sort((a,b) => (a.title || "").localeCompare(b.title || ""));
-          }
-        }
+  pageOffers = [...pageOffers].sort((a,b) => (_totalOf(a) ?? Infinity) - (_totalOf(b) ?? Infinity));
+} else if (sortBy === "best_price_desc") {
+  pageOffers = [...pageOffers].sort((a,b) => (_totalOf(b) ?? -Infinity) - (_totalOf(a) ?? -Infinity));
+}
+
 
         setGroups(nextGroups);
         setOffers(pageOffers);
@@ -1401,7 +1421,11 @@ useEffect(() => {
                           className="mr-2"
                         />
 
-                        <span className="text-base font-semibold">{formatPrice(o.price, o.currency)}</span>
+                        <span className="text-base font-semibold">{formatPrice(_totalOf(o), o.currency)}</span>
+<span className="ml-2 text-[11px] text-gray-500">
+  ({formatPrice(o.price, o.currency)} + {formatPrice(_shipCost(o), o.currency)} ship)
+</span>
+
 
                         {/* Optional Save $ chip if below median */}
                         {(() => {
