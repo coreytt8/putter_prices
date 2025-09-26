@@ -1531,8 +1531,7 @@ useEffect(() => {
               disabled={!hasNext || loading}
               onClick={() => setPage((p) => p + 1)}
               className={`rounded-md border px-3 py-2 text-sm ${hasNext && !loading ? "hover:bg-gray-100" : "cursor-not-allowed opacity-50"}`}
-            >
-                   Next &rarr;
+                       Next &rarr;
           </button>
         </div>
       </>
@@ -1540,3 +1539,4 @@ useEffect(() => {
   </main>
 );
 }
+
