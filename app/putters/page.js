@@ -405,6 +405,15 @@ useEffect(() => {
     setErr("");
     return;
   }
+const ctrl = new AbortController();
+  let ignore = false;
+
+  // ... your existing run() logic goes here ...
+  // (unchanged; keep your fetch, sorting, set* calls, etc.)
+
+  const t = setTimeout(run, 150);
+  return () => { ignore = true; clearTimeout(t); ctrl.abort(); };
+}, [apiUrl, groupMode, sortBy, q, page]);
 /* ============================
    GROUPED VIEW: prefetch stats per model
    ============================ */
@@ -425,7 +434,7 @@ useEffect(() => {
   const ctrl = new AbortController();
   const qs = need.map(m => `m=${encodeURIComponent(m)}`).join("&");
 
-  fetch(`/api/putters/stats?${qs}`, { signal: ctrl.signal, cache: "no-store" })
+  fetch(`/api/putters/model-stats?${qs}`, { signal: ctrl.signal, cache: "no-store" })
     .then(r => (r.ok ? r.json() : Promise.reject()))
     .then(d => {
       if (!d || typeof d !== "object") return;
@@ -700,7 +709,7 @@ useEffect(() => {
   const ctrl = new AbortController();
   const qs = modelKeys.map(m => `m=${encodeURIComponent(m)}`).join("&");
 
-  fetch(`/api/putters/stats?${qs}`, { signal: ctrl.signal, cache: "no-store" })
+  fetch(`/api/putters/model-stats?${qs}`, { signal: ctrl.signal, cache: "no-store" })
     .then(r => (r.ok ? r.json() : Promise.reject()))
     .then(d => {
       if (!d || typeof d !== "object") return;
