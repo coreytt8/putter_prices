@@ -1437,59 +1437,71 @@ const canonKey = toCanonKey(o.modelKey || o.model || "");
 const stats    = statsByModel[canonKey] || null;
 
 return (
-  <article key={o.productId + o.url} className="overflow-hidden rounded-xl border border-gray-200 bg-white shadow-sm hover:shadow-md transition-shadow">
-    <div className="relative aspect-[4/3] w-full bg-gray-50">
-      {o.image ? (
-        // eslint-disable-next-line @next/next/no-img-element
-        <img src={o.image} alt={o.title} className="h-full w-full object-contain" loading="lazy" />
-      ) : (
-        <div className="flex h-full w-full items-center justify-center text-xs text-gray-400">No image</div>
-      )}
-    </div>
-    <div className="p-4">
-      <h3 className="line-clamp-2 text-sm font-semibold">{o.title}</h3>
-      {/* …your existing seller/specs text… */}
-<div className="mt-3 flex items-center justify-between">
-  <div className="flex items-center gap-2">
-    <SmartPriceBadge
-      total={_totalOf(o)}
-      stats={stats}
-      className="mr-2"
-    />
-
-    <span className="text-base font-semibold">
-      {formatPrice(_totalOf(o), o.currency)}
-    </span>
-    <span className="ml-2 text-[11px] text-gray-500">
-      ({formatPrice(o.price, o.currency)} + {formatPrice(_shipCost(o), o.currency)} ship)
-    </span>
+<article key={o.productId + o.url} className="overflow-hidden rounded-xl border border-gray-200 bg-white shadow-sm hover:shadow-md transition-shadow">
+  <div className="relative aspect-[4/3] w-full bg-gray-50">
+    {o.image ? (
+      // eslint-disable-next-line @next/next/no-img-element
+      <img src={o.image} alt={o.title} className="h-full w-full object-contain" loading="lazy" />
+    ) : (
+      <div className="flex h-full w-full items-center justify-center text-xs text-gray-400">No image</div>
+    )}
   </div>
 
-                        <span className="text-base font-semibold">{formatPrice(_totalOf(o), o.currency)}</span>
-<span className="ml-2 text-[11px] text-gray-500">
-  ({formatPrice(o.price, o.currency)} + {formatPrice(_shipCost(o), o.currency)} ship)
-</span>
-</article>
-);
+  <div className="p-4">
+    <h3 className="line-clamp-2 text-sm font-semibold">{o.title}</h3>
 
-                        {/* Optional Save $ chip if below median */}
-                        {(() => {
-                          const p50 = stats?.p50;
-                          if (Number.isFinite(Number(p50)) && typeof o.price === "number" && o.price < Number(p50)) {
-                            const save = Number(p50) - o.price;
-                            const pct = Math.round((save / Number(p50)) * 100);
-                            return (
-                              <span
-                                className="rounded-full bg-emerald-50 px-2 py-0.5 text-[11px] font-medium text-emerald-700"
-                                title={`Median ${formatPrice(Number(p50))} · Save ~${formatPrice(save)} (~${pct}%)`}
-                              >
-                                Save {formatPrice(save)}
-                              </span>
-                            );
-                          }
-                          return null;
-                        })()}
-                      </div>
+    <p className="mt-1 text-xs text-gray-500">
+      {o?.seller?.username && <>@{o.seller.username} · </>}
+      {typeof o?.seller?.feedbackPct === "number" && <>{o.seller.feedbackPct.toFixed(1)}% · </>}
+      {(o.specs?.dexterity || "").toUpperCase() || "—"} · {(o.specs?.headType || "").toUpperCase() || "—"} ·
+      {Number.isFinite(Number(o?.specs?.length)) ? `${o.specs.length}"` : "—"}
+      {o?.specs?.shaft && <> · {String(o.specs.shaft).toLowerCase()}</>}
+      {o?.specs?.hosel && <> · {o.specs.hosel}</>}
+      {o?.specs?.face && <> · {o.specs.face}</>}
+      {o?.specs?.grip && <> · {o.specs.grip}</>}
+      {o?.specs?.hasHeadcover && <> · HC</>}
+      {o?.specs?.toeHang && <> · {o.specs.toeHang} toe</>}
+      {Number.isFinite(Number(o?.specs?.loft)) && <> · {o.specs.loft}° loft</>}
+      {Number.isFinite(Number(o?.specs?.lie)) && <> · {o.specs.lie}° lie</>}
+      {o.createdAt && (<> · listed {timeAgo(new Date(o.createdAt).getTime())}</>)}
+    </p>
+
+    <div className="mt-3 flex items-center justify-between">
+      <div className="flex items-center gap-2">
+        <SmartPriceBadge
+          total={_totalOf(o)}
+          stats={stats}
+          className="mr-2"
+        />
+
+        <span className="text-base font-semibold">
+          {formatPrice(_totalOf(o), o.currency)}
+        </span>
+        <span className="ml-2 text-[11px] text-gray-500">
+          ({formatPrice(o.price, o.currency)} + {formatPrice(_shipCost(o), o.currency)} ship)
+        </span>
+
+        {/* Optional Save $ chip if below median */}
+        {(() => {
+          const p50 = stats?.p50;
+          const total = _totalOf(o);
+          if (Number.isFinite(Number(p50)) && Number.isFinite(total) && total < Number(p50)) {
+            const save = Number(p50) - total;
+            return (
+              <span className="ml-2 rounded-full bg-green-50 px-2 py-[2px] text-[11px] font-medium text-green-700">
+                Save {formatPrice(save, o.currency)}
+              </span>
+            );
+          }
+          return null;
+        })()}
+      </div>
+
+      {/* keep your existing buttons/links on the right side here */}
+    </div>
+  </div>
+</article>
+
 
                       {/* Affiliate/outbound link UNCHANGED */}
                       <a
