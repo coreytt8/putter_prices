@@ -587,7 +587,6 @@ useEffect(() => {
     .catch(() => {});
   return () => ctrl.abort();
 }, [groups]);  // separate top-level effect
-
 /* ============================
    GROUPED VIEW: prefetch stats per model
    ============================ */
@@ -617,13 +616,11 @@ useEffect(function groupedStatsEffect() {
     })
     .catch(() => {});
   return () => ctrl.abort();
-}, [groups]);
-
-// ---- keep everything below here unchanged ----
-const sortedGroups = useMemo(() => {
+}, [groups]);  // <- effect ends cleanly here
 
 
-  const sortedGroups = useMemo(() => {
+
+   const sortedGroups = useMemo(() => {
     const arr = [...groups];
     if (sortBy === "best_price_asc") {
       arr.sort((a,b) => (a.bestPrice ?? Infinity) - (b.bestPrice ?? Infinity));
