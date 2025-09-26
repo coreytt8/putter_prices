@@ -1,7 +1,7 @@
 /* eslint-disable no-console */
 // pages/api/model-stats.js
 // Server-side market stats for models, excluding Circle-T / tour / limited variants.
-// Supports both batch (multiple ?model=) and single (?model= & optional ?condition=).
+// Supports both batch (?model=A&model=B) and single (?model=A&condition=NEW).
 
 /**
  * ENV (same as your Browse API route):
@@ -107,6 +107,14 @@ function isLikelyPutter(item) {
   return false;
 }
 
+// --- NEW: better price (always includes shipping if present) ---
+function toPrice(item) {
+  const price = safeNum(item?.price?.value);
+  const ship  = safeNum(item?.shippingOptions?.[0]?.shippingCost?.value);
+  if (price == null) return null;
+  return ship != null ? price + ship : price;
+}
+
 function percentile(sorted, p) {
   if (!sorted.length) return NaN;
   const idx = Math.ceil((p/100)*sorted.length)-1;
@@ -133,11 +141,29 @@ function computeStats(prices) {
 function matchesCondition(item, conditionBand) {
   if (!conditionBand) return true;
   const s = norm(item?.condition || item?.conditionId || item?.conditionDescription || "");
-  // naive: if "new" present → NEW; else if "refurb" etc.
   if (/new/.test(s)) return conditionBand === "NEW" || conditionBand === "LIKE_NEW";
   if (/refurb/.test(s)) return conditionBand.includes("REFURB");
   if (/used|good|fair/.test(s)) return ["USED","GOOD","FAIR","LIKE_NEW"].includes(conditionBand);
   return true;
+}
+
+// --- NEW: tokenized base-model matcher (relaxed) ---
+function tokenize(s) {
+  return String(s || "")
+    .toLowerCase()
+    .replace(/[^a-z0-9\s.#+-]/g, " ")
+    .replace(/\s+/g, " ")
+    .trim()
+    .split(" ")
+    .filter(Boolean);
+}
+
+function isSameBaseModel(title, modelNorm) {
+  const titleNorm = normalizeModel(title);
+  if (!titleNorm || !modelNorm) return false;
+  const toksTitle = tokenize(titleNorm);
+  const toksModel = tokenize(modelNorm);
+  return toksModel.every(tok => toksTitle.includes(tok));
 }
 
 async function fetchEbayBrowse({ q, limit = 50, offset = 0, sort, forceCategory = true }) {
@@ -175,7 +201,7 @@ async function fetchEbayBrowse({ q, limit = 50, offset = 0, sort, forceCategory 
   return res.json();
 }
 
-async function collectListingsForModel(model, { samplePages = 3, sort = "newlylisted" } = {}) {
+async function collectListingsForModel(model, { samplePages = 4, sort = "newlylisted" } = {}) {
   const q = normalizeSearchQ(model);
   const limit = 50;
   const calls = [];
@@ -193,22 +219,16 @@ async function collectListingsForModel(model, { samplePages = 3, sort = "newlyli
   return items.filter(isLikelyPutter);
 }
 
-function toPrice(item) {
-  const v = safeNum(item?.price?.value);
-  if (v != null) return v;
-  const ship = safeNum(item?.shippingOptions?.[0]?.shippingCost?.value);
-  if (v != null && ship != null) return v + ship;
-  return v;
-}
-
 function buildBaseCohort(items, modelNorm, conditionBand) {
   const prices = [];
   for (const it of items) {
     const title = it?.title || "";
-    if (isVariantTitle(title)) continue;          // exclude limited/collectible
+    if (isVariantTitle(title)) continue;           // exclude limited/collectible
     if (!matchesCondition(it, conditionBand)) continue;
-    const modelFromTitle = normalizeModel(title);
-    if (modelFromTitle !== modelNorm) continue;   // strict base model match
+
+    // relaxed base model check (token subset)
+    if (!isSameBaseModel(title, modelNorm)) continue;
+
     const p = toPrice(it);
     if (Number.isFinite(p) && p > 0) prices.push(p);
   }
@@ -220,27 +240,24 @@ export default async function handler(req, res) {
   if (req.method !== "GET") return res.status(405).json({ ok: false, error: "Method Not Allowed" });
 
   const sp = req.query;
-  // Accept multiple ?model= params
   const models = []
     .concat(sp.model || [])
     .flat()
     .map(String)
     .filter(Boolean);
 
-  const conditionBand = (sp.condition || "").toString().toUpperCase(); // optional
-  const samplePages = Math.max(1, Math.min(5, Number(sp.samplePages || 3)));
+  const conditionBand = (sp.condition || "").toString().toUpperCase();
+  const samplePages = Math.max(1, Math.min(5, Number(sp.samplePages || 4))); // bumped default
 
   if (models.length === 0) {
     return res.status(400).json({ ok: false, error: "Missing ?model parameter" });
   }
 
   try {
-    // Batch: return a map model->stats when multiple models and no condition
     const isBatch = models.length > 1 && !conditionBand;
 
     if (isBatch) {
       const out = {};
-      // Fetch in parallel per model (limited pages to keep snappy)
       const jobs = models.map(async (m) => {
         const items = await collectListingsForModel(m, { samplePages, sort: "newlylisted" });
         const modelNorm = normalizeModel(m);
@@ -252,7 +269,6 @@ export default async function handler(req, res) {
       return res.status(200).json(out);
     }
 
-    // Single model path (optionally condition filtered)
     const model = models[0];
     const items = await collectListingsForModel(model, { samplePages, sort: "newlylisted" });
     const modelNorm = normalizeModel(model);
