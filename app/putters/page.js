@@ -1124,91 +1124,110 @@ useEffect(() => {
         <>
           <section className="mt-6 grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-2">
             {sortedGroups.map((g) => {
-              const isOpen = !!expanded[g.model];
+  // ✅ Canonical key used everywhere (matches /api/model-stats)
+  const mk = toCanonKey(g.modelKey || g.model || "");
 
-              const ordered =
-                sortBy === "best_price_desc"
-                  ? [...g.offers].sort((a,b) => (b.price ?? -Infinity) - (a.price ?? -Infinity))
-                  : [...g.offers].sort((a,b) => (a.price ?? Infinity) - (b.price ?? Infinity));
+  const isOpen = !!expanded[g.model];
 
-              const nums = ordered.map(o => o?.price).filter(x => typeof x === "number").sort((a,b)=>a-b);
-              const nNums = nums.length;
-              const med = nNums < 2 ? null : (nNums % 2 ? nums[Math.floor(nNums/2)] : (nums[nNums/2-1]+nums[nNums/2])/2);
-              const bestDelta = (typeof g.bestPrice === "number" && typeof med === "number" && med - g.bestPrice > 0)
-                ? { diff: med - g.bestPrice, pct: ((med - g.bestPrice)/med)*100 }
-                : null;
+  const ordered =
+    sortBy === "best_price_desc"
+      ? [...g.offers].sort((a, b) => (b.price ?? -Infinity) - (a.price ?? -Infinity))
+      : [...g.offers].sort((a, b) => (a.price ?? Infinity) - (b.price ?? Infinity));
 
-              const { domDex, domHead, domLen } = summarizeDexHead(g);
+  const nums = ordered
+    .map((o) => o?.price)
+    .filter((x) => typeof x === "number")
+    .sort((a, b) => a - b);
 
-              const showAll = !!showAllOffersByModel[g.model];
-              const list = isOpen ? (showAll ? ordered : ordered.slice(0, 10)) : [];
+  const nNums = nums.length;
+  const med =
+    nNums < 2
+      ? null
+      : nNums % 2
+      ? nums[Math.floor(nNums / 2)]
+      : (nums[nNums / 2 - 1] + nums[nNums / 2]) / 2;
 
-              const lows = lowsByModel[g.model];
-              const series = seriesByModel[g.model] || [];
-              const groupCond = selectedConditionBand(conds) || inferConditionBandFromOffers(g?.offers || []) || "";
-              const statsKey = getStatsKey(g.model, groupCond);
-              const stats = statsByModel[statsKey] || null;
+  const bestDelta =
+    typeof g.bestPrice === "number" && typeof med === "number" && med - g.bestPrice > 0
+      ? { diff: med - g.bestPrice, pct: ((med - g.bestPrice) / med) * 100 }
+      : null;
 
-              const bestUrl = ordered.length ? ordered[0]?.url : null;
+  const { domDex, domHead, domLen } = summarizeDexHead(g);
 
-              const fair = fairPriceBadge(g.bestPrice, stats);
+  const showAll = !!showAllOffersByModel[g.model];
+  const list = isOpen ? (showAll ? ordered : ordered.slice(0, 10)) : [];
 
-              return (
-                <article key={g.model} className="overflow-hidden rounded-xl border border-gray-200 bg-white shadow-sm hover:shadow-md transition-shadow">
-                  <div className="relative aspect-[4/3] w-full max-h-48 bg-gray-50">
-                    {g.image ? (
-                      // eslint-disable-next-line @next/next/no-img-element
-                      <img src={g.image} alt={g.model} className="h-full w-full object-contain" loading="lazy" />
-                    ) : (
-                      <div className="flex h-full w-full items-center justify-center text-xs text-gray-400">
-                        No image
-                      </div>
-                    )}
-                  </div>
+  const lows = lowsByModel[g.model];
+  const series = seriesByModel[g.model] || [];
 
-                  <div className="p-4">
-                    <div className="flex items-start justify-between gap-3">
-                      <div className="min-w-0">
-                        <h3 className="text-lg font-semibold leading-tight">{g.model}</h3>
-                        <p className="mt-1 text-xs text-gray-500">
-                          {g.count} offer{g.count === 1 ? "" : "s"} · {g.retailers.join(", ")}
-                        </p>
+  // ✅ Use the same canonical key for stats
+  const stats = statsByModel[mk] || null;
 
-                        {/* Dominant chips + BADGES */}
-                        <div className="mt-2 flex flex-wrap items-center gap-2">
-                          {domDex && (
-                            <span className="rounded-full bg-slate-100 px-2 py-0.5 text-[11px] font-medium text-slate-700">
-                              {domDex === "LEFT" ? "Left-hand" : "Right-hand"}
-                            </span>
-                          )}
-                          {domHead && (
-                            <span className="rounded-full bg-indigo-100 px-2 py-0.5 text-[11px] font-medium text-indigo-700">
-                              {domHead === "MALLET" ? "Mallet" : "Blade"}
-                            </span>
-                          )}
-                          {Number.isFinite(domLen) && (
-                            <span className="rounded-full bg-amber-100 px-2 py-0.5 text-[11px] font-medium text-amber-800">
-                              ~{domLen}&quot;
-                            </span>
-                          )}
+  const bestUrl = ordered.length ? ordered[0]?.url : null;
 
-                        {/* Group header price badge (use model stats) */}
-const mk = toCanonKey(g.modelKey || g.model || "");
-<SmartPriceBadge
-  total={_safeNum(g.bestPrice) + _shipCost(g)}  // or price={Number(g.bestPrice)}
-  stats={statsByModel[mk]}
-  className="ml-1"
-/>
+  // ✅ Pass the same stats to your fair-price helper
+  const fair = fairPriceBadge(g.bestPrice, stats);
 
+  return (
+    <article key={g.model} className="overflow-hidden rounded-xl border border-gray-200 bg-white shadow-sm hover:shadow-md transition-shadow">
+      <div className="relative aspect-[4/3] w-full max-h-48 bg-gray-50">
+        {g.image ? (
+          // eslint-disable-next-line @next/next/no-img-element
+          <img src={g.image} alt={g.model} className="h-full w-full object-contain" loading="lazy" />
+        ) : (
+          <div className="flex h-full w-full items-center justify-center text-xs text-gray-400">
+            No image
+          </div>
+        )}
+      </div>
 
+      <div className="p-4">
+        <div className="flex items-start justify-between gap-3">
+          <div className="min-w-0">
+            <h3 className="text-lg font-semibold leading-tight">{g.model}</h3>
+            <p className="mt-1 text-xs text-gray-500">
+              {g.count} offer{g.count === 1 ? "" : "s"} · {g.retailers.join(", ")}
+            </p>
 
-                         {/* Optional quick chip */}
-                          {fair && (
-                            <span className={`rounded-full px-2 py-0.5 text-[11px] font-medium text-white ${fair.tone === "emerald" ? "bg-emerald-600" : "bg-green-600"}`}>
-                              {fair.label}
-                            </span>
-                          )}
-                        </div>
+            {/* Dominant chips + Smart badge */}
+            <div className="mt-2 flex flex-wrap items-center gap-2">
+              {domDex && (
+                <span className="rounded-full bg-slate-100 px-2 py-0.5 text-[11px] font-medium text-slate-700">
+                  {domDex === "LEFT" ? "Left-hand" : "Right-hand"}
+                </span>
+              )}
+              {domHead && (
+                <span className="rounded-full bg-indigo-100 px-2 py-0.5 text-[11px] font-medium text-indigo-700">
+                  {domHead === "MALLET" ? "Mallet" : "Blade"}
+                </span>
+              )}
+              {Number.isFinite(domLen) && (
+                <span className="rounded-full bg-amber-100 px-2 py-0.5 text-[11px] font-medium text-amber-800">
+                  ~{domLen}&quot;
+                </span>
+              )}
+
+              {/* ✅ Group header SmartPriceBadge */}
+              <SmartPriceBadge
+                total={_safeNum(g.bestPrice) + _shipCost(g)}
+                stats={stats}
+                className="ml-1"
+              />
+
+              {/* Optional quick chip using the same stats */}
+              {fair && (
+                <span
+                  className={`rounded-full px-2 py-0.5 text-[11px] font-medium text-white ${
+                    fair.tone === "emerald" ? "bg-emerald-600" : "bg-green-600"
+                  }`}
+                >
+                  {fair.label}
+                </span>
+              )}
+            </div>
+          </div>
+          {/* …rest of card unchanged… */}
+
 
                         {/* Helper badge (variant-aware from first listing) */}
                         <div className="mt-2">
