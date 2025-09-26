@@ -1119,332 +1119,167 @@ useEffect(() => {
         </div>
       )}
 
-      {/* GROUPED VIEW */}
-      {q.trim() && !loading && !err && groupMode && (
-        <>
-          <section className="mt-6 grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-2">
-            {sortedGroups.map((g) => {
-  // ✅ Canonical key used everywhere (matches /api/model-stats)
-  const mk = toCanonKey(g.modelKey || g.model || "");
+   {/* GROUPED VIEW */}
+{q.trim() && !loading && !err && groupMode && (
+  <>
+    <section className="mt-6 grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-2">
+      {sortedGroups.map((g) => {
+        // Canonical key (matches /api/model-stats)
+        const mk = toCanonKey(g.modelKey || g.model || "");
+        const isOpen = !!expanded[g.model];
 
-  const isOpen = !!expanded[g.model];
+        // Sort offers by price (low→high unless best_price_desc)
+        const ordered = Array.isArray(g.offers)
+          ? [...g.offers].sort((a, b) =>
+              (sortBy === "best_price_desc"
+                ? (b.price ?? -Infinity) - (a.price ?? -Infinity)
+                : (a.price ??  Infinity) - (b.price ??  Infinity))
+            )
+          : [];
 
-  const ordered =
-    sortBy === "best_price_desc"
-      ? [...g.offers].sort((a, b) => (b.price ?? -Infinity) - (a.price ?? -Infinity))
-      : [...g.offers].sort((a, b) => (a.price ?? Infinity) - (b.price ?? Infinity));
+        const list = isOpen ? ordered.slice(0, 10) : [];
+        const bestUrl = ordered.length ? ordered[0]?.url : null;
 
-  const nums = ordered
-    .map((o) => o?.price)
-    .filter((x) => typeof x === "number")
-    .sort((a, b) => a - b);
+        // Stats for the model
+        const stats = statsByModel[mk] || null;
 
-  const nNums = nums.length;
-  const med =
-    nNums < 2
-      ? null
-      : nNums % 2
-      ? nums[Math.floor(nNums / 2)]
-      : (nums[nNums / 2 - 1] + nums[nNums / 2]) / 2;
-
-  const bestDelta =
-    typeof g.bestPrice === "number" && typeof med === "number" && med - g.bestPrice > 0
-      ? { diff: med - g.bestPrice, pct: ((med - g.bestPrice) / med) * 100 }
-      : null;
-
-  const { domDex, domHead, domLen } = summarizeDexHead(g);
-
-  const showAll = !!showAllOffersByModel[g.model];
-  const list = isOpen ? (showAll ? ordered : ordered.slice(0, 10)) : [];
-
-  const lows = lowsByModel[g.model];
-  const series = seriesByModel[g.model] || [];
-
-  // ✅ Use the same canonical key for stats
-  const stats = statsByModel[mk] || null;
-
-  const bestUrl = ordered.length ? ordered[0]?.url : null;
-
-  // ✅ Pass the same stats to your fair-price helper
-  const fair = fairPriceBadge(g.bestPrice, stats);
-
-  return (
-    <article key={g.model} className="overflow-hidden rounded-xl border border-gray-200 bg-white shadow-sm hover:shadow-md transition-shadow">
-      <div className="relative aspect-[4/3] w-full max-h-48 bg-gray-50">
-        {g.image ? (
-          // eslint-disable-next-line @next/next/no-img-element
-          <img src={g.image} alt={g.model} className="h-full w-full object-contain" loading="lazy" />
-        ) : (
-          <div className="flex h-full w-full items-center justify-center text-xs text-gray-400">
-            No image
-          </div>
-        )}
-      </div>
-
-      <div className="p-4">
-        <div className="flex items-start justify-between gap-3">
-          <div className="min-w-0">
-            <h3 className="text-lg font-semibold leading-tight">{g.model}</h3>
-            <p className="mt-1 text-xs text-gray-500">
-              {g.count} offer{g.count === 1 ? "" : "s"} · {g.retailers.join(", ")}
-            </p>
-
-            {/* Dominant chips + Smart badge */}
-            <div className="mt-2 flex flex-wrap items-center gap-2">
-              {domDex && (
-                <span className="rounded-full bg-slate-100 px-2 py-0.5 text-[11px] font-medium text-slate-700">
-                  {domDex === "LEFT" ? "Left-hand" : "Right-hand"}
-                </span>
-              )}
-              {domHead && (
-                <span className="rounded-full bg-indigo-100 px-2 py-0.5 text-[11px] font-medium text-indigo-700">
-                  {domHead === "MALLET" ? "Mallet" : "Blade"}
-                </span>
-              )}
-              {Number.isFinite(domLen) && (
-                <span className="rounded-full bg-amber-100 px-2 py-0.5 text-[11px] font-medium text-amber-800">
-                  ~{domLen}&quot;
-                </span>
-              )}
-
-              {/* ✅ Group header SmartPriceBadge */}
-              <SmartPriceBadge
-                total={_safeNum(g.bestPrice) + _shipCost(g)}
-                stats={stats}
-                className="ml-1"
-              />
-
-              {/* Optional quick chip using the same stats */}
-              {fair && (
-                <span
-                  className={`rounded-full px-2 py-0.5 text-[11px] font-medium text-white ${
-                    fair.tone === "emerald" ? "bg-emerald-600" : "bg-green-600"
-                  }`}
-                >
-                  {fair.label}
-                </span>
+        return (
+          <article
+            key={g.model}
+            className="overflow-hidden rounded-xl border border-gray-200 bg-white shadow-sm hover:shadow-md transition-shadow"
+          >
+            {/* Image */}
+            <div className="relative aspect-[4/3] w-full max-h-48 bg-gray-50">
+              {g.image ? (
+                // eslint-disable-next-line @next/next/no-img-element
+                <img
+                  src={g.image}
+                  alt={g.model}
+                  className="h-full w-full object-contain"
+                  loading="lazy"
+                />
+              ) : (
+                <div className="flex h-full w-full items-center justify-center text-xs text-gray-400">
+                  No image
+                </div>
               )}
             </div>
-          </div>
-          {/* …rest of card unchanged… */}
 
+            {/* Content */}
+            <div className="p-4">
+              <div className="flex items-start justify-between gap-3">
+                <div className="min-w-0">
+                  <h3 className="text-lg font-semibold leading-tight">{g.model}</h3>
+                  <p className="mt-1 text-xs text-gray-500">
+                    {g.count} offer{g.count === 1 ? "" : "s"} · {(g.retailers || []).join(", ")}
+                  </p>
 
-                        {/* Helper badge (variant-aware from first listing) */}
-                        <div className="mt-2">
-                          {(() => {
-                            const first = ordered?.[0];
-                            const condParam = selectedConditionBand(conds) || inferConditionBandFromOffers(g?.offers || []) || "";
-                            const modelKey = first ? getModelKey(first) : g.model;
-                            const variant  = first ? detectVariant(first?.title) : null;
-
-                            const variantKey = getStatsKey3(modelKey, variant, condParam);
-                            const baseKey    = getStatsKey(modelKey, condParam);
-                            const firstStats = statsByModel[variantKey] ?? statsByModel[baseKey] ?? stats;
-
-                            return (
-                              <SmartPriceBadge
-                                price={Number(g.bestPrice)}
-                                baseStats={firstStats}
-                                variantStats={null}
-                                title={first?.title || g.model}
-                                specs={first?.specs}
-                                brand={g?.brand}
-                                showHelper
-                              />
-                            );
-                          })()}
-                        </div>
-
-                        {/* Lows row (on expand) */}
-                        {isOpen && (
-                          <div className="mt-2 text-xs text-gray-600">
-                            <span className="mr-2">Lows:</span>
-                            <span className="mr-3">1d {formatPrice(Number(lows?.low1d))}</span>
-                            <span className="mr-3">7d {formatPrice(Number(lows?.low7d))}</span>
-                            <span>30d {formatPrice(Number(lows?.low30d))}</span>
-                          </div>
-                        )}
-                      </div>
-
-                      <div className="flex flex-col items-end gap-1">
-                        <div className="shrink-0 rounded-full bg-green-100 px-3 py-1 text-xs font-semibold text-green-700">
-                          Best: {formatPrice(g.bestPrice, g.bestCurrency)}
-                        </div>
-                        {bestDelta && (
-                          <div
-                            className="rounded-full bg-emerald-50 px-3 py-1 text-[11px] font-medium text-emerald-700"
-                            title={`Median ${formatPrice(med)} · Save ~${formatPrice(bestDelta.diff)} (~${bestDelta.pct.toFixed(0)}%)`}
-                          >
-                            Save {formatPrice(bestDelta.diff)} (~{bestDelta.pct.toFixed(0)}%)
-                          </div>
-                        )}
-
-                        {/* Copy best link */}
-                        <button
-                          disabled={!bestUrl}
-                          onClick={async () => {
-                            if (!bestUrl) return;
-                            await copyToClipboard(bestUrl);
-                            setCopiedFor(g.model);
-                            setTimeout(() => setCopiedFor((c) => (c === g.model ? "" : c)), 1500);
-                          }}
-                          className={`mt-1 rounded-md border px-2 py-1 text-[11px] ${bestUrl ? "hover:bg-gray-50" : "opacity-50 cursor-not-allowed"}`}
-                          title="Copy best listing link"
-                        >
-                          {copiedFor === g.model ? "Copied!" : "Copy best"}
-                        </button>
-                      </div>
-                    </div>
-
-                    {/* Sparkline */}
-                    {isOpen && Array.isArray(series) && series.length > 1 && (
-                      <div className="mt-3">
-                        <PriceSparkline data={series} height={70} showAverage showMedian className="h-[70px]" />
-                      </div>
-                    )}
-
-                    <div className="mt-4 flex gap-2">
-                      <button
-                        onClick={() => toggleExpand(g.model)}
-                        className="w-full rounded-md border border-gray-300 px-3 py-2 text-sm hover:bg-gray-50"
-                      >
-                        {isOpen ? "Hide offers" : `View offers (${g.count})`}
-                      </button>
-                      {isOpen && g.count > 10 && (
-                        <button
-                          onClick={() => toggleShowAllOffers(g.model)}
-                          className="rounded-md border border-gray-300 px-3 py-2 text-sm hover:bg-gray-50"
-                        >
-                          {showAll ? "Show top 10" : "Show all"}
-                        </button>
-                      )}
-                    </div>
-
-                    {/* Expanded listings */}
-                    {isOpen && (
-                      <ul className="mt-3 space-y-2">
-                        {list.map((o) => {
-                          const condParam =
-                            (o?.conditionBand || o?.condition || "").toUpperCase() ||
-                            selectedConditionBand(conds) ||
-                            "";
-
-                          // Variant-aware stats lookup
-                          const modelKey   = getModelKey(o);
-                          const variant    = detectVariant(o?.title);
-                          const variantKey = getStatsKey3(modelKey, variant, condParam);
-                          const baseKey    = getStatsKey(modelKey, condParam);
-                          const perOfferStats = statsByModel[variantKey] ?? statsByModel[baseKey] ?? stats;
-
-                          return (
-                            <li
-                              key={o.productId + o.url}
-                              className="flex items-center justify-between gap-3 rounded border border-gray-100 p-2"
-                            >
-                              {/* LEFT: logo + retailer/seller */}
-                              <div className="flex min-w-0 items-center gap-2">
-                                {retailerLogos[o.retailer] && (
-                                  // eslint-disable-next-line @next/next/no-img-element
-                                  <img
-                                    src={retailerLogos[o.retailer]}
-                                    alt={o.retailer}
-                                    className="h-4 w-12 object-contain"
-                                  />
-                                )}
-
-                                <div className="min-w-0">
-                                  <div className="truncate text-sm font-medium">
-                                    {o.retailer}
-                                    {o?.seller?.username && (
-                                      <span className="ml-2 text-xs text-gray-500">@{o.seller.username}</span>
-                                    )}
-                                    {typeof o?.seller?.feedbackPct === "number" && (
-                                      <span className="ml-2 rounded-full bg-gray-100 px-2 py-[2px] text-[11px] font-medium text-gray-700">
-                                        {o.seller.feedbackPct.toFixed(1)}%
-                                      </span>
-                                    )}
-                                  </div>
-
-                                  {/* Enhanced spec line */}
-                                  <div className="mt-0.5 truncate text-xs text-gray-500">
-                                    {(o.specs?.dexterity || "").toUpperCase() === "LEFT" ? "LH" :
-                                     (o.specs?.dexterity || "").toUpperCase() === "RIGHT" ? "RH" : "—"}
-                                    {" · "}
-                                    {(o.specs?.headType || "").toUpperCase() || "—"}
-                                    {" · "}
-                                    {Number.isFinite(Number(o?.specs?.length)) ? `${o.specs.length}"` : "—"}
-                                    {o?.specs?.shaft && <> · {String(o.specs.shaft).toLowerCase()}</>}
-                                    {o?.specs?.hosel && <> · {o.specs.hosel}</>}
-                                    {o?.specs?.face && <> · {o.specs.face}</>}
-                                    {o?.specs?.grip && <> · {o.specs.grip}</>}
-                                    {o?.specs?.hasHeadcover && <> · HC</>}
-                                    {o?.specs?.toeHang && <> · {o.specs.toeHang} toe</>}
-                                    {Number.isFinite(Number(o?.specs?.loft)) && <> · {o.specs.loft}° loft</>}
-                                    {Number.isFinite(Number(o?.specs?.lie)) && <> · {o.specs.lie}° lie</>}
-                                    {o.createdAt && (<> · listed {timeAgo(new Date(o.createdAt).getTime())}</>)}
-                                  </div>
-                                </div>
-                              </div>
-
-                              {/* RIGHT: badge + price + view */}
-                              <div className="flex items-center gap-3">
-                                <SmartPriceBadge
-                                  price={Number(o.price)}
-                                  baseStats={perOfferStats}
-                                  variantStats={null}
-                                  title={o.title}
-                                  specs={o.specs}
-                                  brand={g?.brand}
-                                />
-                                <span className="text-sm font-semibold">
-                                  {typeof o.price === "number" ? formatPrice(o.price, o.currency) : "—"}
-                                </span>
-                                <a
-                                  href={o.url}
-                                  target="_blank"
-                                  rel="noreferrer"
-                                  className="rounded-md border px-2 py-1 text-xs hover:bg-gray-50"
-                                >
-                                  View
-                                </a>
-                              </div>
-                            </li>
-                          );
-                        })}
-
-                        {!showAll && g.count > 10 && (
-                          <li className="px-2 pt-1 text-xs text-gray-500">Showing top 10 offers.</li>
-                        )}
-                      </ul>
-                    )}
+                  {/* Badge + best chip */}
+                  <div className="mt-2 flex flex-wrap items-center gap-2">
+                    <SmartPriceBadge
+                      total={_safeNum(g.bestPrice) + _shipCost(g)}
+                      stats={stats}
+                      className="ml-1"
+                    />
+                    <span className="rounded-full bg-green-100 px-3 py-1 text-xs font-semibold text-green-700">
+                      Best: {formatPrice(g.bestPrice, g.bestCurrency)}
+                    </span>
                   </div>
-                </article>
-              );
-            })}
-          </section>
+                </div>
 
-          {/* Pagination (grouped) */}
-          <div className="mt-8 flex items-center justify-between">
-            <button
-              disabled={!canPrev}
-              onClick={() => setPage((p) => Math.max(1, p - 1))}
-              className={`rounded-md border px-3 py-2 text-sm ${canPrev ? "hover:bg-gray-100" : "cursor-not-allowed opacity-50"}`}
-            >
-              ← Prev
-            </button>
-            <div className="text-sm text-gray-600">
-              Page <span className="font-medium">{page}</span> · {FIXED_PER_PAGE} groups per page
+                <div className="shrink-0">
+                  <button
+                    onClick={() => toggleExpand(g.model)}
+                    className="rounded-md border border-gray-300 px-3 py-2 text-sm hover:bg-gray-50"
+                  >
+                    {isOpen ? "Hide offers" : `View offers (${g.count})`}
+                  </button>
+                </div>
+              </div>
+
+              {/* Expanded offers */}
+              {isOpen && (
+                <ul className="mt-3 space-y-2">
+                  {list.map((o) => (
+                    <li
+                      key={o.productId + o.url}
+                      className="flex items-center justify-between gap-3 rounded border border-gray-100 p-2"
+                    >
+                      {/* LEFT: retailer/seller */}
+                      <div className="min-w-0">
+                        <div className="truncate text-sm font-medium">
+                          {o.retailer}
+                          {o?.seller?.username && (
+                            <span className="ml-2 text-xs text-gray-500">@{o.seller.username}</span>
+                          )}
+                        </div>
+                      </div>
+
+                      {/* RIGHT: badge + price + view */}
+                      <div className="flex items-center gap-3">
+                        <SmartPriceBadge total={_totalOf(o)} stats={stats} />
+                        <span className="text-sm font-semibold">
+                          {Number.isFinite(Number(o.price)) ? formatPrice(o.price, o.currency) : "—"}
+                        </span>
+                        <a
+                          href={o.url}
+                          target="_blank"
+                          rel="noreferrer"
+                          className="rounded-md border px-2 py-1 text-xs hover:bg-gray-50"
+                        >
+                          View
+                        </a>
+                      </div>
+                    </li>
+                  ))}
+                </ul>
+              )}
+
+              {/* Copy best link (optional) */}
+              {bestUrl && (
+                <div className="mt-3">
+                  <button
+                    onClick={async () => {
+                      await copyToClipboard(bestUrl);
+                      setCopiedFor(g.model);
+                      setTimeout(() => setCopiedFor((c) => (c === g.model ? "" : c)), 1500);
+                    }}
+                    className="rounded-md border px-2 py-1 text-[11px] hover:bg-gray-50"
+                    title="Copy best listing link"
+                  >
+                    {copiedFor === g.model ? "Copied!" : "Copy best"}
+                  </button>
+                </div>
+              )}
             </div>
-            <button
-              disabled={!canNext}
-              onClick={() => setPage((p) => p + 1)}
-              className={`rounded-md border px-3 py-2 text-sm ${canNext ? "hover:bg-gray-100" : "cursor-not-allowed opacity-50"}`}
-            >
-              Next →
-            </button>
-          </div>
-        </>
-      )}
+          </article>
+        );
+      })}
+    </section>
+
+    {/* Pagination (grouped) */}
+    <div className="mt-8 flex items-center justify-between">
+      <button
+        disabled={!canPrev}
+        onClick={() => setPage((p) => Math.max(1, p - 1))}
+        className={`rounded-md border px-3 py-2 text-sm ${canPrev ? "hover:bg-gray-100" : "cursor-not-allowed opacity-50"}`}
+      >
+        ← Prev
+      </button>
+      <div className="text-sm text-gray-600">
+        Page <span className="font-medium">{page}</span> · {FIXED_PER_PAGE} groups per page
+      </div>
+      <button
+        disabled={!canNext}
+        onClick={() => setPage((p) => p + 1)}
+        className={`rounded-md border px-3 py-2 text-sm ${canNext ? "hover:bg-gray-100" : "cursor-not-allowed opacity-50"}`}
+      >
+        Next →
+      </button>
+    </div>
+  </>
+)}
+
 
 {/* FLAT VIEW (now independent of "advanced") */}
 {q.trim() && !loading && !err && !groupMode && (
