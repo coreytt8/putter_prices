@@ -7,54 +7,6 @@ import SmartPriceBadge from "@/components/SmartPriceBadge";
 import { detectVariant } from "@/lib/variantMap";
 
 
-
-// Accepts various shapes from /api/model-stats and returns a map: { modelKey: stats }
-function toStatsMap(response) {
-  // Case A: { ok:true, modelKey:"::...", stats:{...} }
-  if (response && response.ok && response.modelKey && response.stats) {
-    return { [toCanonKey(response.modelKey)]: response.stats };
-  }
-
-  // Case B: array of { modelKey, stats } (or { model, stats })
-  if (Array.isArray(response)) {
-    const out = {};
-    for (const row of response) {
-      const key = toCanonKey(row?.modelKey || row?.model || "");
-      if (!key || !row?.stats) continue;
-      out[key] = row.stats;
-    }
-    return out;
-  }
-
-  // Case C: plain map { "::key": {p50,...}, ... }
-  if (response && typeof response === "object") {
-    // If it already looks like a map of stats (values have p50/p10)
-    const keys = Object.keys(response);
-    if (keys.some(k => response[k] && typeof response[k] === "object" && ("p50" in response[k] || "p10" in response[k] || "p90" in response[k]))) {
-      const out = {};
-      for (const k of keys) out[toCanonKey(k)] = response[k];
-      return out;
-    }
-    // Maybe nested: { ok:true, data:{ ... } }
-    if (response.data && typeof response.data === "object") {
-      return toStatsMap(response.data);
-    }
-  }
-
-  return {}; // fallback
-}
-
-
-
-
-
-function toCanonKey(k = "") {
-  const s = String(k).toLowerCase().replace(/\s+/g, " ").trim();
-  return s.startsWith("::") ? s : `::${s}`;
-}
-
-
-
 /* ============================
    PRICE HELPERS (Total-to-Door)
    ============================ */
@@ -588,10 +540,11 @@ useEffect(() => {
 useEffect(() => {
   if (!Array.isArray(groups) || groups.length === 0) return;
 
+  // collect unique modelKeys that we don't already have in cache
   const need = [];
   const seen = new Set();
   for (const g of groups) {
-    const mk = toCanonKey(g.modelKey || g.model || "");
+    const mk = g.modelKey || g.model || null;
     if (!mk || seen.has(mk)) continue;
     seen.add(mk);
     if (!statsByModel[mk]) need.push(mk);
@@ -599,20 +552,18 @@ useEffect(() => {
   if (need.length === 0) return;
 
   const ctrl = new AbortController();
-  const qs = need.map(m => `model=${encodeURIComponent(m)}`).join("&");
+  const qs = need.map(m => `model=${encodeURIComponent(m)}`).join("&"); // <-- matches /api/model-stats
 
   fetch(`/api/model-stats?${qs}`, { signal: ctrl.signal, cache: "no-store" })
     .then(r => (r.ok ? r.json() : Promise.reject()))
     .then(d => {
-      const map = toStatsMap(d);
-      if (Object.keys(map).length) {
-        setStatsByModel(prev => ({ ...prev, ...map }));
-      }
+      if (!d || typeof d !== "object") return;
+      setStatsByModel(prev => ({ ...prev, ...d }));
     })
-    .catch(() => {});
-  return () => ctrl.abort();
-}, [groups]); // don't include statsByModel to avoid loops
+    .catch(() => { /* ignore; badge will show "—" if missing */ });
 
+  return () => ctrl.abort();
+}, [groups]); // <-- END of Grouped stats effect
 
 
 
@@ -738,7 +689,7 @@ useEffect(() => {
   const need = [];
   const seen = new Set();
   for (const o of offers) {
-    const mk = toCanonKey(o.modelKey || o.model || "");
+    const mk = o.modelKey || o.model || null;
     if (!mk || seen.has(mk)) continue;
     seen.add(mk);
     if (!statsByModel[mk]) need.push(mk);
@@ -746,20 +697,18 @@ useEffect(() => {
   if (need.length === 0) return;
 
   const ctrl = new AbortController();
-  const qs = need.map(m => `model=${encodeURIComponent(m)}`).join("&");
+  const qs = need.map(m => `model=${encodeURIComponent(m)}`).join("&");  // ✅ define qs
 
   fetch(`/api/model-stats?${qs}`, { signal: ctrl.signal, cache: "no-store" })
     .then(r => (r.ok ? r.json() : Promise.reject()))
     .then(d => {
-      const map = toStatsMap(d);
-      if (Object.keys(map).length) {
-        setStatsByModel(prev => ({ ...prev, ...map }));
+      if (d && typeof d === "object") {
+        setStatsByModel(prev => ({ ...prev, ...d }));
       }
     })
     .catch(() => {});
   return () => ctrl.abort();
-}, [groupMode, offers]); // keep deps lean
-
+}, [groupMode, offers, loading, err]);
 
 
 
@@ -1119,317 +1068,435 @@ useEffect(() => {
         </div>
       )}
 
-   {/* GROUPED VIEW */}
-{q.trim() && !loading && !err && groupMode && (
-  <>
-    <section className="mt-6 grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-2">
-      {sortedGroups.map((g) => {
-        // Canonical key (matches /api/model-stats)
-        const mk = toCanonKey(g.modelKey || g.model || "");
-        const isOpen = !!expanded[g.model];
+      {/* GROUPED VIEW */}
+      {q.trim() && !loading && !err && groupMode && (
+        <>
+          <section className="mt-6 grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-2">
+            {sortedGroups.map((g) => {
+              const isOpen = !!expanded[g.model];
 
-        // Sort offers by price (low→high unless best_price_desc)
-        const ordered = Array.isArray(g.offers)
-          ? [...g.offers].sort((a, b) =>
-              (sortBy === "best_price_desc"
-                ? (b.price ?? -Infinity) - (a.price ?? -Infinity)
-                : (a.price ??  Infinity) - (b.price ??  Infinity))
-            )
-          : [];
+              const ordered =
+                sortBy === "best_price_desc"
+                  ? [...g.offers].sort((a,b) => (b.price ?? -Infinity) - (a.price ?? -Infinity))
+                  : [...g.offers].sort((a,b) => (a.price ?? Infinity) - (b.price ?? Infinity));
 
-        const list = isOpen ? ordered.slice(0, 10) : [];
-        const bestUrl = ordered.length ? ordered[0]?.url : null;
+              const nums = ordered.map(o => o?.price).filter(x => typeof x === "number").sort((a,b)=>a-b);
+              const nNums = nums.length;
+              const med = nNums < 2 ? null : (nNums % 2 ? nums[Math.floor(nNums/2)] : (nums[nNums/2-1]+nums[nNums/2])/2);
+              const bestDelta = (typeof g.bestPrice === "number" && typeof med === "number" && med - g.bestPrice > 0)
+                ? { diff: med - g.bestPrice, pct: ((med - g.bestPrice)/med)*100 }
+                : null;
 
-        // Stats for the model
-        const stats = statsByModel[mk] || null;
+              const { domDex, domHead, domLen } = summarizeDexHead(g);
 
-        return (
-          <article
-            key={g.model}
-            className="overflow-hidden rounded-xl border border-gray-200 bg-white shadow-sm hover:shadow-md transition-shadow"
-          >
-            {/* Image */}
-            <div className="relative aspect-[4/3] w-full max-h-48 bg-gray-50">
-              {g.image ? (
-                // eslint-disable-next-line @next/next/no-img-element
-                <img
-                  src={g.image}
-                  alt={g.model}
-                  className="h-full w-full object-contain"
-                  loading="lazy"
-                />
-              ) : (
-                <div className="flex h-full w-full items-center justify-center text-xs text-gray-400">
-                  No image
-                </div>
-              )}
-            </div>
+              const showAll = !!showAllOffersByModel[g.model];
+              const list = isOpen ? (showAll ? ordered : ordered.slice(0, 10)) : [];
 
-            {/* Content */}
-            <div className="p-4">
-              <div className="flex items-start justify-between gap-3">
-                <div className="min-w-0">
-                  <h3 className="text-lg font-semibold leading-tight">{g.model}</h3>
-                  <p className="mt-1 text-xs text-gray-500">
-                    {g.count} offer{g.count === 1 ? "" : "s"} · {(g.retailers || []).join(", ")}
-                  </p>
+              const lows = lowsByModel[g.model];
+              const series = seriesByModel[g.model] || [];
+              const groupCond = selectedConditionBand(conds) || inferConditionBandFromOffers(g?.offers || []) || "";
+              const statsKey = getStatsKey(g.model, groupCond);
+              const stats = statsByModel[statsKey] || null;
 
-                  {/* Badge + best chip */}
-                  <div className="mt-2 flex flex-wrap items-center gap-2">
-                    <SmartPriceBadge
-                      total={_safeNum(g.bestPrice) + _shipCost(g)}
-                      stats={stats}
-                      className="ml-1"
-                    />
-                    <span className="rounded-full bg-green-100 px-3 py-1 text-xs font-semibold text-green-700">
-                      Best: {formatPrice(g.bestPrice, g.bestCurrency)}
-                    </span>
+              const bestUrl = ordered.length ? ordered[0]?.url : null;
+
+              const fair = fairPriceBadge(g.bestPrice, stats);
+
+              return (
+                <article key={g.model} className="overflow-hidden rounded-xl border border-gray-200 bg-white shadow-sm hover:shadow-md transition-shadow">
+                  <div className="relative aspect-[4/3] w-full max-h-48 bg-gray-50">
+                    {g.image ? (
+                      // eslint-disable-next-line @next/next/no-img-element
+                      <img src={g.image} alt={g.model} className="h-full w-full object-contain" loading="lazy" />
+                    ) : (
+                      <div className="flex h-full w-full items-center justify-center text-xs text-gray-400">
+                        No image
+                      </div>
+                    )}
                   </div>
-                </div>
 
-                <div className="shrink-0">
-                  <button
-                    onClick={() => toggleExpand(g.model)}
-                    className="rounded-md border border-gray-300 px-3 py-2 text-sm hover:bg-gray-50"
-                  >
-                    {isOpen ? "Hide offers" : `View offers (${g.count})`}
-                  </button>
-                </div>
-              </div>
+                  <div className="p-4">
+                    <div className="flex items-start justify-between gap-3">
+                      <div className="min-w-0">
+                        <h3 className="text-lg font-semibold leading-tight">{g.model}</h3>
+                        <p className="mt-1 text-xs text-gray-500">
+                          {g.count} offer{g.count === 1 ? "" : "s"} · {g.retailers.join(", ")}
+                        </p>
 
-              {/* Expanded offers */}
-              {isOpen && (
-                <ul className="mt-3 space-y-2">
-                  {list.map((o) => {
-  // Condition band from offer or current filter
-  const condParam =
-    (o?.conditionBand || o?.condition || "").toUpperCase() ||
-    selectedConditionBand(conds) ||
-    "";
+                        {/* Dominant chips + BADGES */}
+                        <div className="mt-2 flex flex-wrap items-center gap-2">
+                          {domDex && (
+                            <span className="rounded-full bg-slate-100 px-2 py-0.5 text-[11px] font-medium text-slate-700">
+                              {domDex === "LEFT" ? "Left-hand" : "Right-hand"}
+                            </span>
+                          )}
+                          {domHead && (
+                            <span className="rounded-full bg-indigo-100 px-2 py-0.5 text-[11px] font-medium text-indigo-700">
+                              {domHead === "MALLET" ? "Mallet" : "Blade"}
+                            </span>
+                          )}
+                          {Number.isFinite(domLen) && (
+                            <span className="rounded-full bg-amber-100 px-2 py-0.5 text-[11px] font-medium text-amber-800">
+                              ~{domLen}&quot;
+                            </span>
+                          )}
 
-  // Build stats lookup keys
-  const modelKey   = getModelKey(o);
-  const canonKey   = toCanonKey(modelKey || g.model || "");
-  const variant    = detectVariant(o?.title);
-  const variantKey = getStatsKey3(modelKey, variant, condParam);
-  const baseKey    = getStatsKey(modelKey, condParam);
+                        {/* Group header price badge (use model stats) */}
+<SmartPriceBadge
+  // If you track shipping at the group level, include it:
+  total={_safeNum(g.bestPrice) + _shipCost(g)}
+  // Or fall back to price-only if you prefer:
+  // price={Number(g.bestPrice)}
 
-  // Prefer canonical (::key) → variantKey → baseKey → group stats
-  const perOfferStats =
-    statsByModel[canonKey] ??
-    statsByModel[variantKey] ??
-    statsByModel[baseKey] ??
-    (statsByModel[toCanonKey(g.modelKey || g.model || "")] || null);
-
-  const total = _totalOf(o);
-
-  return (
-    <li
-      key={o.productId + o.url}
-      className="flex items-center justify-between gap-3 rounded border border-gray-100 p-2"
-    >
-      {/* LEFT: retailer + seller */}
-      <div className="min-w-0">
-        <div className="truncate text-sm font-medium">
-          {o.retailer}
-          {o?.seller?.username && (
-            <span className="ml-2 text-xs text-gray-600">@{o.seller.username}</span>
-          )}
-          {typeof o?.seller?.feedbackPct === "number" && (
-            <span className="ml-2 rounded-full bg-gray-100 px-2 py-[2px] text-[11px] font-medium text-gray-700">
-              {o.seller.feedbackPct.toFixed(1)}%
-            </span>
-          )}
-        </div>
-
-        {/* quick spec line */}
-        <div className="mt-0.5 truncate text-xs text-gray-500">
-          {(o.specs?.dexterity || "").toUpperCase() || "—"} · {(o.specs?.headType || "").toUpperCase() || "—"} ·
-          {Number.isFinite(Number(o?.specs?.length)) ? ` ${o.specs.length}"` : " —"}
-        </div>
-      </div>
-
-      {/* RIGHT: badge + price + link */}
-      <div className="flex items-center gap-3">
-        <SmartPriceBadge
-          total={total}
-          stats={perOfferStats}
-        />
-        <div className="text-right">
-          <div className="text-sm font-semibold">
-            {formatPrice(total, o.currency)}
-          </div>
-          <div className="text-[11px] text-gray-500">
-            ({formatPrice(o.price, o.currency)} + {formatPrice(_shipCost(o), o.currency)} ship)
-          </div>
-        </div>
-        <a
-          href={o.url}
-          target="_blank"
-          rel="noreferrer"
-          className="rounded-md border px-2 py-1 text-xs hover:bg-gray-50"
-        >
-          View
-        </a>
-      </div>
-    </li>
-  );
-})}
-
-              {/* Copy best link (optional) */}
-              {bestUrl && (
-                <div className="mt-3">
-                  <button
-                    onClick={async () => {
-                      await copyToClipboard(bestUrl);
-                      setCopiedFor(g.model);
-                      setTimeout(() => setCopiedFor((c) => (c === g.model ? "" : c)), 1500);
-                    }}
-                    className="rounded-md border px-2 py-1 text-[11px] hover:bg-gray-50"
-                    title="Copy best listing link"
-                  >
-                    {copiedFor === g.model ? "Copied!" : "Copy best"}
-                  </button>
-                </div>
-              )}
-            </div>
-          </article>
-        );
-      })}
-    </section>
-
-    {/* Pagination (grouped) */}
-    <div className="mt-8 flex items-center justify-between">
-      <button
-        disabled={!canPrev}
-        onClick={() => setPage((p) => Math.max(1, p - 1))}
-        className={`rounded-md border px-3 py-2 text-sm ${canPrev ? "hover:bg-gray-100" : "cursor-not-allowed opacity-50"}`}
-      >
-        ← Prev
-      </button>
-      <div className="text-sm text-gray-600">
-        Page <span className="font-medium">{page}</span> · {FIXED_PER_PAGE} groups per page
-      </div>
-      <button
-        disabled={!canNext}
-        onClick={() => setPage((p) => p + 1)}
-        className={`rounded-md border px-3 py-2 text-sm ${canNext ? "hover:bg-gray-100" : "cursor-not-allowed opacity-50"}`}
-      >
-        Next →
-      </button>
-    </div>
-  </>
-)}
+  stats={statsByModel[g.modelKey || g.model]}  // <-- stats from the effect above
+  className="ml-1"
+/>
 
 
-{/* FLAT VIEW (now independent of "advanced") */}
-{q.trim() && !loading && !err && !groupMode && (
-  <section className="mt-6 grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
-    {offers.map((o) => {
-      // --- NEW flat badge code ---
-      const canonKey = toCanonKey(o.modelKey || o.model || "");
-      const stats    = statsByModel[canonKey] || null;
 
-      return (
-        <article key={o.productId + o.url} className="overflow-hidden rounded-xl border border-gray-200 bg-white shadow-sm hover:shadow-md transition-shadow">
-          <div className="relative aspect-[4/3] w-full bg-gray-50">
-            {o.image ? (
-              // eslint-disable-next-line @next/next/no-img-element
-              <img src={o.image} alt={o.title} className="h-full w-full object-contain" loading="lazy" />
-            ) : (
-              <div className="flex h-full w-full items-center justify-center text-xs text-gray-400">No image</div>
-            )}
-          </div>
+                          {/* Optional quick chip */}
+                          {fair && (
+                            <span className={`rounded-full px-2 py-0.5 text-[11px] font-medium text-white ${fair.tone === "emerald" ? "bg-emerald-600" : "bg-green-600"}`}>
+                              {fair.label}
+                            </span>
+                          )}
+                        </div>
 
-          <div className="p-4">
-            <h3 className="line-clamp-2 text-sm font-semibold">{o.title}</h3>
+                        {/* Helper badge (variant-aware from first listing) */}
+                        <div className="mt-2">
+                          {(() => {
+                            const first = ordered?.[0];
+                            const condParam = selectedConditionBand(conds) || inferConditionBandFromOffers(g?.offers || []) || "";
+                            const modelKey = first ? getModelKey(first) : g.model;
+                            const variant  = first ? detectVariant(first?.title) : null;
 
-            <p className="mt-1 text-xs text-gray-500">
-              {o?.seller?.username && <>@{o.seller.username} · </>}
-              {typeof o?.seller?.feedbackPct === "number" && <>{o.seller.feedbackPct.toFixed(1)}% · </>}
-              {(o.specs?.dexterity || "").toUpperCase() || "—"} · {(o.specs?.headType || "").toUpperCase() || "—"} ·
-              {Number.isFinite(Number(o?.specs?.length)) ? `${o.specs.length}"` : "—"}
-              {o?.specs?.shaft && <> · {String(o.specs.shaft).toLowerCase()}</>}
-              {o?.specs?.hosel && <> · {o.specs.hosel}</>}
-              {o?.specs?.face && <> · {o.specs.face}</>}
-              {o?.specs?.grip && <> · {o.specs.grip}</>}
-              {o?.specs?.hasHeadcover && <> · HC</>}
-              {o?.specs?.toeHang && <> · {o.specs.toeHang} toe</>}
-              {Number.isFinite(Number(o?.specs?.loft)) && <> · {o.specs.loft}° loft</>}
-              {Number.isFinite(Number(o?.specs?.lie)) && <> · {o.specs.lie}° lie</>}
-              {o.createdAt && (<> · listed {timeAgo(new Date(o.createdAt).getTime())}</>)}
-            </p>
+                            const variantKey = getStatsKey3(modelKey, variant, condParam);
+                            const baseKey    = getStatsKey(modelKey, condParam);
+                            const firstStats = statsByModel[variantKey] ?? statsByModel[baseKey] ?? stats;
 
-            <div className="mt-3 flex items-center justify-between">
-              <div className="flex items-center gap-2">
-                <SmartPriceBadge
-                  total={_totalOf(o)}
-                  stats={stats}
-                  className="mr-2"
-                />
+                            return (
+                              <SmartPriceBadge
+                                price={Number(g.bestPrice)}
+                                baseStats={firstStats}
+                                variantStats={null}
+                                title={first?.title || g.model}
+                                specs={first?.specs}
+                                brand={g?.brand}
+                                showHelper
+                              />
+                            );
+                          })()}
+                        </div>
 
-                <span className="text-base font-semibold">
-                  {formatPrice(_totalOf(o), o.currency)}
-                </span>
-                <span className="ml-2 text-[11px] text-gray-500">
-                  ({formatPrice(o.price, o.currency)} + {formatPrice(_shipCost(o), o.currency)} ship)
-                </span>
+                        {/* Lows row (on expand) */}
+                        {isOpen && (
+                          <div className="mt-2 text-xs text-gray-600">
+                            <span className="mr-2">Lows:</span>
+                            <span className="mr-3">1d {formatPrice(Number(lows?.low1d))}</span>
+                            <span className="mr-3">7d {formatPrice(Number(lows?.low7d))}</span>
+                            <span>30d {formatPrice(Number(lows?.low30d))}</span>
+                          </div>
+                        )}
+                      </div>
 
-                {/* Optional Save $ chip if below median */}
-                {(() => {
-                  const p50 = stats?.p50;
-                  const total = _totalOf(o);
-                  if (Number.isFinite(Number(p50)) && Number.isFinite(total) && total < Number(p50)) {
-                    const save = Number(p50) - total;
-                    return (
-                      <span className="ml-2 rounded-full bg-green-50 px-2 py-[2px] text-[11px] font-medium text-green-700">
-                        Save {formatPrice(save, o.currency)}
-                      </span>
-                    );
-                  }
-                  return null;
-                })()}
-              </div>
-            </div>
+                      <div className="flex flex-col items-end gap-1">
+                        <div className="shrink-0 rounded-full bg-green-100 px-3 py-1 text-xs font-semibold text-green-700">
+                          Best: {formatPrice(g.bestPrice, g.bestCurrency)}
+                        </div>
+                        {bestDelta && (
+                          <div
+                            className="rounded-full bg-emerald-50 px-3 py-1 text-[11px] font-medium text-emerald-700"
+                            title={`Median ${formatPrice(med)} · Save ~${formatPrice(bestDelta.diff)} (~${bestDelta.pct.toFixed(0)}%)`}
+                          >
+                            Save {formatPrice(bestDelta.diff)} (~{bestDelta.pct.toFixed(0)}%)
+                          </div>
+                        )}
 
-            {/* Affiliate/outbound link */}
-            <a
-              href={o.url}
-              target="_blank"
-              rel="noopener noreferrer"
-              className="mt-2 block text-sm font-medium text-blue-600 hover:underline"
+                        {/* Copy best link */}
+                        <button
+                          disabled={!bestUrl}
+                          onClick={async () => {
+                            if (!bestUrl) return;
+                            await copyToClipboard(bestUrl);
+                            setCopiedFor(g.model);
+                            setTimeout(() => setCopiedFor((c) => (c === g.model ? "" : c)), 1500);
+                          }}
+                          className={`mt-1 rounded-md border px-2 py-1 text-[11px] ${bestUrl ? "hover:bg-gray-50" : "opacity-50 cursor-not-allowed"}`}
+                          title="Copy best listing link"
+                        >
+                          {copiedFor === g.model ? "Copied!" : "Copy best"}
+                        </button>
+                      </div>
+                    </div>
+
+                    {/* Sparkline */}
+                    {isOpen && Array.isArray(series) && series.length > 1 && (
+                      <div className="mt-3">
+                        <PriceSparkline data={series} height={70} showAverage showMedian className="h-[70px]" />
+                      </div>
+                    )}
+
+                    <div className="mt-4 flex gap-2">
+                      <button
+                        onClick={() => toggleExpand(g.model)}
+                        className="w-full rounded-md border border-gray-300 px-3 py-2 text-sm hover:bg-gray-50"
+                      >
+                        {isOpen ? "Hide offers" : `View offers (${g.count})`}
+                      </button>
+                      {isOpen && g.count > 10 && (
+                        <button
+                          onClick={() => toggleShowAllOffers(g.model)}
+                          className="rounded-md border border-gray-300 px-3 py-2 text-sm hover:bg-gray-50"
+                        >
+                          {showAll ? "Show top 10" : "Show all"}
+                        </button>
+                      )}
+                    </div>
+
+                    {/* Expanded listings */}
+                    {isOpen && (
+                      <ul className="mt-3 space-y-2">
+                        {list.map((o) => {
+                          const condParam =
+                            (o?.conditionBand || o?.condition || "").toUpperCase() ||
+                            selectedConditionBand(conds) ||
+                            "";
+
+                          // Variant-aware stats lookup
+                          const modelKey   = getModelKey(o);
+                          const variant    = detectVariant(o?.title);
+                          const variantKey = getStatsKey3(modelKey, variant, condParam);
+                          const baseKey    = getStatsKey(modelKey, condParam);
+                          const perOfferStats = statsByModel[variantKey] ?? statsByModel[baseKey] ?? stats;
+
+                          return (
+                            <li
+                              key={o.productId + o.url}
+                              className="flex items-center justify-between gap-3 rounded border border-gray-100 p-2"
+                            >
+                              {/* LEFT: logo + retailer/seller */}
+                              <div className="flex min-w-0 items-center gap-2">
+                                {retailerLogos[o.retailer] && (
+                                  // eslint-disable-next-line @next/next/no-img-element
+                                  <img
+                                    src={retailerLogos[o.retailer]}
+                                    alt={o.retailer}
+                                    className="h-4 w-12 object-contain"
+                                  />
+                                )}
+
+                                <div className="min-w-0">
+                                  <div className="truncate text-sm font-medium">
+                                    {o.retailer}
+                                    {o?.seller?.username && (
+                                      <span className="ml-2 text-xs text-gray-500">@{o.seller.username}</span>
+                                    )}
+                                    {typeof o?.seller?.feedbackPct === "number" && (
+                                      <span className="ml-2 rounded-full bg-gray-100 px-2 py-[2px] text-[11px] font-medium text-gray-700">
+                                        {o.seller.feedbackPct.toFixed(1)}%
+                                      </span>
+                                    )}
+                                  </div>
+
+                                  {/* Enhanced spec line */}
+                                  <div className="mt-0.5 truncate text-xs text-gray-500">
+                                    {(o.specs?.dexterity || "").toUpperCase() === "LEFT" ? "LH" :
+                                     (o.specs?.dexterity || "").toUpperCase() === "RIGHT" ? "RH" : "—"}
+                                    {" · "}
+                                    {(o.specs?.headType || "").toUpperCase() || "—"}
+                                    {" · "}
+                                    {Number.isFinite(Number(o?.specs?.length)) ? `${o.specs.length}"` : "—"}
+                                    {o?.specs?.shaft && <> · {String(o.specs.shaft).toLowerCase()}</>}
+                                    {o?.specs?.hosel && <> · {o.specs.hosel}</>}
+                                    {o?.specs?.face && <> · {o.specs.face}</>}
+                                    {o?.specs?.grip && <> · {o.specs.grip}</>}
+                                    {o?.specs?.hasHeadcover && <> · HC</>}
+                                    {o?.specs?.toeHang && <> · {o.specs.toeHang} toe</>}
+                                    {Number.isFinite(Number(o?.specs?.loft)) && <> · {o.specs.loft}° loft</>}
+                                    {Number.isFinite(Number(o?.specs?.lie)) && <> · {o.specs.lie}° lie</>}
+                                    {o.createdAt && (<> · listed {timeAgo(new Date(o.createdAt).getTime())}</>)}
+                                  </div>
+                                </div>
+                              </div>
+
+                              {/* RIGHT: badge + price + view */}
+                              <div className="flex items-center gap-3">
+                                <SmartPriceBadge
+                                  price={Number(o.price)}
+                                  baseStats={perOfferStats}
+                                  variantStats={null}
+                                  title={o.title}
+                                  specs={o.specs}
+                                  brand={g?.brand}
+                                />
+                                <span className="text-sm font-semibold">
+                                  {typeof o.price === "number" ? formatPrice(o.price, o.currency) : "—"}
+                                </span>
+                                <a
+                                  href={o.url}
+                                  target="_blank"
+                                  rel="noreferrer"
+                                  className="rounded-md border px-2 py-1 text-xs hover:bg-gray-50"
+                                >
+                                  View
+                                </a>
+                              </div>
+                            </li>
+                          );
+                        })}
+
+                        {!showAll && g.count > 10 && (
+                          <li className="px-2 pt-1 text-xs text-gray-500">Showing top 10 offers.</li>
+                        )}
+                      </ul>
+                    )}
+                  </div>
+                </article>
+              );
+            })}
+          </section>
+
+          {/* Pagination (grouped) */}
+          <div className="mt-8 flex items-center justify-between">
+            <button
+              disabled={!canPrev}
+              onClick={() => setPage((p) => Math.max(1, p - 1))}
+              className={`rounded-md border px-3 py-2 text-sm ${canPrev ? "hover:bg-gray-100" : "cursor-not-allowed opacity-50"}`}
             >
-              View Listing
-            </a>
-          </div> {/* end p-4 */}
-        </article>
-      );
-    })}
+              ← Prev
+            </button>
+            <div className="text-sm text-gray-600">
+              Page <span className="font-medium">{page}</span> · {FIXED_PER_PAGE} groups per page
+            </div>
+            <button
+              disabled={!canNext}
+              onClick={() => setPage((p) => p + 1)}
+              className={`rounded-md border px-3 py-2 text-sm ${canNext ? "hover:bg-gray-100" : "cursor-not-allowed opacity-50"}`}
+            >
+              Next →
+            </button>
+          </div>
+        </>
+      )}
 
-    {/* Pagination (flat) — outside the map, still inside <section> */}
-    <div className="col-span-full mt-8 flex items-center justify-between">
-      <button
-        disabled={!hasPrev || page <= 1 || loading}
-        onClick={() => setPage((p) => Math.max(1, p - 1))}
-        className={`rounded-md border px-3 py-2 text-sm ${hasPrev && page > 1 && !loading ? "hover:bg-gray-100" : "cursor-not-allowed opacity-50"}`}
-      >
-        ← Prev
-      </button>
-      <div className="text-sm text-gray-600">
-        Page <span className="font-medium">{page}</span> · {FIXED_PER_PAGE} listings per page
-      </div>
-      <button
-        disabled={!hasNext || loading}
-        onClick={() => setPage((p) => p + 1)}
-        className={`rounded-md border px-3 py-2 text-sm ${hasNext && !loading ? "hover:bg-gray-100" : "cursor-not-allowed opacity-50"}`}
-      >
-        Next →
-      </button>
-    </div>
-     </section>
-)}
-</main>
-);
+      {/* FLAT VIEW (now independent of "advanced") */}
+      {q.trim() && !loading && !err && !groupMode && (
+        <>
+          <section className="mt-6 grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
+            {offers.map((o) => {
+              const modelKey = getModelKey(o);
+              const condParam =
+                (o?.conditionBand || o?.condition || "").toUpperCase() ||
+                selectedConditionBand(conds) ||
+                "";
+              const variant    = detectVariant(o?.title);
+              const variantKey = getStatsKey3(modelKey, variant, condParam);
+              const baseKey    = getStatsKey(modelKey, condParam);
+              const stats      = statsByModel[variantKey] ?? statsByModel[baseKey] ?? null;
+
+              return (
+                <article key={o.productId + o.url} className="overflow-hidden rounded-xl border border-gray-200 bg-white shadow-sm hover:shadow-md transition-shadow">
+                  <div className="relative aspect-[4/3] w-full bg-gray-50">
+                    {o.image ? (
+                      // eslint-disable-next-line @next/next/no-img-element
+                      <img src={o.image} alt={o.title} className="h-full w-full object-contain" loading="lazy" />
+                    ) : (
+                      <div className="flex h-full w-full items-center justify-center text-xs text-gray-400">No image</div>
+                    )}
+                  </div>
+                  <div className="p-4">
+                    <h3 className="line-clamp-2 text-sm font-semibold">{o.title}</h3>
+                    <p className="mt-1 text-xs text-gray-500">
+                      {o?.seller?.username && <>@{o.seller.username} · </>}
+                      {typeof o?.seller?.feedbackPct === "number" && <>{o.seller.feedbackPct.toFixed(1)}% · </>}
+                      {(o.specs?.dexterity || "").toUpperCase() || "—"} · {(o.specs?.headType || "").toUpperCase() || "—"} ·
+                      {Number.isFinite(Number(o?.specs?.length)) ? `${o.specs.length}"` : "—"}
+                      {o?.specs?.shaft && <> · {String(o.specs.shaft).toLowerCase()}</>}
+                      {o?.specs?.hosel && <> · {o.specs.hosel}</>}
+                      {o?.specs?.face && <> · {o.specs.face}</>}
+                      {o?.specs?.grip && <> · {o.specs.grip}</>}
+                      {o?.specs?.hasHeadcover && <> · HC</>}
+                      {o?.specs?.toeHang && <> · {o.specs.toeHang} toe</>}
+                      {Number.isFinite(Number(o?.specs?.loft)) && <> · {o.specs.loft}° loft</>}
+                      {Number.isFinite(Number(o?.specs?.lie)) && <> · {o.specs.lie}° lie</>}
+                      {o.createdAt && (<> · listed {timeAgo(new Date(o.createdAt).getTime())}</>)}
+                    </p>
+
+                    <div className="mt-3 flex items-center justify-between">
+                      <div className="flex items-center gap-2">
+                        <SmartPriceBadge
+                          price={Number(o.price)}
+                          baseStats={stats}
+                          variantStats={null}
+                          title={o.title}
+                          specs={o.specs}
+                          brand={o.brand || ""}
+                          className="mr-2"
+                        />
+
+                        <span className="text-base font-semibold">{formatPrice(_totalOf(o), o.currency)}</span>
+<span className="ml-2 text-[11px] text-gray-500">
+  ({formatPrice(o.price, o.currency)} + {formatPrice(_shipCost(o), o.currency)} ship)
+</span>
+
+
+                        {/* Optional Save $ chip if below median */}
+                        {(() => {
+                          const p50 = stats?.p50;
+                          if (Number.isFinite(Number(p50)) && typeof o.price === "number" && o.price < Number(p50)) {
+                            const save = Number(p50) - o.price;
+                            const pct = Math.round((save / Number(p50)) * 100);
+                            return (
+                              <span
+                                className="rounded-full bg-emerald-50 px-2 py-0.5 text-[11px] font-medium text-emerald-700"
+                                title={`Median ${formatPrice(Number(p50))} · Save ~${formatPrice(save)} (~${pct}%)`}
+                              >
+                                Save {formatPrice(save)}
+                              </span>
+                            );
+                          }
+                          return null;
+                        })()}
+                      </div>
+
+                      {/* Affiliate/outbound link UNCHANGED */}
+                      <a
+                        href={o.url}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="inline-flex items-center rounded-md border px-3 py-1.5 text-sm hover:bg-gray-50"
+                      >
+                        View
+                      </a>
+                    </div>
+                  </div>
+                </article>
+              );
+            })}
+          </section>
+
+          {/* Pagination (flat) */}
+          <div className="mt-8 flex items-center justify-between">
+            <button
+              disabled={!hasPrev || page <= 1 || loading}
+              onClick={() => setPage((p) => Math.max(1, p - 1))}
+              className={`rounded-md border px-3 py-2 text-sm ${hasPrev && page > 1 && !loading ? "hover:bg-gray-100" : "cursor-not-allowed opacity-50"}`}
+            >
+              ← Prev
+            </button>
+            <div className="text-sm text-gray-600">
+              Page <span className="font-medium">{page}</span> · {FIXED_PER_PAGE} listings per page
+            </div>
+            <button
+              disabled={!hasNext || loading}
+              onClick={() => setPage((p) => p + 1)}
+              className={`rounded-md border px-3 py-2 text-sm ${hasNext && !loading ? "hover:bg-gray-100" : "cursor-not-allowed opacity-50"}`}
+            >
+              Next →
+            </button>
+          </div>
+        </>
+      )}
+    </main>
+  );
 }
-
-
