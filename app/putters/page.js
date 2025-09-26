@@ -395,7 +395,7 @@ export default function PuttersPage() {
     setPage(1);
   }, [q, onlyComplete, minPrice, maxPrice, conds, buying, sortBy, groupMode, broaden, dex, head, lengths]);
 
- // Fetch results (grouped vs flat) — clean & balanced
+// Fetch results (grouped vs flat) — clean & balanced
 useEffect(() => {
   if (!q.trim()) {
     setGroups([]); setOffers([]);
@@ -527,11 +527,44 @@ useEffect(() => {
     } finally {
       if (!ignore) setLoading(false);
     }
-  } // <-- closes run()
+  } // end run()
 
   const t = setTimeout(run, 150);
   return () => { ignore = true; clearTimeout(t); ctrl.abort(); };
-}, [apiUrl, groupMode, sortBy, q, page]);  // <-- closes useEffect
+}, [apiUrl, groupMode, sortBy, q, page]); // <-- END of Fetch results effect
+
+
+/* ============================
+   GROUPED VIEW: prefetch stats per model
+   ============================ */
+useEffect(() => {
+  if (!Array.isArray(groups) || groups.length === 0) return;
+
+  // collect unique modelKeys that we don't already have in cache
+  const need = [];
+  const seen = new Set();
+  for (const g of groups) {
+    const mk = g.modelKey || g.model || null;
+    if (!mk || seen.has(mk)) continue;
+    seen.add(mk);
+    if (!statsByModel[mk]) need.push(mk);
+  }
+  if (need.length === 0) return;
+
+  const ctrl = new AbortController();
+  const qs = need.map(m => `model=${encodeURIComponent(m)}`).join("&"); // <-- matches /api/model-stats
+
+  fetch(`/api/model-stats?${qs}`, { signal: ctrl.signal, cache: "no-store" })
+    .then(r => (r.ok ? r.json() : Promise.reject()))
+    .then(d => {
+      if (!d || typeof d !== "object") return;
+      setStatsByModel(prev => ({ ...prev, ...d }));
+    })
+    .catch(() => { /* ignore; badge will show "—" if missing */ });
+
+  return () => ctrl.abort();
+}, [groups]); // <-- END of Grouped stats effect
+
 
 useEffect(() => {
   if (!Array.isArray(groups) || groups.length === 0) return;
