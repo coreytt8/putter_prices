@@ -7,6 +7,54 @@ import SmartPriceBadge from "@/components/SmartPriceBadge";
 import { detectVariant } from "@/lib/variantMap";
 
 
+
+// Accepts various shapes from /api/model-stats and returns a map: { modelKey: stats }
+function toStatsMap(response) {
+  // Case A: { ok:true, modelKey:"::...", stats:{...} }
+  if (response && response.ok && response.modelKey && response.stats) {
+    return { [toCanonKey(response.modelKey)]: response.stats };
+  }
+
+  // Case B: array of { modelKey, stats } (or { model, stats })
+  if (Array.isArray(response)) {
+    const out = {};
+    for (const row of response) {
+      const key = toCanonKey(row?.modelKey || row?.model || "");
+      if (!key || !row?.stats) continue;
+      out[key] = row.stats;
+    }
+    return out;
+  }
+
+  // Case C: plain map { "::key": {p50,...}, ... }
+  if (response && typeof response === "object") {
+    // If it already looks like a map of stats (values have p50/p10)
+    const keys = Object.keys(response);
+    if (keys.some(k => response[k] && typeof response[k] === "object" && ("p50" in response[k] || "p10" in response[k] || "p90" in response[k]))) {
+      const out = {};
+      for (const k of keys) out[toCanonKey(k)] = response[k];
+      return out;
+    }
+    // Maybe nested: { ok:true, data:{ ... } }
+    if (response.data && typeof response.data === "object") {
+      return toStatsMap(response.data);
+    }
+  }
+
+  return {}; // fallback
+}
+
+
+
+
+
+function toCanonKey(k = "") {
+  const s = String(k).toLowerCase().replace(/\s+/g, " ").trim();
+  return s.startsWith("::") ? s : `::${s}`;
+}
+
+
+
 /* ============================
    PRICE HELPERS (Total-to-Door)
    ============================ */
@@ -540,11 +588,10 @@ useEffect(() => {
 useEffect(() => {
   if (!Array.isArray(groups) || groups.length === 0) return;
 
-  // collect unique modelKeys that we don't already have in cache
   const need = [];
   const seen = new Set();
   for (const g of groups) {
-    const mk = g.modelKey || g.model || null;
+    const mk = toCanonKey(g.modelKey || g.model || "");
     if (!mk || seen.has(mk)) continue;
     seen.add(mk);
     if (!statsByModel[mk]) need.push(mk);
@@ -552,18 +599,20 @@ useEffect(() => {
   if (need.length === 0) return;
 
   const ctrl = new AbortController();
-  const qs = need.map(m => `model=${encodeURIComponent(m)}`).join("&"); // <-- matches /api/model-stats
+  const qs = need.map(m => `model=${encodeURIComponent(m)}`).join("&");
 
   fetch(`/api/model-stats?${qs}`, { signal: ctrl.signal, cache: "no-store" })
     .then(r => (r.ok ? r.json() : Promise.reject()))
     .then(d => {
-      if (!d || typeof d !== "object") return;
-      setStatsByModel(prev => ({ ...prev, ...d }));
+      const map = toStatsMap(d);
+      if (Object.keys(map).length) {
+        setStatsByModel(prev => ({ ...prev, ...map }));
+      }
     })
-    .catch(() => { /* ignore; badge will show "—" if missing */ });
-
+    .catch(() => {});
   return () => ctrl.abort();
-}, [groups]); // <-- END of Grouped stats effect
+}, [groups]); // don't include statsByModel to avoid loops
+
 
 
 
@@ -689,7 +738,7 @@ useEffect(() => {
   const need = [];
   const seen = new Set();
   for (const o of offers) {
-    const mk = o.modelKey || o.model || null;
+    const mk = toCanonKey(o.modelKey || o.model || "");
     if (!mk || seen.has(mk)) continue;
     seen.add(mk);
     if (!statsByModel[mk]) need.push(mk);
@@ -697,18 +746,20 @@ useEffect(() => {
   if (need.length === 0) return;
 
   const ctrl = new AbortController();
-  const qs = need.map(m => `model=${encodeURIComponent(m)}`).join("&");  // ✅ define qs
+  const qs = need.map(m => `model=${encodeURIComponent(m)}`).join("&");
 
   fetch(`/api/model-stats?${qs}`, { signal: ctrl.signal, cache: "no-store" })
     .then(r => (r.ok ? r.json() : Promise.reject()))
     .then(d => {
-      if (d && typeof d === "object") {
-        setStatsByModel(prev => ({ ...prev, ...d }));
+      const map = toStatsMap(d);
+      if (Object.keys(map).length) {
+        setStatsByModel(prev => ({ ...prev, ...map }));
       }
     })
     .catch(() => {});
   return () => ctrl.abort();
-}, [groupMode, offers, loading, err]);
+}, [groupMode, offers]); // keep deps lean
+
 
 
 
@@ -1142,19 +1193,16 @@ useEffect(() => {
                           )}
 
                         {/* Group header price badge (use model stats) */}
+const mk = toCanonKey(g.modelKey || g.model || "");
 <SmartPriceBadge
-  // If you track shipping at the group level, include it:
-  total={_safeNum(g.bestPrice) + _shipCost(g)}
-  // Or fall back to price-only if you prefer:
-  // price={Number(g.bestPrice)}
-
-  stats={statsByModel[g.modelKey || g.model]}  // <-- stats from the effect above
+  total={_safeNum(g.bestPrice) + _shipCost(g)}  // or price={Number(g.bestPrice)}
+  stats={statsByModel[mk]}
   className="ml-1"
 />
 
 
 
-                          {/* Optional quick chip */}
+                         {/* Optional quick chip */}
                           {fair && (
                             <span className={`rounded-full px-2 py-0.5 text-[11px] font-medium text-white ${fair.tone === "emerald" ? "bg-emerald-600" : "bg-green-600"}`}>
                               {fair.label}
@@ -1384,55 +1432,45 @@ useEffect(() => {
         <>
           <section className="mt-6 grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
             {offers.map((o) => {
-              const modelKey = getModelKey(o);
-              const condParam =
-                (o?.conditionBand || o?.condition || "").toUpperCase() ||
-                selectedConditionBand(conds) ||
-                "";
-              const variant    = detectVariant(o?.title);
-              const variantKey = getStatsKey3(modelKey, variant, condParam);
-              const baseKey    = getStatsKey(modelKey, condParam);
-              const stats      = statsByModel[variantKey] ?? statsByModel[baseKey] ?? null;
+              // --- NEW flat badge code ---
+const canonKey = toCanonKey(o.modelKey || o.model || "");
+const stats    = statsByModel[canonKey] || null;
 
-              return (
-                <article key={o.productId + o.url} className="overflow-hidden rounded-xl border border-gray-200 bg-white shadow-sm hover:shadow-md transition-shadow">
-                  <div className="relative aspect-[4/3] w-full bg-gray-50">
-                    {o.image ? (
-                      // eslint-disable-next-line @next/next/no-img-element
-                      <img src={o.image} alt={o.title} className="h-full w-full object-contain" loading="lazy" />
-                    ) : (
-                      <div className="flex h-full w-full items-center justify-center text-xs text-gray-400">No image</div>
-                    )}
-                  </div>
-                  <div className="p-4">
-                    <h3 className="line-clamp-2 text-sm font-semibold">{o.title}</h3>
-                    <p className="mt-1 text-xs text-gray-500">
-                      {o?.seller?.username && <>@{o.seller.username} · </>}
-                      {typeof o?.seller?.feedbackPct === "number" && <>{o.seller.feedbackPct.toFixed(1)}% · </>}
-                      {(o.specs?.dexterity || "").toUpperCase() || "—"} · {(o.specs?.headType || "").toUpperCase() || "—"} ·
-                      {Number.isFinite(Number(o?.specs?.length)) ? `${o.specs.length}"` : "—"}
-                      {o?.specs?.shaft && <> · {String(o.specs.shaft).toLowerCase()}</>}
-                      {o?.specs?.hosel && <> · {o.specs.hosel}</>}
-                      {o?.specs?.face && <> · {o.specs.face}</>}
-                      {o?.specs?.grip && <> · {o.specs.grip}</>}
-                      {o?.specs?.hasHeadcover && <> · HC</>}
-                      {o?.specs?.toeHang && <> · {o.specs.toeHang} toe</>}
-                      {Number.isFinite(Number(o?.specs?.loft)) && <> · {o.specs.loft}° loft</>}
-                      {Number.isFinite(Number(o?.specs?.lie)) && <> · {o.specs.lie}° lie</>}
-                      {o.createdAt && (<> · listed {timeAgo(new Date(o.createdAt).getTime())}</>)}
-                    </p>
+return (
+  <article key={o.productId + o.url} className="overflow-hidden rounded-xl border border-gray-200 bg-white shadow-sm hover:shadow-md transition-shadow">
+    <div className="relative aspect-[4/3] w-full bg-gray-50">
+      {o.image ? (
+        // eslint-disable-next-line @next/next/no-img-element
+        <img src={o.image} alt={o.title} className="h-full w-full object-contain" loading="lazy" />
+      ) : (
+        <div className="flex h-full w-full items-center justify-center text-xs text-gray-400">No image</div>
+      )}
+    </div>
+    <div className="p-4">
+      <h3 className="line-clamp-2 text-sm font-semibold">{o.title}</h3>
+      {/* …your existing seller/specs text… */}
 
-                    <div className="mt-3 flex items-center justify-between">
-                      <div className="flex items-center gap-2">
-                        <SmartPriceBadge
-                          price={Number(o.price)}
-                          baseStats={stats}
-                          variantStats={null}
-                          title={o.title}
-                          specs={o.specs}
-                          brand={o.brand || ""}
-                          className="mr-2"
-                        />
+      <div className="mt-3 flex items-center justify-between">
+        <div className="flex items-center gap-2">
+          <SmartPriceBadge
+            total={_totalOf(o)}              // total-to-door (price + ship)
+            stats={stats}                    // canonical stats
+            className="mr-2"
+          />
+
+          <span className="text-base font-semibold">
+            {formatPrice(_totalOf(o), o.currency)}
+          </span>
+          <span className="ml-2 text-[11px] text-gray-500">
+            ({formatPrice(o.price, o.currency)} + {formatPrice(_shipCost(o), o.currency)} ship)
+          </span>
+        </div>
+
+        {/* keep any other buttons/links here */}
+      </div>
+    </div>
+  </article>
+);
 
                         <span className="text-base font-semibold">{formatPrice(_totalOf(o), o.currency)}</span>
 <span className="ml-2 text-[11px] text-gray-500">
