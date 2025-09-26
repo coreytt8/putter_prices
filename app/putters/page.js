@@ -546,8 +546,8 @@ useEffect(() => {
   if (need.length === 0) return;
 
   const ctrl = new AbortController();
-  fetch(`/api/model-stats?${need.map(m => `m=${encodeURIComponent(m)}`).join("&")}`, {
-    signal: ctrl.signal, cache: "no-store"
+ const qs = modelKeys.map(m => `model=${encodeURIComponent(m)}`).join("&");
+  fetch(`/api/model-stats?${qs}`, { signal: ctrl.signal, cache: "no-store" })
   })
     .then(r => (r.ok ? r.json() : Promise.reject()))
     .then(d => { if (d && typeof d === "object") setStatsByModel(prev => ({ ...prev, ...d })); })
@@ -687,9 +687,9 @@ useEffect(() => {
   if (modelKeys.length === 0) return;
 
   const ctrl = new AbortController();
-  const qs = modelKeys.map(m => `m=${encodeURIComponent(m)}`).join("&");
+  const qs = modelKeys.map(m => `model=${encodeURIComponent(m)}`).join("&");
 
-  fetch(`/api/putters/model-stats?${qs}`, { signal: ctrl.signal, cache: "no-store" })
+  fetch(`/api/model-stats?${qs}`, { signal: ctrl.signal, cache: "no-store" })
     .then(r => (r.ok ? r.json() : Promise.reject()))
     .then(d => {
       if (!d || typeof d !== "object") return;
