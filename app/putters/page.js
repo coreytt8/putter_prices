@@ -1449,22 +1449,24 @@ return (
     <div className="p-4">
       <h3 className="line-clamp-2 text-sm font-semibold">{o.title}</h3>
       {/* …your existing seller/specs text… */}
+<div className="mt-3 flex items-center justify-between">
+  <div className="flex items-center gap-2">
+    <SmartPriceBadge
+      total={_totalOf(o)}
+      stats={stats}
+      className="mr-2"
+    />
 
-      <div className="mt-3 flex items-center justify-between">
-        <div className="flex items-center gap-2">
-          <SmartPriceBadge
-            total={_totalOf(o)}              // total-to-door (price + ship)
-            stats={stats}                    // canonical stats
-            className="mr-2"
-          />
+    <span className="text-base font-semibold">
+      {formatPrice(_totalOf(o), o.currency)}
+    </span>
+    <span className="ml-2 text-[11px] text-gray-500">
+      ({formatPrice(o.price, o.currency)} + {formatPrice(_shipCost(o), o.currency)} ship)
+    </span>
+  </div>
 
-          <span className="text-base font-semibold">
-            {formatPrice(_totalOf(o), o.currency)}
-          </span>
-          <span className="ml-2 text-[11px] text-gray-500">
-            ({formatPrice(o.price, o.currency)} + {formatPrice(_shipCost(o), o.currency)} ship)
-          </span>
-        </div>
+  {/* keep any buttons/links for this card here */}
+</div>
 
         {/* keep any other buttons/links here */}
       </div>
