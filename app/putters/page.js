@@ -1531,11 +1531,10 @@ const mk = toCanonKey(g.modelKey || g.model || "");
         Next →
       </button>
     </div>
-   </section>
-)}  {/* <-- closes the flat-view conditional */}
+     </section>
+)}
+</main>
+);
+}
 
-</main>  {/* <-- closes your main layout */}
-);        {/* <-- closes the return( ) of PuttersPage */}
-
-}         // <-- closes export default function PuttersPage
 
