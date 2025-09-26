@@ -1,8 +1,7 @@
 // /components/SmartPriceBadge.jsx
-import { dealBadge } from "@/lib/stats";
 
 export default function SmartPriceBadge({ total, stats, cohort = "standard", className = "" }) {
-  const badge = stats ? dealBadge(total, stats) : { label: "—", score: 0 };
+  const badge = { label: "—", score: 0 }; // or keep your existing stats logic
   const color =
     badge.label === "Great" ? "bg-green-100 text-green-800" :
     badge.label === "Good"  ? "bg-emerald-100 text-emerald-800" :
