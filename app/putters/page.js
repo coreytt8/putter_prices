@@ -1,5 +1,7 @@
 "use client";
 
+import { buildBaseStats, normalizeModel } from "@/lib/baseModelStats";
+
 import { useEffect, useMemo, useState } from "react";
 import MarketSnapshot from "@/components/MarketSnapshot";
 import PriceSparkline from "@/components/PriceSparkline";
@@ -530,6 +532,13 @@ useEffect(() => {
   } // end run()
 
   const t = setTimeout(run, 150);
+  // Base-model market stats (excludes variants like Circle T, limited, tour)
+  const baseStatsByModel = useMemo(() => {
+    const listings = groupMode ? (Array.isArray(groups) ? groups.flatMap(g => g.offers || []) : []) 
+                               : (Array.isArray(offers) ? offers : []);
+    return buildBaseStats(listings);
+  }, [groupMode, groups, offers]);
+
   return () => { ignore = true; clearTimeout(t); ctrl.abort(); };
 }, [apiUrl, groupMode, sortBy, q, page]); // <-- END of Fetch results effect
 
@@ -1150,7 +1159,7 @@ useEffect(() => {
 
   stats={statsByModel[g.modelKey || g.model]}  // <-- stats from the effect above
   className="ml-1"
-/>
+ baseStats={baseStatsByModel[normalizeModel((o?.model || o?.groupModel || o?.title))]} />
 
 
 
