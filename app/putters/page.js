@@ -1499,25 +1499,19 @@ return (
 
       {/* keep your existing buttons/links on the right side here */}
     </div>
-  </div>
-</article>
+       {/* Affiliate/outbound link UNCHANGED */}
+      <a
+        href={o.url}
+        target="_blank"
+        rel="noopener noreferrer"
+        className="mt-2 block text-sm font-medium text-blue-600 hover:underline"
+      >
+        View Listing
+      </a>
+    </div> {/* end p-4 */}
+  </article> // end card
+);
 
-
-                      {/* Affiliate/outbound link UNCHANGED */}
-                      <a
-                        href={o.url}
-                        target="_blank"
-                        rel="noopener noreferrer"
-                        className="inline-flex items-center rounded-md border px-3 py-1.5 text-sm hover:bg-gray-50"
-                      >
-                        View
-                      </a>
-                    </div>
-                  </div>
-                </article>
-              );
-            })}
-          </section>
 
           {/* Pagination (flat) */}
           <div className="mt-8 flex items-center justify-between">
