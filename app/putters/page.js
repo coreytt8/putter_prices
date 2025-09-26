@@ -1,6 +1,11 @@
 "use client";
 
 import { buildBaseStats } from "@/lib/baseModelStats";
+import { useEffect, useMemo, useState } from "react";
+import MarketSnapshot from "@/components/MarketSnapshot";
+import PriceSparkline from "@/components/PriceSparkline";
+import SmartPriceBadge from "@/components/SmartPriceBadge";
+import { detectVariant } from "@/lib/variantMap";
 
 // Local helper to mirror server/client normalization
 const normalizeModel = (text) => String(text || "")
@@ -8,12 +13,6 @@ const normalizeModel = (text) => String(text || "")
   .replace(/scotty|cameron|titleist|putter|golf/gi, "")
   .replace(/\s+/g, " ")
   .trim();
-
-import { useEffect, useMemo, useState } from "react";
-import MarketSnapshot from "@/components/MarketSnapshot";
-import PriceSparkline from "@/components/PriceSparkline";
-import SmartPriceBadge from "@/components/SmartPriceBadge";
-import { detectVariant } from "@/lib/variantMap";
 
 
 /* ============================
