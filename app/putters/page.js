@@ -1139,6 +1139,17 @@ useEffect(() => {
 
               const bestUrl = ordered.length ? ordered[0]?.url : null;
 
+              const primaryListing = ordered.length ? ordered[0] : null;
+              const baseModelKey = normalizeModel(
+                g.model ||
+                g.modelKey ||
+                primaryListing?.model ||
+                primaryListing?.groupModel ||
+                primaryListing?.title ||
+                ""
+              );
+              const baseStats = baseModelKey ? baseStatsByModel[baseModelKey] : undefined;
+
               const fair = fairPriceBadge(g.bestPrice, stats);
 
               return (
@@ -1181,15 +1192,16 @@ useEffect(() => {
                           )}
 
                         {/* Group header price badge (use model stats) */}
-<SmartPriceBadge
-  // If you track shipping at the group level, include it:
-  total={_safeNum(g.bestPrice) + _shipCost(g)}
-  // Or fall back to price-only if you prefer:
-  // price={Number(g.bestPrice)}
+                        <SmartPriceBadge
+                          // If you track shipping at the group level, include it:
+                          total={_safeNum(g.bestPrice) + _shipCost(g)}
+                          // Or fall back to price-only if you prefer:
+                          // price={Number(g.bestPrice)}
 
-  stats={statsByModel[g.modelKey || g.model]}  // <-- stats from the effect above
-  className="ml-1"
- baseStats={baseStatsByModel[normalizeModel((o?.model || o?.groupModel || o?.title))]} />
+                          stats={statsByModel[g.modelKey || g.model]}  // <-- stats from the effect above
+                          className="ml-1"
+                          baseStats={baseStats}
+                        />
 
 
 
