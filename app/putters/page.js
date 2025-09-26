@@ -1464,14 +1464,13 @@ return (
       ({formatPrice(o.price, o.currency)} + {formatPrice(_shipCost(o), o.currency)} ship)
     </span>
   </div>
-  </article>
-);
 
                         <span className="text-base font-semibold">{formatPrice(_totalOf(o), o.currency)}</span>
 <span className="ml-2 text-[11px] text-gray-500">
   ({formatPrice(o.price, o.currency)} + {formatPrice(_shipCost(o), o.currency)} ship)
 </span>
-
+</article>
+);
 
                         {/* Optional Save $ chip if below median */}
                         {(() => {
