@@ -678,41 +678,38 @@ useEffect(() => {
     setPage(1); setGroupMode(true); setBroaden(false);
   };
 
-  /* ============================
-   FLAT VIEW: prefetch stats for visible items (variant + base)
+/* ============================
+   FLAT VIEW: prefetch stats for visible items
    ============================ */
 useEffect(() => {
-  // Only run in flat mode when we have offers to show
   if (groupMode) return;
   if (!Array.isArray(offers) || offers.length === 0) return;
   if (loading || err) return;
 
-  // collect unique modelKeys from current page of offers
-  const modelKeys = [];
+  const need = [];
   const seen = new Set();
   for (const o of offers) {
-    // use your existing helper to stay consistent
-    const mk = getModelKey ? getModelKey(o) : o.modelKey;
+    const mk = o.modelKey || o.model || null;
     if (!mk || seen.has(mk)) continue;
     seen.add(mk);
-    modelKeys.push(mk);
+    if (!statsByModel[mk]) need.push(mk);
   }
-  if (modelKeys.length === 0) return;
+  if (need.length === 0) return;
 
+  const ctrl = new AbortController();
+  const qs = need.map(m => `model=${encodeURIComponent(m)}`).join("&");  // ✅ define qs
 
   fetch(`/api/model-stats?${qs}`, { signal: ctrl.signal, cache: "no-store" })
     .then(r => (r.ok ? r.json() : Promise.reject()))
     .then(d => {
-      if (!d || typeof d !== "object") return;
-      // d is expected like { [modelKey]: { p10,p50,p90,n,... }, ... }
-      setStatsByModel(prev => ({ ...prev, ...d }));
+      if (d && typeof d === "object") {
+        setStatsByModel(prev => ({ ...prev, ...d }));
+      }
     })
-    .catch(() => {
-      // ignore; badges will show "—" if no stats returned
-    });
-
+    .catch(() => {});
   return () => ctrl.abort();
 }, [groupMode, offers, loading, err]);
+
 
 
   return (
