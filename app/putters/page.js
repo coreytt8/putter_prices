@@ -1515,30 +1515,36 @@ useEffect(() => {
             })}
           </section>
 
-          {/* Pagination (flat) */}
-          <div className="mt-8 flex items-center justify-between">
-            <button
-              disabled={!hasPrev || page <= 1 || loading}
-              onClick={() => setPage((p) => Math.max(1, p - 1))}
-              className={`rounded-md border px-3 py-2 text-sm ${hasPrev && page > 1 && !loading ? "hover:bg-gray-100" : "cursor-not-allowed opacity-50"}`}
-            >
-              â† Prev
-            </button>
-            <div className="text-sm text-gray-600">
-              Page <span className="font-medium">{page}</span> Â· {FIXED_PER_PAGE} listings per page
-            </div>
-           <button
-  disabled={!hasNext || loading}
-  onClick={() => setPage((p) => p + 1)}
-  className={`rounded-md border px-3 py-2 text-sm ${hasNext && !loading ? "hover:bg-gray-100" : "cursor-not-allowed opacity-50"}`}
->
-  Next &rarr;
-</button>
+         {/* Pagination (flat) */}
+<div className="mt-8 flex items-center justify-between">
+  <button
+    disabled={!hasPrev || page <= 1 || loading}
+    onClick={() => setPage((p) => Math.max(1, p - 1))}
+    className={`rounded-md border px-3 py-2 text-sm ${
+      hasPrev && page > 1 && !loading ? "hover:bg-gray-100" : "cursor-not-allowed opacity-50"
+    }`}
+  >
+    &larr; Prev
+  </button>
 
-        </div>
+  <div className="text-sm text-gray-600">
+    Page <span className="font-medium">{page}</span> &middot; {FIXED_PER_PAGE} listings per page
+  </div>
+
+  <button
+    disabled={!hasNext || loading}
+    onClick={() => setPage((p) => p + 1)}
+    className={`rounded-md border px-3 py-2 text-sm ${
+      hasNext && !loading ? "hover:bg-gray-100" : "cursor-not-allowed opacity-50"
+    }`}
+  >
+    Next &rarr;
+  </button>
+</div>
       </>
     )}
   </main>
 );
 }
+
 
