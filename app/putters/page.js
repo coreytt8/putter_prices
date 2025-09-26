@@ -1,6 +1,13 @@
 "use client";
 
-import { buildBaseStats, normalizeModel } from "@/lib/baseModelStats";
+import { buildBaseStats } from "@/lib/baseModelStats";
+
+// Local helper to mirror server/client normalization
+const normalizeModel = (text) => String(text || "")
+  .toLowerCase()
+  .replace(/scotty|cameron|titleist|putter|golf/gi, "")
+  .replace(/\s+/g, " ")
+  .trim();
 
 import { useEffect, useMemo, useState } from "react";
 import MarketSnapshot from "@/components/MarketSnapshot";
@@ -553,7 +560,7 @@ useEffect(() => {
   const need = [];
   const seen = new Set();
   for (const g of groups) {
-    const mk = g.modelKey || g.model || null;
+    const mk = g.model || null;
     if (!mk || seen.has(mk)) continue;
     seen.add(mk);
     if (!statsByModel[mk]) need.push(mk);
@@ -630,7 +637,8 @@ useEffect(() => {
         const groupObj = groups.find((x) => x.model === model) || null;
         const condParam = selectedConditionBand(conds) || inferConditionBandFromOffers(groupObj?.offers || []) || "";
         const url = `/api/model-stats?model=${encodeURIComponent(model)}${condParam ? `&condition=${encodeURIComponent(condParam)}` : ""}`;
-        const statsKey = getStatsKey(model, condParam);
+        const statsKey = getStatsKey(model, condParam); // keep cache key
+// Ensure API call uses raw model string, not statsKey
         if (statsByModel[statsKey] === undefined) {
           const r = await fetch(url, { cache: "no-store" });
           const j = await r.json();
@@ -698,7 +706,7 @@ useEffect(() => {
   const need = [];
   const seen = new Set();
   for (const o of offers) {
-    const mk = o.modelKey || o.model || null;
+    const mk = o.model || null;
     if (!mk || seen.has(mk)) continue;
     seen.add(mk);
     if (!statsByModel[mk]) need.push(mk);
