@@ -482,23 +482,30 @@ if (sortBy === "best_price_desc") {
         setApiData(data);
 
       } else {
-        // --- ORIGINAL behavior (Grouped, or Flat but non-price sort) ---
-        if (!groupMode && pageOffers.length) {
-          if (sortBy === "best_price_asc") {
-  pageOffers = [...pageOffers].sort((a,b) => (_totalOf(a) ?? Infinity) - (_totalOf(b) ?? Infinity));
-} else if (sortBy === "best_price_desc") {
-  pageOffers = [...pageOffers].sort((a,b) => (_totalOf(b) ?? -Infinity) - (_totalOf(a) ?? -Infinity));
+  // --- ORIGINAL behavior (Grouped, or Flat but non-price sort) ---
+  if (!groupMode && pageOffers.length) {
+    // Sort FLAT page by Total-to-Door (price + shipping)
+    if (sortBy === "best_price_asc") {
+      pageOffers = [...pageOffers].sort(
+        (a, b) => (_totalOf(a) ?? Infinity) - (_totalOf(b) ?? Infinity)
+      );
+    } else if (sortBy === "best_price_desc") {
+      pageOffers = [...pageOffers].sort(
+        (a, b) => (_totalOf(b) ?? -Infinity) - (_totalOf(a) ?? -Infinity)
+      );
+    }
+  }
+
+  setGroups(nextGroups);
+  setOffers(pageOffers);
+  setHasNext(Boolean(data.hasNext));
+  setHasPrev(Boolean(data.hasPrev) && page > 1);
+  setFetchedCount(typeof data.fetchedCount === "number" ? data.fetchedCount : null);
+  setKeptCount(typeof data.keptCount === "number" ? data.keptCount : null);
+  setApiData(data);
 }
 
 
-        setGroups(nextGroups);
-        setOffers(pageOffers);
-        setHasNext(Boolean(data.hasNext));
-        setHasPrev(Boolean(data.hasPrev) && page > 1);
-        setFetchedCount(typeof data.fetchedCount === "number" ? data.fetchedCount : null);
-        setKeptCount(typeof data.keptCount === "number" ? data.keptCount : null);
-        setApiData(data);
-      }
 
       // reset per-model expand/show-all caches for fresh groups
       const nextShowAll = {};
