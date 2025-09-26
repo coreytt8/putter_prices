@@ -6,20 +6,29 @@ import PriceSparkline from "@/components/PriceSparkline";
 import SmartPriceBadge from "@/components/SmartPriceBadge";
 import { detectVariant } from "@/lib/variantMap";
 
+
 /* ============================
    PRICE HELPERS (Total-to-Door)
    ============================ */
-function _safeNum(v){ const n = Number(v); return Number.isFinite(n) ? n : 0; }
-function _shipCost(o){
-  // try common shapes; default 0 if unknown
+function _safeNum(v) {
+  const n = Number(v);
+  return Number.isFinite(n) ? n : 0;
+}
+
+function _shipCost(o) {
   if (!o) return 0;
   if (typeof o.shipping === "number") return _safeNum(o.shipping);
   if (o.shipping && typeof o.shipping.cost === "number") return _safeNum(o.shipping.cost);
   if (o.shippingCost != null) return _safeNum(o.shippingCost);
-  if (o?.shippingOptions?.[0]?.shippingCost?.value != null) return _safeNum(o.shippingOptions[0].shippingCost.value);
+  if (o?.shippingOptions?.[0]?.shippingCost?.value != null)
+    return _safeNum(o.shippingOptions[0].shippingCost.value);
   return 0;
 }
-function _totalOf(o){ return _safeNum(o?.price) + _shipCost(o); }
+
+function _totalOf(o) {
+  return _safeNum(o?.price) + _shipCost(o);
+}
+
 
 
 
@@ -396,6 +405,37 @@ useEffect(() => {
     setErr("");
     return;
   }
+/* ============================
+   GROUPED VIEW: prefetch stats per model
+   ============================ */
+useEffect(() => {
+  if (!Array.isArray(groups) || groups.length === 0) return;
+
+  // collect unique modelKeys that we don't already have in cache
+  const need = [];
+  const seen = new Set();
+  for (const g of groups) {
+    const mk = g.modelKey || g.model || null;
+    if (!mk || seen.has(mk)) continue;
+    seen.add(mk);
+    if (!statsByModel[mk]) need.push(mk);
+  }
+  if (need.length === 0) return;
+
+  const ctrl = new AbortController();
+  const qs = need.map(m => `m=${encodeURIComponent(m)}`).join("&");
+
+  fetch(`/api/putters/stats?${qs}`, { signal: ctrl.signal, cache: "no-store" })
+    .then(r => (r.ok ? r.json() : Promise.reject()))
+    .then(d => {
+      if (!d || typeof d !== "object") return;
+      setStatsByModel(prev => ({ ...prev, ...d }));
+    })
+    .catch(() => { /* ignore; badge will show "—" if missing */ });
+
+  return () => ctrl.abort();
+}, [groups, statsByModel]);
+
 
   const ctrl = new AbortController();
   let ignore = false;
@@ -637,84 +677,43 @@ if (sortBy === "best_price_desc") {
   };
 
   /* ============================
-     FLAT VIEW: prefetch stats for visible items (variant + base)
-     ============================ */
-  useEffect(() => {
-    // Only run in flat mode when we have offers
-    if (!q.trim() || loading || err || groupMode) return;
-    if (!Array.isArray(offers) || offers.length === 0) return;
+   FLAT VIEW: prefetch stats for visible items (variant + base)
+   ============================ */
+useEffect(() => {
+  // Only run in flat mode when we have offers to show
+  if (groupMode) return;
+  if (!Array.isArray(offers) || offers.length === 0) return;
+  if (loading || err) return;
 
-    let abort = false;
-    const selCond = selectedConditionBand(conds) || "";
-    const seen = new Set();
-    const jobs = [];
+  // collect unique modelKeys from current page of offers
+  const modelKeys = [];
+  const seen = new Set();
+  for (const o of offers) {
+    // use your existing helper to stay consistent
+    const mk = getModelKey ? getModelKey(o) : o.modelKey;
+    if (!mk || seen.has(mk)) continue;
+    seen.add(mk);
+    modelKeys.push(mk);
+  }
+  if (modelKeys.length === 0) return;
 
-    for (const o of offers) {
-      const modelKey = getModelKey(o);
-      const condParam =
-        (o?.conditionBand || o?.condition || "").toUpperCase() ||
-        selCond ||
-        "";
-      const variant = detectVariant(o?.title);
+  const ctrl = new AbortController();
+  const qs = modelKeys.map(m => `m=${encodeURIComponent(m)}`).join("&");
 
-      // 1) Variant key first
-      if (variant) {
-        const vKey = getStatsKey3(modelKey, variant, condParam);
-        if (vKey && !statsByModel[vKey]) {
-          const vUrl =
-            `/api/model-stats?model=${encodeURIComponent(modelKey)}` +
-            `${condParam ? `&condition=${encodeURIComponent(condParam)}` : ""}` +
-            `&variant=${encodeURIComponent(variant)}`;
+  fetch(`/api/putters/stats?${qs}`, { signal: ctrl.signal, cache: "no-store" })
+    .then(r => (r.ok ? r.json() : Promise.reject()))
+    .then(d => {
+      if (!d || typeof d !== "object") return;
+      // d is expected like { [modelKey]: { p10,p50,p90,n,... }, ... }
+      setStatsByModel(prev => ({ ...prev, ...d }));
+    })
+    .catch(() => {
+      // ignore; badges will show "—" if no stats returned
+    });
 
-          if (!seen.has(vUrl)) {
-            seen.add(vUrl);
-            jobs.push(
-              fetch(vUrl)
-                .then((r) => (r.ok ? r.json() : null))
-                .then((json) => {
-                  if (abort || !json) return;
-                  const stats = json?.stats ?? json;
-                  if (stats && Object.keys(stats).length) {
-                    setStatsByModel((prev) => ({ ...prev, [vKey]: stats }));
-                  }
-                })
-                .catch(() => {})
-            );
-          }
-        }
-      }
+  return () => ctrl.abort();
+}, [groupMode, offers, loading, err]);
 
-      // 2) Base key fallback
-      const baseKey = getStatsKey(modelKey, condParam);
-      if (baseKey && !statsByModel[baseKey]) {
-        const baseUrl =
-          `/api/model-stats?model=${encodeURIComponent(modelKey)}` +
-          `${condParam ? `&condition=${encodeURIComponent(condParam)}` : ""}`;
-
-        if (!seen.has(baseUrl)) {
-          seen.add(baseUrl);
-          jobs.push(
-            fetch(baseUrl)
-              .then((r) => (r.ok ? r.json() : null))
-              .then((json) => {
-                if (abort || !json) return;
-                const stats = json?.stats ?? json;
-                if (stats && Object.keys(stats).length) {
-                  setStatsByModel((prev) => ({ ...prev, [baseKey]: stats }));
-                }
-              })
-              .catch(() => {})
-          );
-        }
-      }
-    }
-
-    if (jobs.length) {
-      Promise.all(jobs).catch(() => {});
-    }
-
-    return () => { abort = true; };
-  }, [q, loading, err, groupMode, offers, JSON.stringify(conds)]);
 
   return (
     <main className="mx-auto max-w-6xl px-4 py-8">
@@ -1145,8 +1144,18 @@ if (sortBy === "best_price_desc") {
                             </span>
                           )}
 
-                          {/* Group header price badge */}
-                          <SmartPriceBadge price={Number(g.bestPrice)} baseStats={stats} className="ml-1" />
+                        {/* Group header price badge (use model stats) */}
+<SmartPriceBadge
+  // If you track shipping at the group level, include it:
+  total={_safeNum(g.bestPrice) + _shipCost(g)}
+  // Or fall back to price-only if you prefer:
+  // price={Number(g.bestPrice)}
+
+  stats={statsByModel[g.modelKey || g.model]}  // <-- stats from the effect above
+  className="ml-1"
+/>
+
+
 
                           {/* Optional quick chip */}
                           {fair && (
