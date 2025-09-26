@@ -566,57 +566,6 @@ useEffect(() => {
 }, [groups]); // <-- END of Grouped stats effect
 
 
-useEffect(() => {
-  if (!Array.isArray(groups) || groups.length === 0) return;
-  const need = [];
-  const seen = new Set();
-  for (const g of groups) {
-    const mk = g.modelKey || g.model || null;
-    if (!mk || seen.has(mk)) continue;
-    seen.add(mk);
-    if (!statsByModel[mk]) need.push(mk);
-  }
-  if (need.length === 0) return;
-
-  const ctrl = new AbortController();
- const qs = modelKeys.map(m => `model=${encodeURIComponent(m)}`).join("&");
-  fetch(`/api/model-stats?${qs}`, { signal: ctrl.signal, cache: "no-store" })
-  })
-    .then(r => (r.ok ? r.json() : Promise.reject()))
-    .then(d => { if (d && typeof d === "object") setStatsByModel(prev => ({ ...prev, ...d })); })
-    .catch(() => {});
-  return () => ctrl.abort();
-}, [groups]);  // separate top-level effect
-/* ============================
-   GROUPED VIEW: prefetch stats per model
-   ============================ */
-useEffect(function groupedStatsEffect() {
-  if (!Array.isArray(groups) || groups.length === 0) return;
-
-  // Collect unique model keys we don't have stats for yet
-  const need = [];
-  const seen = new Set();
-  for (const g of groups) {
-    const mk = g.modelKey || g.model || null;
-    if (!mk || seen.has(mk)) continue;
-    seen.add(mk);
-    if (!statsByModel[mk]) need.push(mk);
-  }
-  if (need.length === 0) return;
-
-  const ctrl = new AbortController();
-  const qs = need.map(m => `model=${encodeURIComponent(m)}`).join("&");
-
-  fetch(`/api/model-stats?${qs}`, { signal: ctrl.signal, cache: "no-store" })
-    .then(r => (r.ok ? r.json() : Promise.reject()))
-    .then(d => {
-      if (d && typeof d === "object") {
-        setStatsByModel(prev => ({ ...prev, ...d }));
-      }
-    })
-    .catch(() => {});
-  return () => ctrl.abort();
-}, [groups]);  // <- effect ends cleanly here
 
 
 
@@ -750,8 +699,6 @@ useEffect(() => {
   }
   if (modelKeys.length === 0) return;
 
-  const ctrl = new AbortController();
-  const qs = modelKeys.map(m => `model=${encodeURIComponent(m)}`).join("&");
 
   fetch(`/api/model-stats?${qs}`, { signal: ctrl.signal, cache: "no-store" })
     .then(r => (r.ok ? r.json() : Promise.reject()))
