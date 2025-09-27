@@ -422,6 +422,21 @@ useEffect(() => {
     setLoading(true);
     setErr("");
 
+    const fail = (message) => {
+      const fallback = "Failed to load results. Please try again.";
+      const text = typeof message === "string" ? message.trim() : "";
+      const display = text || fallback;
+
+      setGroups([]);
+      setOffers([]);
+      setHasNext(false);
+      setHasPrev(false);
+      setFetchedCount(null);
+      setKeptCount(null);
+      setApiData(null);
+      setErr(display);
+    };
+
     try {
       // 1) Fetch current page from the API
       const res = await fetch(apiUrl, {
@@ -433,9 +448,26 @@ useEffect(() => {
       const data = await res.json();
       if (ignore) return;
 
+      if (!data || typeof data !== "object") {
+        fail();
+        return;
+      }
+
+      if ("ok" in data && data.ok === false) {
+        fail(data.error);
+        return;
+      }
+
+      const hasGroups = Array.isArray(data.groups);
+      const hasOffers = Array.isArray(data.offers);
+      if ((groupMode && !hasGroups) || (!groupMode && !hasOffers)) {
+        fail();
+        return;
+      }
+
       // Normalize data
-      const nextGroups = Array.isArray(data.groups) ? data.groups : [];
-      let pageOffers = Array.isArray(data.offers) ? data.offers : [];
+      const nextGroups = hasGroups ? data.groups : [];
+      let pageOffers = hasOffers ? data.offers : [];
 
       // 2) If FLAT + price sort, aggregate & globally sort by Total-to-Door
       const wantGlobalPriceSort =
@@ -531,7 +563,7 @@ useEffect(() => {
 
     } catch (e) {
       if (!ignore && e.name !== "AbortError") {
-        setErr("Failed to load results. Please try again.");
+        fail();
       }
     } finally {
       if (!ignore) setLoading(false);
