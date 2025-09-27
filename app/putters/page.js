@@ -1070,13 +1070,14 @@ export default function PuttersPage() {
 
                             const variantKey = getStatsKey3(modelKey, variant, condParam);
                             const baseKey    = getStatsKey(modelKey, condParam);
-                            const firstStats = statsByModel[variantKey] ?? statsByModel[baseKey] ?? stats;
+                            const firstVariantStats = statsByModel[variantKey] ?? null;
+                            const firstBaseStats = statsByModel[baseKey] ?? stats;
 
                             return (
                               <SmartPriceBadge
                                 price={Number(g.bestPrice)}
-                                baseStats={firstStats}
-                                variantStats={null}
+                                baseStats={firstBaseStats}
+                                variantStats={firstVariantStats}
                                 title={first?.title || g.model}
                                 specs={first?.specs}
                                 brand={g?.brand}
@@ -1165,7 +1166,8 @@ export default function PuttersPage() {
                           const variant    = detectVariant(o?.title);
                           const variantKey = getStatsKey3(modelKey, variant, condParam);
                           const baseKey    = getStatsKey(modelKey, condParam);
-                          const perOfferStats = statsByModel[variantKey] ?? statsByModel[baseKey] ?? stats;
+                          const variantStats = statsByModel[variantKey] ?? null;
+                          const baseStats = statsByModel[baseKey] ?? stats;
 
                           return (
                             <li
@@ -1221,8 +1223,8 @@ export default function PuttersPage() {
                               <div className="flex items-center gap-3">
                                 <SmartPriceBadge
                                   price={Number(o.price)}
-                                  baseStats={perOfferStats}
-                                  variantStats={null}
+                                  baseStats={baseStats}
+                                  variantStats={variantStats}
                                   title={o.title}
                                   specs={o.specs}
                                   brand={g?.brand}
@@ -1290,7 +1292,9 @@ export default function PuttersPage() {
               const variant    = detectVariant(o?.title);
               const variantKey = getStatsKey3(modelKey, variant, condParam);
               const baseKey    = getStatsKey(modelKey, condParam);
-              const stats      = statsByModel[variantKey] ?? statsByModel[baseKey] ?? null;
+              const variantStats = statsByModel[variantKey] ?? null;
+              const baseStats    = statsByModel[baseKey] ?? null;
+              const stats        = variantStats ?? baseStats;
 
               return (
                 <article key={o.productId + o.url} className="overflow-hidden rounded-xl border border-gray-200 bg-white shadow-sm">
@@ -1324,8 +1328,8 @@ export default function PuttersPage() {
                       <div className="flex items-center gap-2">
                         <SmartPriceBadge
                           price={Number(o.price)}
-                          baseStats={stats}
-                          variantStats={null}
+                          baseStats={baseStats}
+                          variantStats={variantStats}
                           title={o.title}
                           specs={o.specs}
                           brand={o.brand || ""}
