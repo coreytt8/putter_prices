@@ -24,3 +24,42 @@ body {
   color: var(--foreground);
   font-family: Arial, Helvetica, sans-serif;
 }
+/* ---- PutterIQ light polish ---- */
+html, body {
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  text-rendering: optimizeLegibility;
+}
+a {
+  text-underline-offset: 2px;
+}
+.card {
+  @apply rounded-xl border border-gray-200 bg-white shadow-sm transition-shadow;
+}
+.card:hover {
+  @apply shadow-md;
+}
+.badge {
+  @apply inline-flex items-center rounded-full px-2 py-0.5 text-[11px] font-medium;
+}
+.btn {
+  @apply inline-flex items-center justify-center rounded-md px-3 py-2 text-sm font-medium transition-colors;
+}
+.btn-outline {
+  @apply border border-gray-300 hover:bg-gray-50;
+}
+.btn-primary {
+  @apply bg-blue-600 text-white hover:bg-blue-700;
+}
+.input {
+  @apply w-full rounded-md border border-gray-300 px-3 py-2 outline-none focus:ring-2 focus:ring-blue-500;
+}
+.select {
+  @apply w-full rounded-md border border-gray-300 px-3 py-2;
+}
+fieldset.panel {
+  @apply rounded-lg border border-gray-200 p-4 bg-white;
+}
+.legend {
+  @apply mb-3 text-xs font-semibold uppercase tracking-wide text-gray-600;
+}
