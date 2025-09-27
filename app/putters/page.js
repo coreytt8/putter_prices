@@ -1,10 +1,48 @@
 "use client";
 
+import { buildBaseStats } from "@/lib/baseModelStats";
+
+// Local helper to mirror server/client normalization
+const normalizeModel = (text) => String(text || "")
+  .toLowerCase()
+  .replace(/scotty|cameron|titleist|putter|golf/gi, "")
+  .replace(/\s+/g, " ")
+  .trim();
+
 import { useEffect, useMemo, useState } from "react";
 import MarketSnapshot from "@/components/MarketSnapshot";
 import PriceSparkline from "@/components/PriceSparkline";
 import SmartPriceBadge from "@/components/SmartPriceBadge";
 import { detectVariant } from "@/lib/variantMap";
+
+
+/* ============================
+   PRICE HELPERS (Total-to-Door)
+   ============================ */
+function _safeNum(v) {
+  const n = Number(v);
+  return Number.isFinite(n) ? n : 0;
+}
+
+function _shipCost(o) {
+  if (!o) return 0;
+  if (typeof o.shipping === "number") return _safeNum(o.shipping);
+  if (o.shipping && typeof o.shipping.cost === "number") return _safeNum(o.shipping.cost);
+  if (o.shippingCost != null) return _safeNum(o.shippingCost);
+  if (o?.shippingOptions?.[0]?.shippingCost?.value != null)
+    return _safeNum(o.shippingOptions[0].shippingCost.value);
+  return 0;
+}
+
+function _totalOf(o) {
+  return _safeNum(o?.price) + _shipCost(o);
+}
+
+
+
+
+
+
 
 /* ============================
    SMART FAIR-PRICE BADGE (inline, JS/JSX)
@@ -74,19 +112,19 @@ function makeSmartBadge({ listingPrice, stats, windowDays = 60 }) {
     insufficient: "bg-zinc-100 text-zinc-700 ring-zinc-200",
   };
   const ICONS = {
-    great_deal: "✅",
-    good_price: "👍",
-    fair: "⚖️",
-    above_market: "⬆️",
-    overpriced: "⚠️",
-    insufficient: "？",
+    great_deal: "âœ…",
+    good_price: "ðŸ‘",
+    fair: "âš–ï¸",
+    above_market: "â¬†ï¸",
+    overpriced: "âš ï¸",
+    insufficient: "ï¼Ÿ",
   };
 
   const pctAbs = Math.abs(deltaPct * 100);
   const vsText = deltaPct < 0 ? `~${pctAbs.toFixed(0)}% below`
                : deltaPct > 0 ? `~${pctAbs.toFixed(0)}% above`
                : "near";
-  const nText = n ? `${n}` : "—";
+  const nText = n ? `${n}` : "â€”";
   const condLabel = stats?.condition ? ` (${String(stats.condition).replace(/_/g," ").toLowerCase()})` : "";
   const tooltip = tier === "insufficient"
     ? "Not enough comparable sales to estimate a fair market price confidently."
@@ -109,7 +147,7 @@ function makeSmartBadge({ listingPrice, stats, windowDays = 60 }) {
    ORIGINAL HELPERS
    ============================ */
 function formatPrice(value, currency = "USD") {
-  if (typeof value !== "number" || !isFinite(value)) return "—";
+  if (typeof value !== "number" || !isFinite(value)) return "â€”";
   try {
     return new Intl.NumberFormat("en-US", { style: "currency", currency }).format(value);
   } catch {
@@ -174,17 +212,18 @@ const BUYING_OPTIONS = [
 ];
 
 const SORT_OPTIONS = [
-  { label: "Best Price: Low → High", value: "best_price_asc" },
-  { label: "Best Price: High → Low", value: "best_price_desc" },
+  { label: "Best Price: Low â†’ High", value: "best_price_asc" },
+  { label: "Best Price: High â†’ Low", value: "best_price_desc" },
   { label: "Recently listed", value: "recent" },
   { label: "Most Offers", value: "count_desc" },
-  { label: "A → Z (Model)", value: "model_asc" },
+  { label: "A â†’ Z (Model)", value: "model_asc" },
 ];
 
 const FIXED_PER_PAGE = 10;
 
 const retailerLogos = {
   eBay: "https://upload.wikimedia.org/wikipedia/commons/1/1b/EBay_logo.svg",
+  "2nd Swing": "https://images.ctfassets.net/3ub10f3qbq43/6W8a2KQ6rZp3bRbxVb6s0T/9f5a9f1c3f7a1e4f3f3b9f2e0d9d2a51/2ndswing-logo.svg", // fallback public SVG; replace if you have a local asset
 };
 
 /* ============================
@@ -261,15 +300,12 @@ export default function PuttersPage() {
   const [dex, setDex] = useState("");            // "", "LEFT", "RIGHT"
   const [head, setHead] = useState("");          // "", "BLADE", "MALLET"
   const [lengths, setLengths] = useState([]);    // [] or [33,34,35,36]
-  const [showAdvanced, setShowAdvanced] = useState(false);
   const [groupMode, setGroupMode] = useState(true);
   const [sortBy, setSortBy] = useState("best_price_asc");
   const [page, setPage] = useState(1);
   const [q, setQ] = useState("");
   const [broaden, setBroaden] = useState(false); 
   const [includeProShops, setIncludeProShops] = useState(false);
-
-
 
   // data
   const [groups, setGroups] = useState([]);
@@ -286,7 +322,6 @@ export default function PuttersPage() {
   const [expanded, setExpanded] = useState({});
   const [showAllOffersByModel, setShowAllOffersByModel] = useState({});
   const [copiedFor, setCopiedFor] = useState("")
-
 
   // Per-model caches
   const [lowsByModel, setLowsByModel] = useState({});   // model -> lows
@@ -318,7 +353,7 @@ export default function PuttersPage() {
     if (sp.has("page")) setPage(Math.max(1, Number(sp.get("page") || "1")));
   }, []);
 
-  // reflect state → URL
+  // reflect state â†’ URL
   useEffect(() => {
     const params = new URLSearchParams();
     if (q.trim()) params.set("q", q.trim());
@@ -369,70 +404,201 @@ export default function PuttersPage() {
     setPage(1);
   }, [q, onlyComplete, minPrice, maxPrice, conds, buying, sortBy, groupMode, broaden, dex, head, lengths]);
 
-  // Fetch results
-  useEffect(() => {
-    if (!q.trim()) {
-      setGroups([]); setOffers([]);
-      setHasNext(false); setHasPrev(false);
-      setFetchedCount(null); setKeptCount(null);
-      setApiData(null);
-      setErr("");
-      return;
-    }
-    const ctrl = new AbortController();
-    let ignore = false;
+// Fetch results (grouped vs flat) â€” clean & balanced
+useEffect(() => {
+  if (!q.trim()) {
+    setGroups([]); setOffers([]);
+    setHasNext(false); setHasPrev(false);
+    setFetchedCount(null); setKeptCount(null);
+    setApiData(null);
+    setErr("");
+    return;
+  }
 
-    const t = setTimeout(async () => {
-      setLoading(true); setErr("");
-      try {
-        const res = await fetch(apiUrl, {
-          cache: "no-store",
-          signal: ctrl.signal,
-          headers: { pragma: "no-cache", "cache-control": "no-cache" },
-        });
-        const data = await res.json();
-        if (ignore) return;
+  const ctrl = new AbortController();
+  let ignore = false;
 
-        const nextGroups = Array.isArray(data.groups) ? data.groups : [];
-        let pageOffers = Array.isArray(data.offers) ? data.offers : [];
+  async function run() {
+    setLoading(true);
+    setErr("");
 
+    try {
+      // 1) Fetch current page from the API
+      const res = await fetch(apiUrl, {
+        cache: "no-store",
+        signal: ctrl.signal,
+        headers: { pragma: "no-cache", "cache-control": "no-cache" },
+      });
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const data = await res.json();
+      if (ignore) return;
+
+      // Normalize data
+      const nextGroups = Array.isArray(data.groups) ? data.groups : [];
+      let pageOffers = Array.isArray(data.offers) ? data.offers : [];
+
+      // 2) If FLAT + price sort, aggregate & globally sort by Total-to-Door
+      const wantGlobalPriceSort =
+        !groupMode && (sortBy === "best_price_asc" || sortBy === "best_price_desc");
+
+      if (wantGlobalPriceSort) {
+        const params = new URL(apiUrl, window.location.origin);
+        const base = new URLSearchParams(params.search);
+        base.set("perPage", "50");
+        base.set("page", "1");
+
+        const mkUrl = (p) => {
+          const s = new URLSearchParams(base);
+          s.set("page", String(p));
+          return `${params.pathname}?${s.toString()}`;
+        };
+
+        const MAX_FLAT_AGG_PAGES = 6;
+        let all = [...pageOffers];
+        let p = 2;
+        let hasNext = Boolean(data.hasNext);
+
+        while (!ignore && hasNext && p <= MAX_FLAT_AGG_PAGES) {
+          const url = mkUrl(p);
+          const r = await fetch(url, {
+            cache: "no-store",
+            signal: ctrl.signal,
+            headers: { pragma: "no-cache", "cache-control": "no-cache" },
+          }).catch(() => null);
+          if (!r || !r.ok) break;
+          const j = await r.json().catch(() => ({}));
+          const arr = Array.isArray(j.offers) ? j.offers : [];
+          all = all.concat(arr);
+          hasNext = Boolean(j.hasNext);
+          p += 1;
+        }
+
+        // GLOBAL sort by Total-to-Door
+        if (sortBy === "best_price_desc") {
+          all.sort(
+            (a, b) => (_safeNum(b?.price) + _shipCost(b)) - (_safeNum(a?.price) + _shipCost(a))
+          );
+        } else {
+          all.sort(
+            (a, b) => (_safeNum(a?.price) + _shipCost(a)) - (_safeNum(b?.price) + _shipCost(b))
+          );
+        }
+
+        // Client-side pagination after global sort
+        const start = (page - 1) * FIXED_PER_PAGE;
+        const end = start + FIXED_PER_PAGE;
+        const pageSlice = all.slice(start, end);
+
+        setGroups([]);               // flat view
+        setOffers(pageSlice);
+        setHasPrev(page > 1);
+        setHasNext(end < all.length);
+        setFetchedCount(typeof data.fetchedCount === "number" ? data.fetchedCount : null);
+        setKeptCount(all.length);
+        setApiData(data);
+
+      } else {
+        // GROUPED or non-price sort in FLAT
         if (!groupMode && pageOffers.length) {
           if (sortBy === "best_price_asc") {
-            pageOffers = [...pageOffers].sort((a,b) => (a.price ?? Infinity) - (b.price ?? Infinity));
+            pageOffers = [...pageOffers].sort(
+              (a, b) => (_safeNum(a?.price) + _shipCost(a)) - (_safeNum(b?.price) + _shipCost(b))
+            );
           } else if (sortBy === "best_price_desc") {
-            pageOffers = [...pageOffers].sort((a,b) => (b.price ?? -Infinity) - (a.price ?? -Infinity));
-          } else if (sortBy === "model_asc") {
-            pageOffers = [...pageOffers].sort((a,b) => (a.title || "").localeCompare(b.title || ""));
+            pageOffers = [...pageOffers].sort(
+              (a, b) => (_safeNum(b?.price) + _shipCost(b)) - (_safeNum(a?.price) + _shipCost(a))
+            );
           }
         }
 
         setGroups(nextGroups);
         setOffers(pageOffers);
         setHasNext(Boolean(data.hasNext));
-        setHasPrev(Boolean(data.hasPrev));
+        setHasPrev(Boolean(data.hasPrev) && page > 1);
         setFetchedCount(typeof data.fetchedCount === "number" ? data.fetchedCount : null);
         setKeptCount(typeof data.keptCount === "number" ? data.keptCount : null);
         setApiData(data);
-
-        // reset per-model show-all + lows/series cache for fresh groups
-        const nextShowAll = {};
-        const resetNulls = {};
-        nextGroups.forEach(g => { nextShowAll[g.model] = false; resetNulls[g.model] = null; });
-        setShowAllOffersByModel(nextShowAll);
-        setLowsByModel((prev) => ({ ...resetNulls }));
-        setSeriesByModel((prev) => ({ ...resetNulls }));
-        // DO NOT reset statsByModel here; we keep cache (condition-aware)
-      } catch (e) {
-        if (!ignore && e.name !== "AbortError") setErr("Failed to load results. Please try again.");
-      } finally {
-        if (!ignore) setLoading(false);
       }
-    }, 150);
 
-    return () => { ignore = true; clearTimeout(t); ctrl.abort(); };
-  }, [apiUrl, groupMode, sortBy, q]);
+      // Reset per-model caches for fresh groups
+      const nextShowAll = {};
+      const resetNulls = {};
+      nextGroups.forEach(g => { nextShowAll[g.model] = false; resetNulls[g.model] = null; });
+      setShowAllOffersByModel(nextShowAll);
+      setLowsByModel(() => ({ ...resetNulls }));
+      setSeriesByModel(() => ({ ...resetNulls }));
+      // keep statsByModel cache
 
-  const sortedGroups = useMemo(() => {
+    } catch (e) {
+      if (!ignore && e.name !== "AbortError") {
+        setErr("Failed to load results. Please try again.");
+      }
+    } finally {
+      if (!ignore) setLoading(false);
+    }
+  } // end run()
+
+  const timeoutId = setTimeout(() => {
+    run();
+  }, 150);
+
+  return () => {
+    ignore = true;
+    clearTimeout(timeoutId);
+    ctrl.abort();
+  };
+}, [apiUrl, groupMode, sortBy, q, page]); // <-- END of Fetch results effect
+
+// Safely derive the listings used for stats (no early returns needed)
+const listingsForStats = useMemo(() => {
+  const safeGroups = Array.isArray(groups) ? groups : [];
+  const safeOffers = Array.isArray(offers) ? offers : [];
+  return groupMode ? safeGroups.flatMap(g => g.offers || []) : safeOffers;
+}, [groupMode, groups, offers]);
+
+// Base-model market stats (excludes variants like Circle T, limited, tour)
+const baseStatsByModel = useMemo(() => {
+  return buildBaseStats(listingsForStats);
+}, [listingsForStats]);
+
+
+
+/* ============================
+   GROUPED VIEW: prefetch stats per model
+   ============================ */
+useEffect(() => {
+  if (!Array.isArray(groups) || groups.length === 0) return;
+
+  // collect unique modelKeys that we don't already have in cache
+  const need = [];
+  const seen = new Set();
+  for (const g of groups) {
+    const mk = g.model || null;
+    if (!mk || seen.has(mk)) continue;
+    seen.add(mk);
+    if (!statsByModel[mk]) need.push(mk);
+  }
+  if (need.length === 0) return;
+
+  const ctrl = new AbortController();
+  const qs = need.map(m => `model=${encodeURIComponent(m)}`).join("&"); // <-- matches /api/model-stats
+
+  fetch(`/api/model-stats?${qs}`, { signal: ctrl.signal, cache: "no-store" })
+    .then(r => (r.ok ? r.json() : Promise.reject()))
+    .then(d => {
+      if (!d || typeof d !== "object") return;
+      setStatsByModel(prev => ({ ...prev, ...d }));
+    })
+    .catch(() => { /* ignore; badge will show "â€”" if missing */ });
+
+  return () => ctrl.abort();
+}, [groups]); // <-- END of Grouped stats effect
+
+
+
+
+
+   const sortedGroups = useMemo(() => {
     const arr = [...groups];
     if (sortBy === "best_price_asc") {
       arr.sort((a,b) => (a.bestPrice ?? Infinity) - (b.bestPrice ?? Infinity));
@@ -484,7 +650,8 @@ export default function PuttersPage() {
         const groupObj = groups.find((x) => x.model === model) || null;
         const condParam = selectedConditionBand(conds) || inferConditionBandFromOffers(groupObj?.offers || []) || "";
         const url = `/api/model-stats?model=${encodeURIComponent(model)}${condParam ? `&condition=${encodeURIComponent(condParam)}` : ""}`;
-        const statsKey = getStatsKey(model, condParam);
+        const statsKey = getStatsKey(model, condParam); // keep cache key
+// Ensure API call uses raw model string, not statsKey
         if (statsByModel[statsKey] === undefined) {
           const r = await fetch(url, { cache: "no-store" });
           const j = await r.json();
@@ -522,7 +689,7 @@ export default function PuttersPage() {
     return { domDex, domHead, domLen: domLenVal };
   }
 
-  // quick “Great deal/Good deal” chip (kept for the summary row)
+  // quick â€œGreat deal/Good dealâ€ chip (kept for the summary row)
   function fairPriceBadge(best, stats) {
     if (!best || !stats) return null;
     const p10 = Number(stats.p10), p50 = Number(stats.p50);
@@ -541,85 +708,39 @@ export default function PuttersPage() {
     setPage(1); setGroupMode(true); setBroaden(false);
   };
 
-  /* ============================
-     FLAT VIEW: prefetch stats for visible items (variant + base)
-     ============================ */
-  useEffect(() => {
-    // Only run in flat/advanced mode when we have offers
-    if (!q.trim() || loading || err || groupMode || !showAdvanced) return;
-    if (!Array.isArray(offers) || offers.length === 0) return;
+/* ============================
+   FLAT VIEW: prefetch stats for visible items
+   ============================ */
+useEffect(() => {
+  if (groupMode) return;
+  if (!Array.isArray(offers) || offers.length === 0) return;
+  if (loading || err) return;
 
-    let abort = false;
-    const selCond = selectedConditionBand(conds) || "";
-    const seen = new Set();
-    const jobs = [];
+  const need = [];
+  const seen = new Set();
+  for (const o of offers) {
+    const mk = o.model || null;
+    if (!mk || seen.has(mk)) continue;
+    seen.add(mk);
+    if (!statsByModel[mk]) need.push(mk);
+  }
+  if (need.length === 0) return;
 
-    for (const o of offers) {
-      const modelKey = getModelKey(o);
-      const condParam =
-        (o?.conditionBand || o?.condition || "").toUpperCase() ||
-        selCond ||
-        "";
-      const variant = detectVariant(o?.title);
+  const ctrl = new AbortController();
+  const qs = need.map(m => `model=${encodeURIComponent(m)}`).join("&");  // âœ… define qs
 
-      // 1) Variant key first
-      if (variant) {
-        const vKey = getStatsKey3(modelKey, variant, condParam);
-        if (vKey && !statsByModel[vKey]) {
-          const vUrl =
-            `/api/model-stats?model=${encodeURIComponent(modelKey)}` +
-            `${condParam ? `&condition=${encodeURIComponent(condParam)}` : ""}` +
-            `&variant=${encodeURIComponent(variant)}`;
-
-          if (!seen.has(vUrl)) {
-            seen.add(vUrl);
-            jobs.push(
-              fetch(vUrl)
-                .then((r) => (r.ok ? r.json() : null))
-                .then((json) => {
-                  if (abort || !json) return;
-                  const stats = json?.stats ?? json;
-                  if (stats && Object.keys(stats).length) {
-                    setStatsByModel((prev) => ({ ...prev, [vKey]: stats }));
-                  }
-                })
-                .catch(() => {})
-            );
-          }
-        }
+  fetch(`/api/model-stats?${qs}`, { signal: ctrl.signal, cache: "no-store" })
+    .then(r => (r.ok ? r.json() : Promise.reject()))
+    .then(d => {
+      if (d && typeof d === "object") {
+        setStatsByModel(prev => ({ ...prev, ...d }));
       }
+    })
+    .catch(() => {});
+  return () => ctrl.abort();
+}, [groupMode, offers, loading, err]);
 
-      // 2) Base key fallback
-      const baseKey = getStatsKey(modelKey, condParam);
-      if (baseKey && !statsByModel[baseKey]) {
-        const baseUrl =
-          `/api/model-stats?model=${encodeURIComponent(modelKey)}` +
-          `${condParam ? `&condition=${encodeURIComponent(condParam)}` : ""}`;
 
-        if (!seen.has(baseUrl)) {
-          seen.add(baseUrl);
-          jobs.push(
-            fetch(baseUrl)
-              .then((r) => (r.ok ? r.json() : null))
-              .then((json) => {
-                if (abort || !json) return;
-                const stats = json?.stats ?? json;
-                if (stats && Object.keys(stats).length) {
-                  setStatsByModel((prev) => ({ ...prev, [baseKey]: stats }));
-                }
-              })
-              .catch(() => {})
-          );
-        }
-      }
-    }
-
-    if (jobs.length) {
-      Promise.all(jobs).catch(() => {});
-    }
-
-    return () => { abort = true; };
-  }, [q, loading, err, groupMode, showAdvanced, offers, JSON.stringify(conds)]);
 
   return (
     <main className="mx-auto max-w-6xl px-4 py-8">
@@ -627,7 +748,7 @@ export default function PuttersPage() {
         <div>
           <h1 className="text-3xl font-semibold tracking-tight">Compare Putter Prices</h1>
           <p className="mt-1 text-sm text-gray-500">
-            Type a model (e.g., <em>“scotty cameron newport”</em>) or pick a brand.
+            Type a model (e.g., <em>â€œscotty cameron newportâ€</em>) or pick a brand.
           </p>
           <p className="mt-1 text-xs text-gray-500">
             Badges based on recent comps. <a className="text-blue-600 underline" href="/methodology">See methodology</a>.
@@ -635,8 +756,8 @@ export default function PuttersPage() {
         </div>
         {q.trim() && (
           <div className="text-sm text-gray-500">
-            {groupMode ? "Grouped by model" : "Flat list"} · Page{" "}
-            <span className="font-medium">{page}</span> ·{" "}
+            {groupMode ? "Grouped by model" : "Flat list"} Â· Page{" "}
+            <span className="font-medium">{page}</span> Â·{" "}
             <span className="font-medium">{FIXED_PER_PAGE}</span>{" "}
             {groupMode ? "groups" : "listings"}
           </div>
@@ -680,8 +801,8 @@ export default function PuttersPage() {
         ))}
       </section>
 
-      {/* Top controls */}
-      <section className="mt-6 grid grid-cols-1 gap-3 md:grid-cols-5">
+      {/* Top controls (added View toggle; kept colors) */}
+      <section className="mt-6 grid grid-cols-1 gap-3 md:grid-cols-6">
         <div className="md:col-span-2">
           <label className="mb-1 block text-sm font-medium">Search</label>
           <input
@@ -706,31 +827,52 @@ export default function PuttersPage() {
           </select>
         </div>
 
+        {/* New: View toggle (Grouped / Flat) */}
+        <div>
+          <label className="mb-1 block text-sm font-medium">View</label>
+          <div className="inline-flex w-full overflow-hidden rounded-md border border-gray-300">
+            <button
+              onClick={() => setGroupMode(true)}
+              className={`flex-1 px-3 py-2 text-sm ${groupMode ? "bg-gray-100 font-semibold" : "hover:bg-gray-50"}`}
+              aria-pressed={groupMode}
+            >
+              Grouped
+            </button>
+            <button
+              onClick={() => { setGroupMode(false); }}
+              className={`flex-1 px-3 py-2 text-sm ${!groupMode ? "bg-gray-100 font-semibold" : "hover:bg-gray-50"}`}
+              aria-pressed={!groupMode}
+            >
+              Flat
+            </button>
+          </div>
+        </div>
+
         <div className="rounded-md border border-gray-200 p-3">
           <label className="flex items-center gap-2 text-sm">
             <input type="checkbox" checked={broaden} onChange={(e) => setBroaden(e.target.checked)} />
             Broaden search (include common variants)
           </label>
           <p className="mt-1 text-xs text-gray-500">
-            Pulls more pages from eBay before filtering. Helpful for niche models/years.
+            Pulls more pages before filtering. Helpful for niche models/years.
           </p>
         </div>
-	<div className="rounded-md border border-gray-200 p-3">
-  <label className="flex items-center gap-2 text-sm">
-    <input
-      type="checkbox"
-      checked={includeProShops}
-      onChange={(e) => setIncludeProShops(e.target.checked)}
-    />
-    Include pro-shop sites (2nd Swing – beta)
-  </label>
-  <p className="mt-1 text-xs text-gray-500">
-    Adds 2nd Swing listings when enabled.
-  </p>
-</div>
 
+        <div className="rounded-md border border-gray-200 p-3">
+          <label className="flex items-center gap-2 text-sm">
+            <input
+              type="checkbox"
+              checked={includeProShops}
+              onChange={(e) => setIncludeProShops(e.target.checked)}
+            />
+            Include pro-shop sites (2nd Swing â€“ beta)
+          </label>
+          <p className="mt-1 text-xs text-gray-500">
+            Adds 2nd Swing listings when enabled.
+          </p>
+        </div>
 
-        <div className="flex items-end justify-between gap-3">
+        <div className="flex items-end justify-between gap-3 md:col-span-6">
           <button onClick={clearAll} className="w-full rounded-md border border-gray-300 px-3 py-2 text-sm hover:bg-gray-100">
             Clear
           </button>
@@ -764,7 +906,7 @@ export default function PuttersPage() {
               onChange={(e) => setMinPrice(e.target.value)}
               className="w-full rounded-md border border-gray-300 px-2 py-1"
             />
-            <span className="text-gray-400">—</span>
+            <span className="text-gray-400">â€”</span>
             <input
               type="number"
               min="0"
@@ -884,7 +1026,7 @@ export default function PuttersPage() {
               </label>
             ))}
             <div className="text-xs text-gray-500 basis-full">
-              We match titles within ±0.5&quot; of the selected length(s).
+              We match titles within Â±0.5&quot; of the selected length(s).
             </div>
           </div>
         </div>
@@ -911,27 +1053,7 @@ export default function PuttersPage() {
             ))}
           </div>
 
-          <div className="mt-4">
-            <label className="flex items-center gap-2 text-sm">
-              <input
-                type="checkbox"
-                checked={showAdvanced}
-                onChange={(e) => setShowAdvanced(e.target.checked)}
-              />
-              Show advanced options
-            </label>
-
-            {showAdvanced && (
-              <label className="mt-3 flex items-center gap-2 text-sm">
-                <input
-                  type="checkbox"
-                  checked={groupMode}
-                  onChange={(e) => setGroupMode(e.target.checked)}
-                />
-                Group similar listings (model cards)
-              </label>
-            )}
-          </div>
+         
         </div>
       </section>
 
@@ -1011,7 +1133,7 @@ export default function PuttersPage() {
               const fair = fairPriceBadge(g.bestPrice, stats);
 
               return (
-                <article key={g.model} className="overflow-hidden rounded-xl border border-gray-200 bg-white shadow-sm">
+                <article key={g.model} className="overflow-hidden rounded-xl border border-gray-200 bg-white shadow-sm hover:shadow-md transition-shadow">
                   <div className="relative aspect-[4/3] w-full max-h-48 bg-gray-50">
                     {g.image ? (
                       // eslint-disable-next-line @next/next/no-img-element
@@ -1028,7 +1150,7 @@ export default function PuttersPage() {
                       <div className="min-w-0">
                         <h3 className="text-lg font-semibold leading-tight">{g.model}</h3>
                         <p className="mt-1 text-xs text-gray-500">
-                          {g.count} offer{g.count === 1 ? "" : "s"} · {g.retailers.join(", ")}
+                          {g.count} offer{g.count === 1 ? "" : "s"} Â· {g.retailers.join(", ")}
                         </p>
 
                         {/* Dominant chips + BADGES */}
@@ -1049,8 +1171,18 @@ export default function PuttersPage() {
                             </span>
                           )}
 
-                          {/* Group header price badge */}
-                          <SmartPriceBadge price={Number(g.bestPrice)} baseStats={stats} className="ml-1" />
+                        {/* Group header price badge (use model stats) */}
+<SmartPriceBadge
+  // If you track shipping at the group level, include it:
+  total={_safeNum(g.bestPrice) + _shipCost(g)}
+  // Or fall back to price-only if you prefer:
+  // price={Number(g.bestPrice)}
+
+  stats={statsByModel[g.modelKey || g.model]}  // <-- stats from the effect above
+  className="ml-1"
+ baseStats={baseStatsByModel[normalizeModel((o?.model || o?.groupModel || o?.title))]} />
+
+
 
                           {/* Optional quick chip */}
                           {fair && (
@@ -1104,7 +1236,7 @@ export default function PuttersPage() {
                         {bestDelta && (
                           <div
                             className="rounded-full bg-emerald-50 px-3 py-1 text-[11px] font-medium text-emerald-700"
-                            title={`Median ${formatPrice(med)} · Save ~${formatPrice(bestDelta.diff)} (~${bestDelta.pct.toFixed(0)}%)`}
+                            title={`Median ${formatPrice(med)} Â· Save ~${formatPrice(bestDelta.diff)} (~${bestDelta.pct.toFixed(0)}%)`}
                           >
                             Save {formatPrice(bestDelta.diff)} (~{bestDelta.pct.toFixed(0)}%)
                           </div>
@@ -1199,20 +1331,20 @@ export default function PuttersPage() {
                                   {/* Enhanced spec line */}
                                   <div className="mt-0.5 truncate text-xs text-gray-500">
                                     {(o.specs?.dexterity || "").toUpperCase() === "LEFT" ? "LH" :
-                                     (o.specs?.dexterity || "").toUpperCase() === "RIGHT" ? "RH" : "—"}
-                                    {" · "}
-                                    {(o.specs?.headType || "").toUpperCase() || "—"}
-                                    {" · "}
-                                    {Number.isFinite(Number(o?.specs?.length)) ? `${o.specs.length}"` : "—"}
-                                    {o?.specs?.shaft && <> · {String(o.specs.shaft).toLowerCase()}</>}
-                                    {o?.specs?.hosel && <> · {o.specs.hosel}</>}
-                                    {o?.specs?.face && <> · {o.specs.face}</>}
-                                    {o?.specs?.grip && <> · {o.specs.grip}</>}
-                                    {o?.specs?.hasHeadcover && <> · HC</>}
-                                    {o?.specs?.toeHang && <> · {o.specs.toeHang} toe</>}
-                                    {Number.isFinite(Number(o?.specs?.loft)) && <> · {o.specs.loft}° loft</>}
-                                    {Number.isFinite(Number(o?.specs?.lie)) && <> · {o.specs.lie}° lie</>}
-                                    {o.createdAt && (<> · listed {timeAgo(new Date(o.createdAt).getTime())}</>)}
+                                     (o.specs?.dexterity || "").toUpperCase() === "RIGHT" ? "RH" : "â€”"}
+                                    {" Â· "}
+                                    {(o.specs?.headType || "").toUpperCase() || "â€”"}
+                                    {" Â· "}
+                                    {Number.isFinite(Number(o?.specs?.length)) ? `${o.specs.length}"` : "â€”"}
+                                    {o?.specs?.shaft && <> Â· {String(o.specs.shaft).toLowerCase()}</>}
+                                    {o?.specs?.hosel && <> Â· {o.specs.hosel}</>}
+                                    {o?.specs?.face && <> Â· {o.specs.face}</>}
+                                    {o?.specs?.grip && <> Â· {o.specs.grip}</>}
+                                    {o?.specs?.hasHeadcover && <> Â· HC</>}
+                                    {o?.specs?.toeHang && <> Â· {o.specs.toeHang} toe</>}
+                                    {Number.isFinite(Number(o?.specs?.loft)) && <> Â· {o.specs.loft}Â° loft</>}
+                                    {Number.isFinite(Number(o?.specs?.lie)) && <> Â· {o.specs.lie}Â° lie</>}
+                                    {o.createdAt && (<> Â· listed {timeAgo(new Date(o.createdAt).getTime())}</>)}
                                   </div>
                                 </div>
                               </div>
@@ -1228,13 +1360,13 @@ export default function PuttersPage() {
                                   brand={g?.brand}
                                 />
                                 <span className="text-sm font-semibold">
-                                  {typeof o.price === "number" ? formatPrice(o.price, o.currency) : "—"}
+                                  {typeof o.price === "number" ? formatPrice(o.price, o.currency) : "â€”"}
                                 </span>
                                 <a
                                   href={o.url}
                                   target="_blank"
                                   rel="noreferrer"
-                                  className="rounded-md border px-2 py-1 text-xs"
+                                  className="rounded-md border px-2 py-1 text-xs hover:bg-gray-50"
                                 >
                                   View
                                 </a>
@@ -1261,39 +1393,40 @@ export default function PuttersPage() {
               onClick={() => setPage((p) => Math.max(1, p - 1))}
               className={`rounded-md border px-3 py-2 text-sm ${canPrev ? "hover:bg-gray-100" : "cursor-not-allowed opacity-50"}`}
             >
-              ← Prev
+              â† Prev
             </button>
             <div className="text-sm text-gray-600">
-              Page <span className="font-medium">{page}</span> · {FIXED_PER_PAGE} groups per page
+              Page <span className="font-medium">{page}</span> Â· {FIXED_PER_PAGE} groups per page
             </div>
             <button
               disabled={!canNext}
               onClick={() => setPage((p) => p + 1)}
               className={`rounded-md border px-3 py-2 text-sm ${canNext ? "hover:bg-gray-100" : "cursor-not-allowed opacity-50"}`}
             >
-              Next →
+              Next â†’
             </button>
           </div>
         </>
       )}
 
-      {/* FLAT VIEW (advanced) */}
-      {q.trim() && !loading && !err && !groupMode && showAdvanced && (
+      {/* FLAT VIEW (now independent of "advanced") */}
+      {q.trim() && !loading && !err && !groupMode && (
         <>
           <section className="mt-6 grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
             {offers.map((o) => {
               const modelKey = getModelKey(o);
-              const condParam =
-                (o?.conditionBand || o?.condition || "").toUpperCase() ||
-                selectedConditionBand(conds) ||
-                "";
+            const condParam =
+  (o?.conditionBand || o?.condition || "").toUpperCase() ||
+  selectedConditionBand(conds) ||
+  "";
+
               const variant    = detectVariant(o?.title);
               const variantKey = getStatsKey3(modelKey, variant, condParam);
               const baseKey    = getStatsKey(modelKey, condParam);
               const stats      = statsByModel[variantKey] ?? statsByModel[baseKey] ?? null;
 
               return (
-                <article key={o.productId + o.url} className="overflow-hidden rounded-xl border border-gray-200 bg-white shadow-sm">
+                <article key={o.productId + o.url} className="overflow-hidden rounded-xl border border-gray-200 bg-white shadow-sm hover:shadow-md transition-shadow">
                   <div className="relative aspect-[4/3] w-full bg-gray-50">
                     {o.image ? (
                       // eslint-disable-next-line @next/next/no-img-element
@@ -1305,19 +1438,19 @@ export default function PuttersPage() {
                   <div className="p-4">
                     <h3 className="line-clamp-2 text-sm font-semibold">{o.title}</h3>
                     <p className="mt-1 text-xs text-gray-500">
-                      {o?.seller?.username && <>@{o.seller.username} · </>}
-                      {typeof o?.seller?.feedbackPct === "number" && <>{o.seller.feedbackPct.toFixed(1)}% · </>}
-                      {(o.specs?.dexterity || "").toUpperCase() || "—"} · {(o.specs?.headType || "").toUpperCase() || "—"} ·
-                      {Number.isFinite(Number(o?.specs?.length)) ? `${o.specs.length}"` : "—"}
-                      {o?.specs?.shaft && <> · {String(o.specs.shaft).toLowerCase()}</>}
-                      {o?.specs?.hosel && <> · {o.specs.hosel}</>}
-                      {o?.specs?.face && <> · {o.specs.face}</>}
-                      {o?.specs?.grip && <> · {o.specs.grip}</>}
-                      {o?.specs?.hasHeadcover && <> · HC</>}
-                      {o?.specs?.toeHang && <> · {o.specs.toeHang} toe</>}
-                      {Number.isFinite(Number(o?.specs?.loft)) && <> · {o.specs.loft}° loft</>}
-                      {Number.isFinite(Number(o?.specs?.lie)) && <> · {o.specs.lie}° lie</>}
-                      {o.createdAt && (<> · listed {timeAgo(new Date(o.createdAt).getTime())}</>)}
+                      {o?.seller?.username && <>@{o.seller.username} Â· </>}
+                      {typeof o?.seller?.feedbackPct === "number" && <>{o.seller.feedbackPct.toFixed(1)}% Â· </>}
+                      {(o.specs?.dexterity || "").toUpperCase() || "â€”"} Â· {(o.specs?.headType || "").toUpperCase() || "â€”"} Â·
+                      {Number.isFinite(Number(o?.specs?.length)) ? `${o.specs.length}"` : "â€”"}
+                      {o?.specs?.shaft && <> Â· {String(o.specs.shaft).toLowerCase()}</>}
+                      {o?.specs?.hosel && <> Â· {o.specs.hosel}</>}
+                      {o?.specs?.face && <> Â· {o.specs.face}</>}
+                      {o?.specs?.grip && <> Â· {o.specs.grip}</>}
+                      {o?.specs?.hasHeadcover && <> Â· HC</>}
+                      {o?.specs?.toeHang && <> Â· {o.specs.toeHang} toe</>}
+                      {Number.isFinite(Number(o?.specs?.loft)) && <> Â· {o.specs.loft}Â° loft</>}
+                      {Number.isFinite(Number(o?.specs?.lie)) && <> Â· {o.specs.lie}Â° lie</>}
+                      {o.createdAt && (<> Â· listed {timeAgo(new Date(o.createdAt).getTime())}</>)}
                     </p>
 
                     <div className="mt-3 flex items-center justify-between">
@@ -1332,7 +1465,11 @@ export default function PuttersPage() {
                           className="mr-2"
                         />
 
-                        <span className="text-base font-semibold">{formatPrice(o.price, o.currency)}</span>
+                        <span className="text-base font-semibold">{formatPrice(_totalOf(o), o.currency)}</span>
+<span className="ml-2 text-[11px] text-gray-500">
+  ({formatPrice(o.price, o.currency)} + {formatPrice(_shipCost(o), o.currency)} ship)
+</span>
+
 
                         {/* Optional Save $ chip if below median */}
                         {(() => {
@@ -1343,7 +1480,7 @@ export default function PuttersPage() {
                             return (
                               <span
                                 className="rounded-full bg-emerald-50 px-2 py-0.5 text-[11px] font-medium text-emerald-700"
-                                title={`Median ${formatPrice(Number(p50))} · Save ~${formatPrice(save)} (~${pct}%)`}
+                                title={`Median ${formatPrice(Number(p50))} Â· Save ~${formatPrice(save)} (~${pct}%)`}
                               >
                                 Save {formatPrice(save)}
                               </span>
@@ -1358,7 +1495,7 @@ export default function PuttersPage() {
                         href={o.url}
                         target="_blank"
                         rel="noopener noreferrer"
-                        className="inline-flex items-center rounded-md bg-blue-600 px-3 py-1.5 text-sm font-medium text-white hover:bg-blue-700"
+                        className="inline-flex items-center rounded-md border px-3 py-1.5 text-sm hover:bg-gray-50"
                       >
                         View
                       </a>
@@ -1369,28 +1506,34 @@ export default function PuttersPage() {
             })}
           </section>
 
-          {/* Pagination (flat) */}
-          <div className="mt-8 flex items-center justify-between">
-            <button
-              disabled={!hasPrev || page <= 1 || loading}
-              onClick={() => setPage((p) => Math.max(1, p - 1))}
-              className={`rounded-md border px-3 py-2 text-sm ${hasPrev && page > 1 && !loading ? "hover:bg-gray-100" : "cursor-not-allowed opacity-50"}`}
-            >
-              ← Prev
-            </button>
-            <div className="text-sm text-gray-600">
-              Page <span className="font-medium">{page}</span> · {FIXED_PER_PAGE} listings per page
-            </div>
-            <button
-              disabled={!hasNext || loading}
-              onClick={() => setPage((p) => p + 1)}
-              className={`rounded-md border px-3 py-2 text-sm ${hasNext && !loading ? "hover:bg-gray-100" : "cursor-not-allowed opacity-50"}`}
-            >
-              Next →
-            </button>
-          </div>
-        </>
-      )}
-    </main>
-  );
+         {/* Pagination (flat) */}
+<div className="mt-8 flex items-center justify-between">
+  <button
+    disabled={!hasPrev || page <= 1 || loading}
+    onClick={() => setPage((p) => Math.max(1, p - 1))}
+    className={`rounded-md border px-3 py-2 text-sm ${
+      hasPrev && page > 1 && !loading ? "hover:bg-gray-100" : "cursor-not-allowed opacity-50"
+    }`}
+  >
+    &larr; Prev
+  </button>
+
+  <div className="text-sm text-gray-600">
+    Page <span className="font-medium">{page}</span> &middot; {FIXED_PER_PAGE} listings per page
+  </div>
+
+  <button
+    disabled={!hasNext || loading}
+    onClick={() => setPage((p) => p + 1)}
+    className={`rounded-md border px-3 py-2 text-sm ${
+      hasNext && !loading ? "hover:bg-gray-100" : "cursor-not-allowed opacity-50"
+    }`}
+  >
+    Next &rarr;
+  </button>
+</div>
+      </>
+    )}
+  </main>
+);
 }
