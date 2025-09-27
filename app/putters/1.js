@@ -12,6 +12,26 @@ function formatPrice(value, currency = "USD") {
     return `$${value.toFixed(2)}`;
   }
 }
+
+function numericValue(value) {
+  const n = Number(value);
+  return Number.isFinite(n) ? n : null;
+}
+
+function offerAmount(offer) {
+  if (!offer) return null;
+  const total = numericValue(offer?.total);
+  if (total !== null) return total;
+  return numericValue(offer?.price);
+}
+
+function groupBestAmount(group) {
+  if (!group) return null;
+  const total = numericValue(group?.bestTotal);
+  if (total !== null) return total;
+  return numericValue(group?.bestPrice);
+}
+
 function timeAgo(ts) {
   if (!ts) return "";
   const mins = Math.floor((Date.now() - ts) / 60000);
@@ -245,10 +265,26 @@ export default function PuttersPage() {
         let pageOffers = Array.isArray(data.offers) ? data.offers : [];
 
         if (!groupMode && pageOffers.length) {
+          const ascByAmount = (a, b) => {
+            const av = offerAmount(a);
+            const bv = offerAmount(b);
+            if (av === null && bv === null) return 0;
+            if (av === null) return 1;
+            if (bv === null) return -1;
+            return av - bv;
+          };
+          const descByAmount = (a, b) => {
+            const av = offerAmount(a);
+            const bv = offerAmount(b);
+            if (av === null && bv === null) return 0;
+            if (av === null) return 1;
+            if (bv === null) return -1;
+            return bv - av;
+          };
           if (sortBy === "best_price_asc") {
-            pageOffers = [...pageOffers].sort((a,b) => (a.price ?? Infinity) - (b.price ?? Infinity));
+            pageOffers = [...pageOffers].sort(ascByAmount);
           } else if (sortBy === "best_price_desc") {
-            pageOffers = [...pageOffers].sort((a,b) => (b.price ?? -Infinity) - (a.price ?? -Infinity));
+            pageOffers = [...pageOffers].sort(descByAmount);
           } else if (sortBy === "model_asc") {
             pageOffers = [...pageOffers].sort((a,b) => (a.title || "").localeCompare(b.title || ""));
           }
@@ -281,9 +317,23 @@ export default function PuttersPage() {
   const sortedGroups = useMemo(() => {
     const arr = [...groups];
     if (sortBy === "best_price_asc") {
-      arr.sort((a,b) => (a.bestPrice ?? Infinity) - (b.bestPrice ?? Infinity));
+      arr.sort((a,b) => {
+        const av = groupBestAmount(a);
+        const bv = groupBestAmount(b);
+        if (av === null && bv === null) return 0;
+        if (av === null) return 1;
+        if (bv === null) return -1;
+        return av - bv;
+      });
     } else if (sortBy === "best_price_desc") {
-      arr.sort((a,b) => (b.bestPrice ?? -Infinity) - (a.bestPrice ?? -Infinity));
+      arr.sort((a,b) => {
+        const av = groupBestAmount(a);
+        const bv = groupBestAmount(b);
+        if (av === null && bv === null) return 0;
+        if (av === null) return 1;
+        if (bv === null) return -1;
+        return bv - av;
+      });
     } else if (sortBy === "count_desc") {
       arr.sort((a,b) => (b.count ?? 0) - (a.count ?? 0));
     } else if (sortBy === "model_asc") {
@@ -504,14 +554,32 @@ export default function PuttersPage() {
 
               const ordered =
                 sortBy === "best_price_desc"
-                  ? [...g.offers].sort((a,b) => (b.price ?? -Infinity) - (a.price ?? -Infinity))
-                  : [...g.offers].sort((a,b) => (a.price ?? Infinity) - (b.price ?? Infinity));
+                  ? [...g.offers].sort((a, b) => {
+                      const av = offerAmount(a);
+                      const bv = offerAmount(b);
+                      if (av === null && bv === null) return 0;
+                      if (av === null) return 1;
+                      if (bv === null) return -1;
+                      return bv - av;
+                    })
+                  : [...g.offers].sort((a, b) => {
+                      const av = offerAmount(a);
+                      const bv = offerAmount(b);
+                      if (av === null && bv === null) return 0;
+                      if (av === null) return 1;
+                      if (bv === null) return -1;
+                      return av - bv;
+                    });
 
-              const nums = ordered.map(o => o?.price).filter(x => typeof x === "number").sort((a,b)=>a-b);
+              const nums = ordered
+                .map((o) => offerAmount(o))
+                .filter((x) => Number.isFinite(x))
+                .sort((a, b) => a - b);
               const n = nums.length;
               const med = n < 2 ? null : (n % 2 ? nums[Math.floor(n/2)] : (nums[n/2-1]+nums[n/2])/2);
-              const bestDelta = (typeof g.bestPrice === "number" && typeof med === "number" && med - g.bestPrice > 0)
-                ? { diff: med - g.bestPrice, pct: ((med - g.bestPrice)/med)*100 }
+              const bestAmount = groupBestAmount(g);
+              const bestDelta = (Number.isFinite(bestAmount) && Number.isFinite(med) && med - bestAmount > 0)
+                ? { diff: med - bestAmount, pct: ((med - bestAmount)/med)*100 }
                 : null;
 
               const { domDex, domHead, domLen } = summarizeDexHead(g);
@@ -577,7 +645,7 @@ export default function PuttersPage() {
 
                       <div className="flex flex-col items-end gap-1">
                         <div className="shrink-0 rounded-full bg-green-100 px-3 py-1 text-xs font-semibold text-green-700">
-                          Best: {formatPrice(g.bestPrice, g.bestCurrency)}
+                          Best: {formatPrice(bestAmount, g.bestCurrency)}
                         </div>
                         {bestDelta && (
                           <div
@@ -624,49 +692,52 @@ export default function PuttersPage() {
 
                     {isOpen && (
                       <ul className="mt-3 space-y-2">
-                        {list.map((o) => (
-                          <li key={o.productId + o.url} className="flex items-center justify-between gap-3 rounded border border-gray-100 p-2">
-                            <div className="flex min-w-0 items-center gap-2">
-                              {retailerLogos[o.retailer] && (
-                                // eslint-disable-next-line @next/next/no-img-element
-                                <img src={retailerLogos[o.retailer]} alt={o.retailer} className="h-4 w-12 object-contain" />
-                              )}
-                              <div className="min-w-0">
-                                <div className="truncate text-sm font-medium">
-                                  {o.retailer}
-                                  {o?.seller?.username && (
-                                    <span className="ml-2 text-xs text-gray-500">@{o.seller.username}</span>
-                                  )}
-                                  {typeof o?.seller?.feedbackPct === "number" && (
-                                    <span className="ml-2 rounded-full bg-gray-100 px-2 py-[2px] text-[11px] font-medium text-gray-700">
-                                      {o.seller.feedbackPct.toFixed(1)}%
-                                    </span>
-                                  )}
-                                </div>
-                                <div className="mt-0.5 truncate text-xs text-gray-500">
-                                  {(o.specs?.dexterity || "").toUpperCase() === "LEFT" ? "LH" :
-                                   (o.specs?.dexterity || "").toUpperCase() === "RIGHT" ? "RH" : "—"}
-                                  {" · "}
-                                  {(o.specs?.headType || "").toUpperCase() || "—"}
-                                  {" · "}
-                                  {Number.isFinite(Number(o?.specs?.length)) ? `${o.specs.length}"` : "—"}
-                                  {o.createdAt && (<> · listed {timeAgo(new Date(o.createdAt).getTime())}</>)}
+                        {list.map((o) => {
+                          const offerValue = offerAmount(o);
+                          return (
+                            <li key={o.productId + o.url} className="flex items-center justify-between gap-3 rounded border border-gray-100 p-2">
+                              <div className="flex min-w-0 items-center gap-2">
+                                {retailerLogos[o.retailer] && (
+                                  // eslint-disable-next-line @next/next/no-img-element
+                                  <img src={retailerLogos[o.retailer]} alt={o.retailer} className="h-4 w-12 object-contain" />
+                                )}
+                                <div className="min-w-0">
+                                  <div className="truncate text-sm font-medium">
+                                    {o.retailer}
+                                    {o?.seller?.username && (
+                                      <span className="ml-2 text-xs text-gray-500">@{o.seller.username}</span>
+                                    )}
+                                    {typeof o?.seller?.feedbackPct === "number" && (
+                                      <span className="ml-2 rounded-full bg-gray-100 px-2 py-[2px] text-[11px] font-medium text-gray-700">
+                                        {o.seller.feedbackPct.toFixed(1)}%
+                                      </span>
+                                    )}
+                                  </div>
+                                  <div className="mt-0.5 truncate text-xs text-gray-500">
+                                    {(o.specs?.dexterity || "").toUpperCase() === "LEFT" ? "LH" :
+                                     (o.specs?.dexterity || "").toUpperCase() === "RIGHT" ? "RH" : "—"}
+                                    {" · "}
+                                    {(o.specs?.headType || "").toUpperCase() || "—"}
+                                    {" · "}
+                                    {Number.isFinite(Number(o?.specs?.length)) ? `${o.specs.length}"` : "—"}
+                                    {o.createdAt && (<> · listed {timeAgo(new Date(o.createdAt).getTime())}</>)}
+                                  </div>
                                 </div>
                               </div>
-                            </div>
-                            <div className="flex items-center gap-3">
-                              <span className="text-sm font-semibold">{formatPrice(o.price, o.currency)}</span>
-                              <a
-                                href={o.url}
-                                target="_blank"
-                                rel="noopener noreferrer"
-                                className="inline-flex items-center rounded-md bg-blue-600 px-3 py-1.5 text-sm font-medium text-white hover:bg-blue-700"
-                              >
-                                View
-                              </a>
-                            </div>
-                          </li>
-                        ))}
+                              <div className="flex items-center gap-3">
+                                <span className="text-sm font-semibold">{formatPrice(offerValue, o.currency)}</span>
+                                <a
+                                  href={o.url}
+                                  target="_blank"
+                                  rel="noopener noreferrer"
+                                  className="inline-flex items-center rounded-md bg-blue-600 px-3 py-1.5 text-sm font-medium text-white hover:bg-blue-700"
+                                >
+                                  View
+                                </a>
+                              </div>
+                            </li>
+                          );
+                        })}
                         {!showAll && g.count > 10 && (
                           <li className="px-2 pt-1 text-xs text-gray-500">Showing top 10 offers.</li>
                         )}

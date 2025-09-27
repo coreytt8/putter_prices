@@ -118,6 +118,26 @@ function formatPrice(value, currency = "USD") {
     return `$${value.toFixed(2)}`;
   }
 }
+
+function numericValue(value) {
+  const n = Number(value);
+  return Number.isFinite(n) ? n : null;
+}
+
+function offerAmount(offer) {
+  if (!offer) return null;
+  const total = numericValue(offer?.total);
+  if (total !== null) return total;
+  return numericValue(offer?.price);
+}
+
+function groupBestAmount(group) {
+  if (!group) return null;
+  const total = numericValue(group?.bestTotal);
+  if (total !== null) return total;
+  return numericValue(group?.bestPrice);
+}
+
 function timeAgo(ts) {
   if (!ts) return "";
   const mins = Math.floor((Date.now() - ts) / 60000);
@@ -396,10 +416,26 @@ export default function PuttersPage() {
         let pageOffers = Array.isArray(data.offers) ? data.offers : [];
 
         if (!groupMode && pageOffers.length) {
+          const ascByAmount = (a, b) => {
+            const av = offerAmount(a);
+            const bv = offerAmount(b);
+            if (av === null && bv === null) return 0;
+            if (av === null) return 1;
+            if (bv === null) return -1;
+            return av - bv;
+          };
+          const descByAmount = (a, b) => {
+            const av = offerAmount(a);
+            const bv = offerAmount(b);
+            if (av === null && bv === null) return 0;
+            if (av === null) return 1;
+            if (bv === null) return -1;
+            return bv - av;
+          };
           if (sortBy === "best_price_asc") {
-            pageOffers = [...pageOffers].sort((a,b) => (a.price ?? Infinity) - (b.price ?? Infinity));
+            pageOffers = [...pageOffers].sort(ascByAmount);
           } else if (sortBy === "best_price_desc") {
-            pageOffers = [...pageOffers].sort((a,b) => (b.price ?? -Infinity) - (a.price ?? -Infinity));
+            pageOffers = [...pageOffers].sort(descByAmount);
           } else if (sortBy === "model_asc") {
             pageOffers = [...pageOffers].sort((a,b) => (a.title || "").localeCompare(b.title || ""));
           }
@@ -434,9 +470,23 @@ export default function PuttersPage() {
   const sortedGroups = useMemo(() => {
     const arr = [...groups];
     if (sortBy === "best_price_asc") {
-      arr.sort((a,b) => (a.bestPrice ?? Infinity) - (b.bestPrice ?? Infinity));
+      arr.sort((a,b) => {
+        const av = groupBestAmount(a);
+        const bv = groupBestAmount(b);
+        if (av === null && bv === null) return 0;
+        if (av === null) return 1;
+        if (bv === null) return -1;
+        return av - bv;
+      });
     } else if (sortBy === "best_price_desc") {
-      arr.sort((a,b) => (b.bestPrice ?? -Infinity) - (a.bestPrice ?? -Infinity));
+      arr.sort((a,b) => {
+        const av = groupBestAmount(a);
+        const bv = groupBestAmount(b);
+        if (av === null && bv === null) return 0;
+        if (av === null) return 1;
+        if (bv === null) return -1;
+        return bv - av;
+      });
     } else if (sortBy === "count_desc") {
       arr.sort((a,b) => (b.count ?? 0) - (a.count ?? 0));
     } else if (sortBy === "model_asc") {
@@ -930,14 +980,32 @@ export default function PuttersPage() {
 
               const ordered =
                 sortBy === "best_price_desc"
-                  ? [...g.offers].sort((a,b) => (b.price ?? -Infinity) - (a.price ?? -Infinity))
-                  : [...g.offers].sort((a,b) => (a.price ?? Infinity) - (b.price ?? Infinity));
+                  ? [...g.offers].sort((a, b) => {
+                      const av = offerAmount(a);
+                      const bv = offerAmount(b);
+                      if (av === null && bv === null) return 0;
+                      if (av === null) return 1;
+                      if (bv === null) return -1;
+                      return bv - av;
+                    })
+                  : [...g.offers].sort((a, b) => {
+                      const av = offerAmount(a);
+                      const bv = offerAmount(b);
+                      if (av === null && bv === null) return 0;
+                      if (av === null) return 1;
+                      if (bv === null) return -1;
+                      return av - bv;
+                    });
 
-              const nums = ordered.map(o => o?.price).filter(x => typeof x === "number").sort((a,b)=>a-b);
+              const nums = ordered
+                .map((o) => offerAmount(o))
+                .filter((x) => Number.isFinite(x))
+                .sort((a, b) => a - b);
               const nNums = nums.length;
               const med = nNums < 2 ? null : (nNums % 2 ? nums[Math.floor(nNums/2)] : (nums[nNums/2-1]+nums[nNums/2])/2);
-              const bestDelta = (typeof g.bestPrice === "number" && typeof med === "number" && med - g.bestPrice > 0)
-                ? { diff: med - g.bestPrice, pct: ((med - g.bestPrice)/med)*100 }
+              const bestAmount = groupBestAmount(g);
+              const bestDelta = (Number.isFinite(bestAmount) && Number.isFinite(med) && med - bestAmount > 0)
+                ? { diff: med - bestAmount, pct: ((med - bestAmount)/med)*100 }
                 : null;
 
               const { domDex, domHead, domLen } = summarizeDexHead(g);
@@ -954,7 +1022,7 @@ export default function PuttersPage() {
 
               const bestUrl = ordered.length ? ordered[0]?.url : null;
 
-              const fair = fairPriceBadge(g.bestPrice, stats);
+              const fair = fairPriceBadge(bestAmount, stats);
 
               return (
                 <article key={g.model} className="overflow-hidden rounded-xl border border-gray-200 bg-white shadow-sm">
@@ -996,7 +1064,12 @@ export default function PuttersPage() {
                           )}
 
                           {/* New smarter fair price badge (based on stats.p50) */}
-                          <SmartPriceBadge price={g.bestPrice} stats={stats} className="ml-1" />
+                          <SmartPriceBadge
+                            price={bestAmount ?? undefined}
+                            total={bestAmount ?? undefined}
+                            stats={stats}
+                            className="ml-1"
+                          />
 
                           {/* (Optional) quick chip */}
                           {fair && (
@@ -1007,7 +1080,8 @@ export default function PuttersPage() {
                         </div>
 			<div className="mt-2">
   <SmartPriceBadge
-    price={Number(g.bestPrice)}
+    price={bestAmount ?? undefined}
+    total={bestAmount ?? undefined}
     baseStats={statsByModel[g.model] || null}
     variantStats={null}
     title={ordered?.[0]?.title || g.model}
@@ -1031,7 +1105,7 @@ export default function PuttersPage() {
 
                       <div className="flex flex-col items-end gap-1">
                         <div className="shrink-0 rounded-full bg-green-100 px-3 py-1 text-xs font-semibold text-green-700">
-                          Best: {formatPrice(g.bestPrice, g.bestCurrency)}
+                          Best: {formatPrice(bestAmount, g.bestCurrency)}
                         </div>
                         {bestDelta && (
                           <div
@@ -1089,6 +1163,7 @@ export default function PuttersPage() {
                           const condParam = (o?.conditionBand || o?.condition || "").toUpperCase() || selectedConditionBand(conds) || "";
                           const perOfferStatsKey = getStatsKey(g.model, condParam);
                           const perOfferStats = statsByModel[perOfferStatsKey] || stats; // fallback to group's stats
+                          const offerValue = offerAmount(o);
 
                           return (
                             <li key={o.productId + o.url} className="flex items-center justify-between gap-3 rounded border border-gray-100 p-2">
@@ -1103,7 +1178,8 @@ export default function PuttersPage() {
   {o?.seller?.username && (
     <>
       <SmartPriceBadge
-        price={Number(o.price)}
+        price={offerValue ?? undefined}
+        total={offerValue ?? undefined}
         baseStats={statsByModel[g.model] || null}
         variantStats={null}
         title={o.title}
@@ -1147,15 +1223,16 @@ export default function PuttersPage() {
                               <div className="flex items-center gap-3">
                                 {/* Per-listing badge using (model,condition) stats */}
                                   <SmartPriceBadge
-    price={Number(o.price)}
-    baseStats={statsByModel[g.model] || null}
-    variantStats={null}
-    title={o.title}
-    specs={o.specs}
-    brand={g?.brand}
-    className="mr-2"
-  />
-                                <span className="text-sm font-semibold">{formatPrice(o.price, o.currency)}</span>
+                                    price={offerValue ?? undefined}
+                                    total={offerValue ?? undefined}
+                                    baseStats={perOfferStats}
+                                    variantStats={null}
+                                    title={o.title}
+                                    specs={o.specs}
+                                    brand={g?.brand}
+                                    className="mr-2"
+                                  />
+                                <span className="text-sm font-semibold">{formatPrice(offerValue, o.currency)}</span>
                                 <a
                                   href={o.url}
                                   target="_blank"
@@ -1211,6 +1288,7 @@ export default function PuttersPage() {
               const condParam = (o?.conditionBand || o?.condition || "").toUpperCase() || selectedConditionBand(conds) || "";
               const statsKey = getStatsKey(modelKey, condParam);
               const stats = statsByModel[statsKey] || null;
+              const amount = offerAmount(o);
 
               return (
                 <article key={o.productId + o.url} className="overflow-hidden rounded-xl border border-gray-200 bg-white shadow-sm">
@@ -1243,24 +1321,24 @@ export default function PuttersPage() {
                     <div className="mt-3 flex items-center justify-between">
                       <div className="flex items-center gap-2">
                         {/* Flat-view badge: uses prefetched (model, condition) stats */}
-                      <SmartPriceBadge
-  		price={Number(o.price)}
- 		 baseStats={statsByModel[o.model] || null}
-  		variantStats={null}
- 		 title={o.title}
-  		specs={o.specs}
- 			 brand={o.brand || ""}
-  		className="mr-2"
-			/>
+                        <SmartPriceBadge
+                          price={amount ?? undefined}
+                          total={amount ?? undefined}
+                          baseStats={statsByModel[o.model] || null}
+                          variantStats={null}
+                          title={o.title}
+                          specs={o.specs}
+                          brand={o.brand || ""}
+                          className="mr-2"
+                        />
 
-
-                        <span className="text-base font-semibold">{formatPrice(o.price, o.currency)}</span>
+                        <span className="text-base font-semibold">{formatPrice(amount, o.currency)}</span>
 
                         {/* Optional Save $ chip if below median */}
                         {(() => {
                           const p50 = stats?.p50;
-                          if (Number.isFinite(Number(p50)) && typeof o.price === "number" && o.price < Number(p50)) {
-                            const save = Number(p50) - o.price;
+                          if (Number.isFinite(Number(p50)) && Number.isFinite(amount) && amount < Number(p50)) {
+                            const save = Number(p50) - amount;
                             const pct = Math.round((save / Number(p50)) * 100);
                             return (
                               <span

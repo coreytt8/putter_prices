@@ -61,6 +61,11 @@ function detectPremiumSignals({ title = "", aspects = {}, brand = "" } = {}) {
 }
 
 // 2) Tier logic with variant-aware anchor and a safe fallback
+const toNumber = (value) => {
+  const n = Number(value);
+  return Number.isFinite(n) ? n : null;
+};
+
 function chooseBadge({ price, baseStats, variantStats, looksPremium }) {
   const pick = (variantStats && isFinite(variantStats?.p50)) ? variantStats : baseStats;
   if (!pick) return null;
@@ -122,6 +127,7 @@ function chooseBadge({ price, baseStats, variantStats, looksPremium }) {
 
 export default function SmartPriceBadge({
   price,
+  total,
   baseStats,
   variantStats,
   title,
@@ -130,8 +136,9 @@ export default function SmartPriceBadge({
   className = "",
   showHelper = false,
 }) {
+  const resolvedPrice = toNumber(total) ?? toNumber(price);
   const { looksPremium } = detectPremiumSignals({ title, aspects: specs, brand });
-  const badge = chooseBadge({ price, baseStats, variantStats, looksPremium });
+  const badge = chooseBadge({ price: resolvedPrice, baseStats, variantStats, looksPremium });
   if (!badge) return null;
 
   const toneClass =
