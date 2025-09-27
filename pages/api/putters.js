@@ -132,8 +132,20 @@ const tokenize = (s) => {
     tokenSet.add(match[0]);
   }
 
+  const letterDigitWithGap = /([a-z])\s+([0-9]+)/g;
+  while ((match = letterDigitWithGap.exec(normalized))) {
+    tokenSet.add(`${match[1]}${match[2]}`);
+  }
+
+  const digitLetterWithGap = /([0-9]+)\s+([a-z])/g;
+  while ((match = digitLetterWithGap.exec(normalized))) {
+    tokenSet.add(`${match[1]}${match[2]}`);
+  }
+
   return Array.from(tokenSet);
 };
+
+export { tokenize };
 
 function pickCheapestShipping(shippingOptions) {
   if (!Array.isArray(shippingOptions) || shippingOptions.length === 0) return null;
