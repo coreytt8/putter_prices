@@ -111,7 +111,10 @@ const norm = (s) => String(s || "").trim().toLowerCase();
 
 const tokenize = (s) => {
   if (!s) return [];
-  return norm(s)
+  const normalized = norm(s)
+    .replace(/([a-z])([0-9])/gi, "$1 $2")
+    .replace(/([0-9])([a-z])/gi, "$1 $2");
+  return normalized
     .replace(/[^a-z0-9]+/gi, " ")
     .split(" ")
     .map((t) => t.trim())
