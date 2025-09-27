@@ -575,8 +575,8 @@ export default async function handler(req, res) {
       const family = specs?.family || null;
 
       const itemPrice = safeNum(item?.price?.value);
-      const shipCost = shipping?.cost ?? 0;
-      const totalPrice = itemPrice != null && shipCost != null ? itemPrice + shipCost : itemPrice ?? null;
+      const shippingValue = Number.isFinite(shipping?.cost) ? shipping.cost : null;
+      const total = itemPrice != null ? itemPrice + (shippingValue ?? 0) : itemPrice ?? null;
 
       const rawUrl = item?.itemWebUrl || item?.itemHref;
       const url = decorateEbayUrl(rawUrl);
@@ -589,13 +589,13 @@ export default async function handler(req, res) {
         title: item?.title,
         retailer: "eBay",
         price: itemPrice,
+        shipping: shippingValue,
+        total,
         currency: item?.price?.currency || "USD",
         condition: item?.condition || null,
         createdAt: item?.itemCreationDate || item?.itemEndDate || item?.estimatedAvailDate || null,
         image,
-
-        totalPrice,
-        shipping: shipping
+        shippingDetails: shipping
           ? {
               cost: shipping.cost,
               currency: shipping.currency || item?.price?.currency || "USD",
