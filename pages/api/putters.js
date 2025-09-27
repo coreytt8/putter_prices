@@ -107,6 +107,12 @@ const safeNum = (n) => {
   return Number.isFinite(x) ? x : null;
 };
 
+const offerTotalValue = (offer) => {
+  const total = safeNum(offer?.total);
+  if (total !== null) return total;
+  return safeNum(offer?.price);
+};
+
 const norm = (s) => String(s || "").trim().toLowerCase();
 
 const tokenize = (s) => {
@@ -725,23 +731,37 @@ export default async function handler(req, res) {
     }
 
     // ----- server-side sort BEFORE slicing so other sources can appear on page 1 -----
-if (sort === "newlylisted") {
-  mergedOffers.sort((a, b) => {
-    const ta = a.createdAt ? new Date(a.createdAt).getTime() : 0;
-    const tb = b.createdAt ? new Date(b.createdAt).getTime() : 0;
-    return tb - ta;
-  });
-} else if (sort === "best_price_desc") {
-  mergedOffers.sort((a, b) => (b.price ?? -Infinity) - (a.price ?? -Infinity));
-} else if (sort === "model_asc") {
-  // Use title as a proxy for model in flat view
-  mergedOffers.sort((a, b) => (a.title || "").localeCompare(b.title || ""));
-} else if (sort === "count_desc") {
-  // Not meaningful in flat view; keep as no-op
-} else {
-  // default = best_price_asc to match UI default
-  mergedOffers.sort((a, b) => (a.price ?? Infinity) - (b.price ?? Infinity));
-}
+    if (sort === "newlylisted") {
+      mergedOffers.sort((a, b) => {
+        const ta = a.createdAt ? new Date(a.createdAt).getTime() : 0;
+        const tb = b.createdAt ? new Date(b.createdAt).getTime() : 0;
+        return tb - ta;
+      });
+    } else if (sort === "best_price_desc") {
+      mergedOffers.sort((a, b) => {
+        const av = offerTotalValue(a);
+        const bv = offerTotalValue(b);
+        if (av === null && bv === null) return 0;
+        if (av === null) return 1;
+        if (bv === null) return -1;
+        return bv - av;
+      });
+    } else if (sort === "model_asc") {
+      // Use title as a proxy for model in flat view
+      mergedOffers.sort((a, b) => (a.title || "").localeCompare(b.title || ""));
+    } else if (sort === "count_desc") {
+      // Not meaningful in flat view; keep as no-op
+    } else {
+      // default = best_price_asc to match UI default
+      mergedOffers.sort((a, b) => {
+        const av = offerTotalValue(a);
+        const bv = offerTotalValue(b);
+        if (av === null && bv === null) return 0;
+        if (av === null) return 1;
+        if (bv === null) return -1;
+        return av - bv;
+      });
+    }
 
 
     const keptCount = mergedOffers.length;
@@ -797,10 +817,13 @@ if (sort === "newlylisted") {
     for (const o of mergedOffers) {
       const key = o.__model || "unknown";
       if (!groupsMap.has(key)) {
+        const initialPrice = safeNum(o?.price);
+        const initialTotal = offerTotalValue(o);
         groupsMap.set(key, {
           model: key,
           image: o.image || null,
-          bestPrice: o.price ?? null,
+          bestPrice: initialPrice,
+          bestTotal: initialTotal,
           bestCurrency: o.currency || "USD",
           count: 0,
           retailers: new Set(),
@@ -811,8 +834,15 @@ if (sort === "newlylisted") {
       g.count += 1;
       g.retailers.add(o.retailer || "eBay");
       g.offers.push(o);
-      if (typeof o.price === "number" && (g.bestPrice == null || o.price < g.bestPrice)) {
-        g.bestPrice = o.price;
+
+      const priceVal = safeNum(o?.price);
+      if (priceVal !== null && (g.bestPrice == null || priceVal < g.bestPrice)) {
+        g.bestPrice = priceVal;
+      }
+
+      const totalVal = offerTotalValue(o);
+      if (totalVal !== null && (g.bestTotal == null || totalVal < g.bestTotal)) {
+        g.bestTotal = totalVal;
         g.bestCurrency = o.currency || g.bestCurrency || "USD";
         if (o.image) g.image = o.image;
       }
@@ -821,7 +851,14 @@ if (sort === "newlylisted") {
     let groups = Array.from(groupsMap.values()).map((g) => ({
       ...g,
       retailers: Array.from(g.retailers),
-      offers: g.offers.sort((a, b) => (a.price ?? Infinity) - (b.price ?? Infinity)),
+      offers: g.offers.sort((a, b) => {
+        const av = offerTotalValue(a);
+        const bv = offerTotalValue(b);
+        if (av === null && bv === null) return 0;
+        if (av === null) return 1;
+        if (bv === null) return -1;
+        return av - bv;
+      }),
     }));
 
     if (sort === "newlylisted") {
@@ -835,13 +872,27 @@ if (sort === "newlylisted") {
         return tb - ta; // newest groups first
       });
     } else if (sort === "best_price_desc") {
-      groups.sort((a, b) => (b.bestPrice ?? -Infinity) - (a.bestPrice ?? -Infinity));
+      groups.sort((a, b) => {
+        const av = safeNum(a?.bestTotal);
+        const bv = safeNum(b?.bestTotal);
+        if (av === null && bv === null) return 0;
+        if (av === null) return 1;
+        if (bv === null) return -1;
+        return bv - av;
+      });
     } else if (sort === "model_asc") {
       groups.sort((a, b) => (a.model || "").localeCompare(b.model || ""));
     } else if (sort === "count_desc") {
       groups.sort((a, b) => (b.count ?? 0) - (a.count ?? 0));
     } else {
-      groups.sort((a, b) => (a.bestPrice ?? Infinity) - (b.bestPrice ?? Infinity));
+      groups.sort((a, b) => {
+        const av = safeNum(a?.bestTotal);
+        const bv = safeNum(b?.bestTotal);
+        if (av === null && bv === null) return 0;
+        if (av === null) return 1;
+        if (bv === null) return -1;
+        return av - bv;
+      });
     }
 
     const start = (page - 1) * perPage;
