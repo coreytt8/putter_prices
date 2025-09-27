@@ -109,6 +109,15 @@ const safeNum = (n) => {
 
 const norm = (s) => String(s || "").trim().toLowerCase();
 
+const tokenize = (s) => {
+  if (!s) return [];
+  return norm(s)
+    .replace(/[^a-z0-9]+/gi, " ")
+    .split(" ")
+    .map((t) => t.trim())
+    .filter(Boolean);
+};
+
 function pickCheapestShipping(shippingOptions) {
   if (!Array.isArray(shippingOptions) || shippingOptions.length === 0) return null;
   const sorted = [...shippingOptions].sort((a, b) => {
@@ -324,6 +333,29 @@ const BRAND_LIMITED_TOKENS = {
   // SIK / others
   "sik": ["tour issue", "limited", "prototype"],
 };
+
+const BRAND_ASSIST_ALIASES = [
+  ...Object.keys(BRAND_LIMITED_TOKENS),
+  "titleist",
+  "scotty cameron",
+  "bettinardi",
+  "odyssey",
+  "ping",
+  "taylormade",
+  "toulon",
+  "evnroll",
+  "lab golf",
+];
+
+const TRIVIAL_QUERY_TOKENS = (() => {
+  const trivial = new Set(["putter", "putters", "golf", "club", "clubs"]);
+  for (const alias of BRAND_ASSIST_ALIASES) {
+    for (const token of tokenize(alias)) {
+      if (token.length > 1) trivial.add(token);
+    }
+  }
+  return trivial;
+})();
 
 function hasAnyToken(text, tokens) {
   const n = norm(text);
@@ -597,6 +629,26 @@ export default async function handler(req, res) {
       seen.add(key);
       return true;
     });
+
+    const queryTokens = Array.from(
+      new Set(
+        tokenize(rawQ)
+          .map((t) => t.trim())
+          .filter((t) => (t.length > 1 || /\d/.test(t)) && !TRIVIAL_QUERY_TOKENS.has(t))
+      )
+    );
+
+    if (queryTokens.length) {
+      // Enforce normalized title-token matches before other filters so downstream logic sees focused offers.
+      mergedOffers = mergedOffers.filter((o) => {
+        const titleTokens = new Set(
+          tokenize(o?.title)
+            .map((t) => t.trim())
+            .filter((t) => t.length > 1 || /\d/.test(t))
+        );
+        return queryTokens.every((tok) => titleTokens.has(tok));
+      });
+    }
 
     // Track drops for debugging
     let droppedNoPrice = 0;
