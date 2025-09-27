@@ -111,14 +111,28 @@ const norm = (s) => String(s || "").trim().toLowerCase();
 
 const tokenize = (s) => {
   if (!s) return [];
-  const normalized = norm(s)
+
+  const normalized = norm(s);
+  const tokenSet = new Set();
+
+  const spaced = normalized
     .replace(/([a-z])([0-9])/gi, "$1 $2")
     .replace(/([0-9])([a-z])/gi, "$1 $2");
-  return normalized
+
+  spaced
     .replace(/[^a-z0-9]+/gi, " ")
     .split(" ")
     .map((t) => t.trim())
-    .filter(Boolean);
+    .filter(Boolean)
+    .forEach((t) => tokenSet.add(t));
+
+  const alphaNumPattern = /[a-z]+[0-9]+|[0-9]+[a-z]+/g;
+  let match;
+  while ((match = alphaNumPattern.exec(normalized))) {
+    tokenSet.add(match[0]);
+  }
+
+  return Array.from(tokenSet);
 };
 
 function pickCheapestShipping(shippingOptions) {
