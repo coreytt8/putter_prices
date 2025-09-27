@@ -1165,7 +1165,9 @@ export default function PuttersPage() {
                           const variant    = detectVariant(o?.title);
                           const variantKey = getStatsKey3(modelKey, variant, condParam);
                           const baseKey    = getStatsKey(modelKey, condParam);
-                          const perOfferStats = statsByModel[variantKey] ?? statsByModel[baseKey] ?? stats;
+                          const baseStats = statsByModel[baseKey] ?? stats;
+                          const variantStats = statsByModel[variantKey] ?? null;
+                          const perOfferStats = variantStats ?? baseStats ?? stats;
 
                           return (
                             <li
@@ -1221,8 +1223,8 @@ export default function PuttersPage() {
                               <div className="flex items-center gap-3">
                                 <SmartPriceBadge
                                   price={Number(o.price)}
-                                  baseStats={perOfferStats}
-                                  variantStats={null}
+                                  baseStats={baseStats}
+                                  variantStats={variantStats}
                                   title={o.title}
                                   specs={o.specs}
                                   brand={g?.brand}
@@ -1230,6 +1232,22 @@ export default function PuttersPage() {
                                 <span className="text-sm font-semibold">
                                   {typeof o.price === "number" ? formatPrice(o.price, o.currency) : "—"}
                                 </span>
+                                {(() => {
+                                  const p50 = perOfferStats?.p50;
+                                  if (Number.isFinite(Number(p50)) && typeof o.price === "number" && o.price < Number(p50)) {
+                                    const save = Number(p50) - o.price;
+                                    const pct = Math.round((save / Number(p50)) * 100);
+                                    return (
+                                      <span
+                                        className="rounded-full bg-emerald-50 px-2 py-0.5 text-[11px] font-medium text-emerald-700"
+                                        title={`Median ${formatPrice(Number(p50))} · Save ~${formatPrice(save)} (~${pct}%)`}
+                                      >
+                                        Save {formatPrice(save)}
+                                      </span>
+                                    );
+                                  }
+                                  return null;
+                                })()}
                                 <a
                                   href={o.url}
                                   target="_blank"
