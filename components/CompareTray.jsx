@@ -21,6 +21,8 @@ export default function CompareTray({
     { key: 'image',    label: '' },
     { key: 'title',    label: 'Listing' },
     { key: 'price',    label: 'Price' },
+    { key: 'shipping', label: 'Shipping' },
+    { key: 'total',    label: 'Total' },
     { key: 'dex',      label: 'Dexterity' },
     { key: 'head',     label: 'Head' },
     { key: 'length',   label: 'Length' },
@@ -92,6 +94,41 @@ export default function CompareTray({
                       <div className="text-xs text-gray-500">{o.retailer}{o?.seller?.username ? ` · @${o.seller.username}` : ''}</div>
                     </td>
                     <td className="px-3 py-2 font-semibold">{fmt(o.price, o.currency)}</td>
+                    <td className="px-3 py-2">{
+                      (() => {
+                        const cur = o?.shippingDetails?.currency || o.currency;
+                        const flat = typeof o.shipping === 'number' && Number.isFinite(o.shipping) ? o.shipping : null;
+                        let detail = null;
+                        if (o?.shippingDetails?.cost != null) {
+                          const maybe = Number(o.shippingDetails.cost);
+                          if (Number.isFinite(maybe)) detail = maybe;
+                        }
+                        const val = flat ?? detail;
+                        return val != null ? fmt(val, cur) : '—';
+                      })()
+                    }</td>
+                    <td className="px-3 py-2 font-semibold">{
+                      (() => {
+                        const totalVal = typeof o.total === 'number' && Number.isFinite(o.total) ? o.total : null;
+                        let priceVal = null;
+                        if (typeof o.price === 'number' && Number.isFinite(o.price)) {
+                          priceVal = o.price;
+                        } else if (o.price != null) {
+                          const maybe = Number(o.price);
+                          if (Number.isFinite(maybe)) priceVal = maybe;
+                        }
+                        const shipVal = (() => {
+                          if (typeof o.shipping === 'number' && Number.isFinite(o.shipping)) return o.shipping;
+                          if (o?.shippingDetails?.cost != null) {
+                            const maybe = Number(o.shippingDetails.cost);
+                            if (Number.isFinite(maybe)) return maybe;
+                          }
+                          return 0;
+                        })();
+                        const val = totalVal != null ? totalVal : priceVal != null ? priceVal + shipVal : null;
+                        return val != null ? fmt(val, o.currency) : '—';
+                      })()
+                    }</td>
                     <td className="px-3 py-2">{dex}</td>
                     <td className="px-3 py-2">{head}</td>
                     <td className="px-3 py-2">{L}</td>

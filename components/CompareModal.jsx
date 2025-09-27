@@ -15,8 +15,37 @@ export default function CompareModal({ open, onClose, items }) {
     ['Title', (o)=> o.title],
     ['Retailer', (o)=> o.retailer],
     ['Price', (o)=> fmt(o.price, o.currency)],
-    ['Shipping', (o)=> ('shipping' in o ? fmt(o.shipping, o.currency) : '—')],
-    ['Total', (o)=> ('total' in o ? fmt(o.total, o.currency) : fmt(o.price, o.currency))],
+    ['Shipping', (o)=> {
+      const cur = o?.shippingDetails?.currency || o.currency;
+      const shipVal = typeof o.shipping === 'number' && Number.isFinite(o.shipping) ? o.shipping : null;
+      let detailVal = null;
+      if (o?.shippingDetails?.cost != null) {
+        const maybe = Number(o.shippingDetails.cost);
+        if (Number.isFinite(maybe)) detailVal = maybe;
+      }
+      const val = shipVal ?? detailVal;
+      return val != null ? fmt(val, cur) : '—';
+    }],
+    ['Total', (o)=> {
+      const totalVal = typeof o.total === 'number' && Number.isFinite(o.total) ? o.total : null;
+      let priceVal = null;
+      if (typeof o.price === 'number' && Number.isFinite(o.price)) {
+        priceVal = o.price;
+      } else if (o.price != null) {
+        const maybe = Number(o.price);
+        if (Number.isFinite(maybe)) priceVal = maybe;
+      }
+      const shipVal = (() => {
+        if (typeof o.shipping === 'number' && Number.isFinite(o.shipping)) return o.shipping;
+        if (o?.shippingDetails?.cost != null) {
+          const maybe = Number(o.shippingDetails.cost);
+          if (Number.isFinite(maybe)) return maybe;
+        }
+        return 0;
+      })();
+      const val = totalVal != null ? totalVal : priceVal != null ? priceVal + shipVal : null;
+      return val != null ? fmt(val, o.currency) : '—';
+    }],
     ['Seller', (o)=> o?.seller?.username ? `@${o.seller.username}` : '—'],
     ['Feedback %', (o)=> (typeof o?.seller?.feedbackPct === 'number' ? `${o.seller.feedbackPct.toFixed(1)}%` : '—')],
     ['Dexterity', (o)=> (o?.specs?.dexterity || '').toUpperCase() || '—'],

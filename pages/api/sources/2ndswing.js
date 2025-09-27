@@ -251,25 +251,31 @@ module.exports = async function handler(req, res) {
     log.counts.final = dedup.length;
 
     // ---- 5) Map to Offer shape ----
-    const out = dedup.map((p) => ({
-      source: "2ndswing",
-      retailer: "2nd Swing",
-      productId: p.url,
-      url: p.url,
-      title: p.title,
-      image: p.image,
-      price: p.price,
-      currency: "USD",
-      condition: "USED",
-      specs: {},
-      createdAt: new Date().toISOString(),
-      __model: p.title
-        .toLowerCase()
-        .replace(/\s+/g, " ")
-        .replace(/putter|golf/g, "")
-        .trim()
-        .slice(0, 80),
-    }));
+    const out = dedup.map((p) => {
+      const price = Number.isFinite(p.price) ? Number(p.price) : null;
+      return {
+        source: "2ndswing",
+        retailer: "2nd Swing",
+        productId: p.url,
+        url: p.url,
+        title: p.title,
+        image: p.image,
+        price,
+        shipping: null,
+        total: price,
+        shippingDetails: null,
+        currency: "USD",
+        condition: "USED",
+        specs: {},
+        createdAt: new Date().toISOString(),
+        __model: p.title
+          .toLowerCase()
+          .replace(/\s+/g, " ")
+          .replace(/putter|golf/g, "")
+          .trim()
+          .slice(0, 80),
+      };
+    });
 
     return trace ? res.status(200).json({ out, trace: log }) : res.status(200).json(out);
   } catch (e) {
