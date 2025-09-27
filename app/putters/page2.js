@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
+import { usePathname } from "next/navigation";
 import MarketSnapshot from "@/components/MarketSnapshot";
 import PriceSparkline from "@/components/PriceSparkline";
 import SmartPriceBadge from "@/components/SmartPriceBadge";
@@ -269,6 +270,8 @@ export default function PuttersPage() {
   const [q, setQ] = useState("");
   const [broaden, setBroaden] = useState(false);
 
+  const pathname = usePathname();
+
   // data
   const [groups, setGroups] = useState([]);
   const [offers, setOffers] = useState([]);
@@ -333,9 +336,10 @@ export default function PuttersPage() {
     params.set("group", groupMode ? "true" : "false");
 
     const qs = params.toString();
-    const url = qs ? `/putters?${qs}` : "/putters";
+    const basePath = pathname || (typeof window !== "undefined" ? window.location.pathname : "/putters/page2");
+    const url = qs ? `${basePath}?${qs}` : basePath;
     window.history.replaceState({}, "", url);
-  }, [q, onlyComplete, minPrice, maxPrice, conds, buying, sortBy, page, groupMode, broaden, dex, head, lengths]);
+  }, [q, onlyComplete, minPrice, maxPrice, conds, buying, sortBy, page, groupMode, broaden, dex, head, lengths, pathname]);
 
   // API URL
   const apiUrl = useMemo(() => {
