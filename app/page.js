@@ -5,6 +5,7 @@ import MarketSnapshot from "@/components/MarketSnapshot";
 import HeroSection from "@/components/HeroSection";
 import SectionWrapper from "@/components/SectionWrapper";
 import HighlightCard from "@/components/HighlightCard";
+import TrendingSparkline from "@/components/TrendingSparkline";
 
 const DEFAULT_SNAPSHOT_QUERY = "golf putter";
 
@@ -544,6 +545,7 @@ export default async function Home() {
                       ? `${item.count.toLocaleString()} recent listings tracked`
                       : "Pulling market counts…"}
                   </p>
+                  <TrendingSparkline modelKey={item.modelKey} className="text-emerald-500" />
                   <div className="mt-6">
                     <Link
                       href={href}
