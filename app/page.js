@@ -22,10 +22,30 @@ const BRAND_PATTERNS = [
   { key: "Wilson", pattern: /wilson/i },
 ];
 
-function escapeRegExp(value = "") {
-  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-}
+const BRAND_SYNONYMS = {
+  "Scotty Cameron": ["Titleist"],
+  Odyssey: ["Callaway"],
+};
 
+const BRAND_ALIASES = new Map(
+  BRAND_PATTERNS.map((brand) => {
+    const aliases = [brand.key, ...(BRAND_SYNONYMS[brand.key] || [])];
+    return [brand.key, aliases];
+  })
+);
+
+const BRAND_ALIAS_LOOKUP = new Map();
+Object.entries(BRAND_SYNONYMS).forEach(([brand, aliases]) => {
+  aliases.forEach((alias) => {
+    BRAND_ALIAS_LOOKUP.set(alias.toLowerCase(), brand);
+  });
+});
+
+/**
+ * Example:
+ * sanitizeModelKey("Titleist|Scotty Cameron|Super Select|Cameron");
+ * // => { label: "Super Select", query: "Scotty Cameron Super Select" }
+ */
 function sanitizeModelKey(rawKey = "") {
   if (!rawKey) {
     return {
@@ -40,33 +60,86 @@ function sanitizeModelKey(rawKey = "") {
     .filter(Boolean);
 
   const working = segments.join(" ");
-  let detectedBrand = null;
-  const remainingSegments = (() => {
-    if (segments.length <= 1) return segments;
-    const first = segments[0];
-    const brandMatched = BRAND_PATTERNS.some((brand) => {
-      if (!brand?.pattern) return false;
-      const matches = brand.pattern.test(first) || brand.key.toLowerCase() === first.toLowerCase();
-      if (matches) {
-        detectedBrand = brand.key;
-      }
-      return matches;
-    });
-    return brandMatched ? segments.slice(1) : segments;
-  })();
-
-  let label = remainingSegments.join(" ").trim();
-
-  for (const brand of BRAND_PATTERNS) {
-    if (!brand?.key) continue;
-    const brandRegex = new RegExp(`^${escapeRegExp(brand.key)}\s+`, "i");
-    if (brandRegex.test(label)) {
-      label = label.replace(brandRegex, "").trim();
-      if (!detectedBrand) {
-        detectedBrand = brand.key;
-      }
-      break;
+  const brandMatches = new Map();
+  const recordMatch = (brand, index, source) => {
+    if (!brand) return;
+    const normalizedBrand = brand.toLowerCase();
+    const synonyms = BRAND_SYNONYMS[brand] || [];
+    const basePriority = source === "pattern" ? 2 : 1;
+    const priority = basePriority + (synonyms.length ? 1 : 0);
+    const existing = brandMatches.get(normalizedBrand);
+    if (
+      !existing ||
+      priority > existing.priority ||
+      (priority === existing.priority && brand.length > existing.brand.length)
+    ) {
+      brandMatches.set(normalizedBrand, { brand, index, priority });
     }
+  };
+
+  segments.forEach((segment, index) => {
+    const normalizedSegment = segment.toLowerCase();
+    BRAND_PATTERNS.forEach((brand) => {
+      if (!brand?.pattern) return;
+      if (brand.pattern.test(segment) || normalizedSegment === brand.key.toLowerCase()) {
+        recordMatch(brand.key, index, "pattern");
+      }
+    });
+    const aliasBrand = BRAND_ALIAS_LOOKUP.get(normalizedSegment);
+    if (aliasBrand) {
+      recordMatch(aliasBrand, index, "alias");
+    }
+  });
+
+  let detectedBrand = null;
+  if (brandMatches.size) {
+    let candidates = Array.from(brandMatches.values());
+    const normalizedCandidates = new Set(candidates.map((c) => c.brand.toLowerCase()));
+    const filtered = candidates.filter((candidate) => {
+      const canonicalBrand = BRAND_ALIAS_LOOKUP.get(candidate.brand.toLowerCase());
+      if (!canonicalBrand) return true;
+      return !normalizedCandidates.has(canonicalBrand.toLowerCase());
+    });
+    if (filtered.length) {
+      candidates = filtered;
+    }
+    const winner = candidates.reduce((best, candidate) => {
+      if (!best) return candidate;
+      if (candidate.priority !== best.priority) {
+        return candidate.priority > best.priority ? candidate : best;
+      }
+      if (candidate.brand.length !== best.brand.length) {
+        return candidate.brand.length > best.brand.length ? candidate : best;
+      }
+      return candidate.index < best.index ? candidate : best;
+    }, null);
+    detectedBrand = winner ? winner.brand : null;
+  }
+
+  const aliasList = detectedBrand ? BRAND_ALIASES.get(detectedBrand) || [detectedBrand] : [];
+  const aliasSet = new Set(aliasList.map((alias) => alias.toLowerCase()));
+  const filteredSegments = detectedBrand
+    ? segments.filter((segment) => !aliasSet.has(segment.toLowerCase()))
+    : segments;
+
+  let label = filteredSegments.join(" ").trim();
+
+  if (detectedBrand && label) {
+    const aliasTokens = new Set();
+    aliasList.forEach((alias) => {
+      alias
+        .split(/\s+/)
+        .filter(Boolean)
+        .forEach((token) => aliasTokens.add(token.toLowerCase()));
+    });
+    const words = label.split(/\s+/);
+    while (words.length && aliasTokens.has(words[0].toLowerCase())) {
+      words.shift();
+    }
+    while (words.length && aliasTokens.has(words[words.length - 1].toLowerCase())) {
+      words.pop();
+    }
+    label = words.join(" ");
   }
 
   const fallbackText = working || String(rawKey).trim();
@@ -75,7 +148,11 @@ function sanitizeModelKey(rawKey = "") {
 
   let query = "";
   if (cleanedLabel && detectedBrand) {
-    query = `${detectedBrand} ${cleanedLabel}`.trim();
+    const lowerLabel = cleanedLabel.toLowerCase();
+    const labelStartsWithBrand = aliasList.some((alias) =>
+      lowerLabel.startsWith(alias.toLowerCase())
+    );
+    query = labelStartsWithBrand ? cleanedLabel : `${detectedBrand} ${cleanedLabel}`.trim();
   } else if (cleanedLabel) {
     query = cleanedLabel;
   } else {
