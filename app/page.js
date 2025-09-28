@@ -296,34 +296,22 @@ export default async function Home() {
       })
     : [];
 
-  const tourResponse = await fetchJson(`${baseUrl}/api/tour-putters`, {
-    next: { revalidate: 900 },
-  });
+  const snapshotResponse = await fetchJson(
+    `${baseUrl}/api/putters?q=${encodeURIComponent(DEFAULT_SNAPSHOT_QUERY)}`,
+    {
+      next: { revalidate: 300 },
+    }
+  );
 
-  const rawTourModels = Array.isArray(tourResponse?.models) ? tourResponse.models : [];
-  const tourModels = rawTourModels.map((model) => {
-    const source = model?.displayName || model?.modelKey || "";
-    const { label, query } = sanitizeModelKey(source);
-    return {
-      modelKey: model?.modelKey || "",
-      displayName: model?.displayName || label || model?.modelKey || "",
-      usageRank: Number.isFinite(Number(model?.usageRank)) ? Number(model.usageRank) : null,
-      playerCount: Number.isFinite(Number(model?.playerCount)) ? Number(model.playerCount) : null,
-      sourceUrl: model?.sourceUrl || null,
-      snapshot: model?.snapshot || null,
-      meta: model?.meta || null,
-      label: label || model?.displayName || model?.modelKey || "",
-      query: query || source || DEFAULT_SNAPSHOT_QUERY,
-    };
-  });
-
-  const heroSnapshot = tourResponse?.summary?.snapshot || null;
-  const snapshotMeta = tourResponse?.summary?.meta || null;
-  const snapshotSampleSize = Number(snapshotMeta?.sampleSize) || 0;
-  const snapshotLabel = snapshotMeta?.label || "2025 tour lineup";
+  const heroSnapshot = snapshotResponse?.analytics?.snapshot || null;
+  const snapshotMeta = snapshotResponse?.meta || null;
+  const snapshotSampleSize =
+    Number(snapshotMeta?.sampleSize) ||
+    (Array.isArray(heroSnapshot?.price?.histogram)
+      ? heroSnapshot.price.histogram.reduce((total, bucket) => total + (bucket || 0), 0)
+      : 0);
 
   const snapshotQuery =
-    tourModels.find((model) => model?.query)?.query ||
     deals.find((deal) => deal?.query)?.query ||
     trending.find((item) => item?.query)?.query ||
     DEFAULT_SNAPSHOT_QUERY;
@@ -342,8 +330,12 @@ export default async function Home() {
   const exampleMedian = Number.isFinite(smartExample?.stats?.p50)
     ? Number(smartExample?.stats?.p50)
     : null;
-  const exampleSavings =
+  const exampleGap =
     Number.isFinite(exampleMedian) && Number.isFinite(smartExample?.bestPrice)
+      ? exampleMedian - smartExample.bestPrice
+      : null;
+  const exampleSavings =
+    Number.isFinite(exampleMedian) && Number.isFinite(smartExample?.bestPrice) && exampleMedian !== 0
       ? ((exampleMedian - smartExample.bestPrice) / exampleMedian) * 100
       : null;
 
@@ -358,18 +350,20 @@ export default async function Home() {
             Spot verified putter deals before they disappear.
           </h1>
           <p className="mt-6 text-lg leading-8 text-slate-200">
-            {heroSnapshot ? (
+            {smartExample && exampleMedian && Number.isFinite(exampleGap) && exampleGap > 0 ? (
               <>
-                We just analyzed
+                Smart Price watches every live putter listing and compares it to recent sale percentiles. Right now it has {smartExample.label}
                 {" "}
-                {snapshotSampleSize
-                  ? `${snapshotSampleSize.toLocaleString()} recent listings`
-                  : "the latest tour listings"}
+                sitting at {formatCurrency(smartExample.bestPrice, smartExample.currency)}, about
                 {" "}
-                across our {snapshotLabel} and found prices as low as {formatCurrency(heroSnapshot.price.min)} with typical asks topping out near {formatCurrency(heroSnapshot.price.max)}.
+                {formatCurrency(exampleGap, smartExample.currency)} below the typical {formatCurrency(exampleMedian, smartExample.currency)} ask
+                {exampleSavings !== null
+                  ? `—roughly ${Math.round(exampleSavings)}% in savings`
+                  : ""}
+                , confirmed by the Smart Price badge.
               </>
             ) : (
-              <>We monitor real-time listings from eBay and partner shops, then benchmark every asking price against historical comps.</>
+              <>Smart Price watches every live putter listing and compares it to recent sale percentiles so verified savings surface automatically.</>
             )}
           </p>
           <div className="mt-8 flex flex-col items-center justify-center gap-3 sm:flex-row">
@@ -401,7 +395,7 @@ export default async function Home() {
                     {smartExample.label}: {formatCurrency(smartExample.bestPrice, smartExample.currency)} vs median {formatCurrency(exampleMedian, smartExample.currency)}
                   </h2>
                   <p className="mt-2 text-sm text-slate-200">
-                    {exampleSavings
+                    {exampleSavings !== null
                       ? `We compare every listing against recent sale percentiles. This one sits about ${Math.round(exampleSavings)}% below the typical asking price, so Smart Price flags it automatically.`
                       : "We compare every listing against recent sale percentiles. Smart Price highlights the standouts as soon as fresh comps confirm the savings."}
                   </p>
@@ -424,50 +418,7 @@ export default async function Home() {
 
         {heroSnapshot && (
           <div className="mt-16">
-            <MarketSnapshot snapshot={heroSnapshot} meta={snapshotMeta} query={snapshotLabel} />
-          </div>
-        )}
-
-        {tourModels.length > 0 && (
-          <div className="mx-auto mt-10 max-w-4xl text-left">
-            <div className="rounded-2xl border border-white/10 bg-white/5 p-6 backdrop-blur">
-              <p className="text-sm uppercase tracking-wide text-emerald-200/80">Verified 2025 tour lineup</p>
-              <ul className="mt-4 space-y-4">
-                {tourModels.map((model) => {
-                  const avgPrice = Number(model?.snapshot?.price?.avg);
-                  const avgDisplay = Number.isFinite(avgPrice) ? formatCurrency(avgPrice) : "—";
-                  const sample = Number(model?.meta?.sampleSize) || 0;
-                  return (
-                    <li key={model.modelKey || model.displayName} className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-                      <div>
-                        <p className="text-base font-semibold text-white">{model.displayName}</p>
-                        <p className="mt-1 text-xs text-slate-200/80">
-                          {sample > 0
-                            ? `Tracking ${sample.toLocaleString()} live listings · Typical ask ${avgDisplay}`
-                            : "Watching for fresh pricing data."}
-                        </p>
-                      </div>
-                      <div className="flex flex-col items-start gap-1 text-xs text-emerald-200 sm:items-end">
-                        <span>
-                          {model.usageRank ? `#${model.usageRank} in 2025 PGA Tour usage` : "Usage rank updating"}
-                          {model.playerCount ? ` · ${model.playerCount} players` : ""}
-                        </span>
-                        {model.sourceUrl ? (
-                          <a
-                            href={model.sourceUrl}
-                            target="_blank"
-                            rel="noopener noreferrer"
-                            className="text-emerald-300 underline decoration-emerald-300/40 decoration-dotted underline-offset-4 transition hover:text-emerald-200"
-                          >
-                            Source citation
-                          </a>
-                        ) : null}
-                      </div>
-                    </li>
-                  );
-                })}
-              </ul>
-            </div>
+            <MarketSnapshot snapshot={heroSnapshot} meta={snapshotMeta} query={DEFAULT_SNAPSHOT_QUERY} />
           </div>
         )}
       </HeroSection>
