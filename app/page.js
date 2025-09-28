@@ -1,6 +1,7 @@
 import Link from "next/link";
 import { headers } from "next/headers";
 import SmartPriceBadge from "@/components/SmartPriceBadge";
+import PriceComparisonTable from "@/components/PriceComparisonTable";
 import MarketSnapshot from "@/components/MarketSnapshot";
 import HeroSection from "@/components/HeroSection";
 import SectionWrapper from "@/components/SectionWrapper";
@@ -428,60 +429,20 @@ export default async function Home() {
           </div>
         )}
 
-        {tourModels.length > 0 && (
-          <div className="mx-auto mt-10 max-w-4xl text-left">
-            <div className="rounded-2xl border border-white/10 bg-white/5 p-6 backdrop-blur">
-              <p className="text-sm uppercase tracking-wide text-emerald-200/80">Verified 2025 tour lineup</p>
-              <ul className="mt-4 space-y-4">
-                {tourModels.map((model) => {
-                  const avgPrice = Number(model?.snapshot?.price?.avg);
-                  const avgDisplay = Number.isFinite(avgPrice) ? formatCurrency(avgPrice) : "—";
-                  const sample = Number(model?.meta?.sampleSize) || 0;
-                  return (
-                    <li key={model.modelKey || model.displayName} className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-                      <div>
-                        <p className="text-base font-semibold text-white">{model.displayName}</p>
-                        <p className="mt-1 text-xs text-slate-200/80">
-                          {sample > 0
-                            ? `Tracking ${sample.toLocaleString()} live listings · Typical ask ${avgDisplay}`
-                            : "Watching for fresh pricing data."}
-                        </p>
-                      </div>
-                      <div className="flex flex-col items-start gap-1 text-xs text-emerald-200 sm:items-end">
-                        <span>
-                          {model.usageRank ? `#${model.usageRank} in 2025 PGA Tour usage` : "Usage rank updating"}
-                          {model.playerCount ? ` · ${model.playerCount} players` : ""}
-                        </span>
-                        {model.sourceUrl ? (
-                          <a
-                            href={model.sourceUrl}
-                            target="_blank"
-                            rel="noopener noreferrer"
-                            className="text-emerald-300 underline decoration-emerald-300/40 decoration-dotted underline-offset-4 transition hover:text-emerald-200"
-                          >
-                            Source citation
-                          </a>
-                        ) : null}
-                      </div>
-                    </li>
-                  );
-                })}
-              </ul>
-            </div>
-          </div>
-        )}
       </HeroSection>
 
+      <PriceComparisonTable deals={deals} />
+
       <SectionWrapper variant="light">
-          <div className="max-w-3xl">
-            <h2 className="text-3xl font-bold tracking-tight text-slate-900 sm:text-4xl">
-              Today&apos;s best deals pulled straight from live listings
-            </h2>
-            <p className="mt-4 text-base text-slate-600">
-              These models currently have {deals.filter((d) => Number.isFinite(d.bestPrice)).length} Smart Price-verified listings with market-leading asks. Click through for filtered searches that stay synced with the live feed.
-            </p>
-          </div>
-          <div className="mt-12 grid gap-8 md:grid-cols-2 xl:grid-cols-3">
+        <div className="max-w-3xl">
+          <h2 className="text-3xl font-bold tracking-tight text-slate-900 sm:text-4xl">
+            Today&apos;s best deals pulled straight from live listings
+          </h2>
+          <p className="mt-4 text-base text-slate-600">
+            These models currently have {deals.filter((d) => Number.isFinite(d.bestPrice)).length} Smart Price-verified listings with market-leading asks. Click through for filtered searches that stay synced with the live feed.
+          </p>
+        </div>
+        <div className="mt-12 grid gap-8 md:grid-cols-2 xl:grid-cols-3">
             {deals.length === 0 ? (
               <div className="col-span-full rounded-3xl border border-slate-200 bg-white p-8 text-center text-slate-600">
                 Smart Price is refreshing today&apos;s leaderboard—check back soon for verified deals.
