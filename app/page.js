@@ -5,6 +5,7 @@ import MarketSnapshot from "@/components/MarketSnapshot";
 import HeroSection from "@/components/HeroSection";
 import SectionWrapper from "@/components/SectionWrapper";
 import HighlightCard from "@/components/HighlightCard";
+import HomepageCompareDemo from "@/components/HomepageCompareDemo";
 
 const DEFAULT_SNAPSHOT_QUERY = "golf putter";
 
@@ -421,6 +422,8 @@ export default async function Home() {
             </div>
           )}
         </div>
+
+        <HomepageCompareDemo deals={deals} />
 
         {heroSnapshot && (
           <div className="mt-16">
