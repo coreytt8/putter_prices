@@ -6,6 +6,7 @@ import HeroSection from "@/components/HeroSection";
 import SectionWrapper from "@/components/SectionWrapper";
 import HighlightCard from "@/components/HighlightCard";
 import HomepageCompareDemo from "@/components/HomepageCompareDemo";
+import PriceComparisonTable from "@/components/PriceComparisonTable";
 
 const DEFAULT_SNAPSHOT_QUERY = "golf putter";
 
@@ -429,6 +430,8 @@ export default async function Home() {
           </div>
         )}
       </HeroSection>
+
+      <PriceComparisonTable deals={deals} />
 
       <SectionWrapper variant="light">
           <div className="max-w-3xl">
