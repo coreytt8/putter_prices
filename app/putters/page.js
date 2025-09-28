@@ -181,6 +181,14 @@ const SORT_OPTIONS = [
   { label: "A → Z (Model)", value: "model_asc" },
 ];
 
+const sortParam = {
+  best_price_asc: "best_price_asc",
+  best_price_desc: "best_price_desc",
+  recent: "newlylisted",
+  model_asc: "model_asc",
+  count_desc: "count_desc",
+};
+
 const FIXED_PER_PAGE = 10;
 
 const retailerLogos = {
@@ -311,7 +319,11 @@ export default function PuttersPage() {
     if (sp.has("dex")) setDex(sp.get("dex") || "");
     if (sp.has("head")) setHead(sp.get("head") || "");
     if (sp.has("lengths")) setLengths(gNumList("lengths"));
-    if (sp.has("sort")) setSortBy(sp.get("sort") === "newlylisted" ? "recent" : "best_price_asc");
+    if (sp.has("sort")) {
+      const fromUrl = sp.get("sort");
+      const matched = Object.entries(sortParam).find(([, value]) => value === fromUrl);
+      if (matched) setSortBy(matched[0]);
+    }
     if (sp.has("group")) setGroupMode(sp.get("group") === "true");
     if (sp.has("broaden")) setBroaden(sp.get("broaden") === "true");
     if (sp.has("pro")) setIncludeProShops(sp.get("pro") === "true");
@@ -327,7 +339,7 @@ export default function PuttersPage() {
     if (maxPrice) params.set("maxPrice", String(maxPrice));
     if (conds.length) params.set("conditions", conds.join(","));
     if (buying.length) params.set("buyingOptions", buying.join(","));
-    if (sortBy === "recent") params.set("sort", "newlylisted");
+    if (sortParam[sortBy]) params.set("sort", sortParam[sortBy]);
     if (broaden) params.set("broaden", "true");
     if (dex) params.set("dex", dex);
     if (head) params.set("head", head);
@@ -350,7 +362,7 @@ export default function PuttersPage() {
     if (maxPrice) params.set("maxPrice", String(maxPrice));
     if (conds.length) params.set("conditions", conds.join(","));
     if (buying.length) params.set("buyingOptions", buying.join(","));
-    if (sortBy === "recent") params.set("sort", "newlylisted");
+    if (sortParam[sortBy]) params.set("sort", sortParam[sortBy]);
     if (broaden) params.set("broaden", "true");
     if (dex) params.set("dex", dex);
     if (includeProShops) params.set("pro","true");
