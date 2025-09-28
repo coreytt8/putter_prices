@@ -2,6 +2,9 @@ import Link from "next/link";
 import { headers } from "next/headers";
 import SmartPriceBadge from "@/components/SmartPriceBadge";
 import MarketSnapshot from "@/components/MarketSnapshot";
+import HeroSection from "@/components/HeroSection";
+import SectionWrapper from "@/components/SectionWrapper";
+import HighlightCard from "@/components/HighlightCard";
 
 const CURATED_SEARCHES = [
   {
@@ -249,8 +252,8 @@ export default async function Home() {
 
   return (
     <main className="min-h-screen bg-slate-950 text-white">
-      <section className="relative isolate overflow-hidden px-6 py-20 sm:py-24">
-        <div className="mx-auto max-w-5xl text-center">
+      <HeroSection>
+        <div className="text-center">
           <span className="inline-flex items-center rounded-full bg-emerald-500/10 px-4 py-1 text-sm font-semibold text-emerald-200 ring-1 ring-inset ring-emerald-400/30">
             Live eBay market intelligence
           </span>
@@ -309,14 +312,13 @@ export default async function Home() {
         </div>
 
         {heroSnapshot && (
-          <div className="mx-auto mt-16 max-w-5xl">
+          <div className="mt-16">
             <MarketSnapshot snapshot={heroSnapshot} meta={snapshotResponse?.meta} query={snapshotQuery} />
           </div>
         )}
-      </section>
+      </HeroSection>
 
-      <section className="bg-white px-6 py-16 text-slate-900 sm:py-20">
-        <div className="mx-auto max-w-6xl">
+      <SectionWrapper variant="light">
           <div className="max-w-3xl">
             <h2 className="text-3xl font-bold tracking-tight text-slate-900 sm:text-4xl">
               Today&apos;s best deals pulled straight from live listings
@@ -336,9 +338,8 @@ export default async function Home() {
                 Number.isFinite(median) && Number.isFinite(deal.bestPrice) && median > 0
                   ? Math.round(((median - deal.bestPrice) / median) * 100)
                   : null;
-
               return (
-                <div key={deal.query} className="flex h-full flex-col overflow-hidden rounded-3xl border border-slate-200 bg-white shadow-sm transition hover:-translate-y-1 hover:shadow-lg">
+                <HighlightCard key={deal.query}>
                   <div className="aspect-[3/2] w-full bg-slate-100">
                     {deal.image ? (
                       <img src={deal.image} alt={deal.label} className="h-full w-full object-cover" loading="lazy" />
@@ -402,15 +403,13 @@ export default async function Home() {
                       </p>
                     </div>
                   </div>
-                </div>
+                </HighlightCard>
               );
             })}
           </div>
-        </div>
-      </section>
+      </SectionWrapper>
 
-      <section className="bg-slate-100 px-6 py-16 text-slate-900 sm:py-20">
-        <div className="mx-auto max-w-6xl">
+      <SectionWrapper variant="muted">
           <div className="max-w-3xl">
             <h2 className="text-3xl font-bold tracking-tight text-slate-900 sm:text-4xl">Trending models on eBay</h2>
             <p className="mt-4 text-base text-slate-600">
@@ -441,11 +440,9 @@ export default async function Home() {
               </div>
             ))}
           </div>
-        </div>
-      </section>
+      </SectionWrapper>
 
-      <section className="bg-white px-6 py-16 text-slate-900 sm:py-20">
-        <div className="mx-auto max-w-5xl">
+      <SectionWrapper variant="light" containerClassName="max-w-5xl">
           <h2 className="text-3xl font-bold tracking-tight text-slate-900 sm:text-4xl">Why PutterIQ is different</h2>
           <div className="mt-8 grid gap-8 md:grid-cols-2">
             <div className="rounded-3xl border border-slate-200 bg-slate-50 p-6">
@@ -484,8 +481,7 @@ export default async function Home() {
               We send you to the best eBay listing with verified savings.
             </p>
           </div>
-        </div>
-      </section>
+      </SectionWrapper>
     </main>
   );
 }

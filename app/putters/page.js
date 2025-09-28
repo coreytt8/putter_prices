@@ -4,6 +4,9 @@ import { useEffect, useMemo, useState } from "react";
 import MarketSnapshot from "@/components/MarketSnapshot";
 import PriceSparkline from "@/components/PriceSparkline";
 import SmartPriceBadge from "@/components/SmartPriceBadge";
+import HeroSection from "@/components/HeroSection";
+import SectionWrapper from "@/components/SectionWrapper";
+import HighlightCard from "@/components/HighlightCard";
 import { detectVariant } from "@/lib/variantMap";
 
 /* ============================
@@ -639,792 +642,822 @@ export default function PuttersPage() {
   }, [q, loading, err, groupMode, showAdvanced, offers, JSON.stringify(conds)]);
 
   return (
-    <main className="mx-auto max-w-6xl px-4 py-8">
-      <header className="flex flex-col gap-2 sm:flex-row sm:items-end sm:justify-between">
-        <div>
-          <h1 className="text-3xl font-semibold tracking-tight">Compare Putter Prices</h1>
-          <p className="mt-1 text-sm text-gray-500">
-            Type a model (e.g., <em>“scotty cameron newport”</em>) or pick a brand.
+    <main className="min-h-screen bg-slate-950 text-white">
+      <HeroSection containerClassName="max-w-6xl">
+        <div className="space-y-6 text-left">
+          <span className="inline-flex items-center rounded-full bg-emerald-500/10 px-4 py-1 text-sm font-semibold text-emerald-200 ring-1 ring-inset ring-emerald-400/30">
+            Live eBay market explorer
+          </span>
+          <h1 className="text-4xl font-bold tracking-tight sm:text-5xl">Compare Putter Prices</h1>
+          <p className="text-lg text-slate-200">
+            Type a model (e.g., <em>“scotty cameron newport”</em>) or pick a brand to benchmark pricing in real-time.
           </p>
-          <p className="mt-1 text-xs text-gray-500">
-            Badges based on recent comps. <a className="text-blue-600 underline" href="/methodology">See methodology</a>.
-          </p>
-        </div>
-        {q.trim() && (
-          <div className="text-sm text-gray-500">
-            {groupMode ? "Grouped by model" : "Flat list"} · Page{" "}
-            <span className="font-medium">{page}</span> ·{" "}
-            <span className="font-medium">{FIXED_PER_PAGE}</span>{" "}
-            {groupMode ? "groups" : "listings"}
-          </div>
-        )}
-      </header>
-
-      {/* Recently viewed */}
-      {recent.length > 0 && (
-        <section className="mt-4 flex flex-wrap items-center gap-2">
-          <span className="text-xs uppercase tracking-wide text-gray-500">Recently viewed:</span>
-          {recent.map((m) => (
-            <button
-              key={m}
-              onClick={() => setQ(m)}
-              className="rounded-full border border-gray-300 px-3 py-1 text-sm hover:bg-gray-100"
-              title={`Search ${m}`}
-            >
-              {m}
-            </button>
-          ))}
-          <button
-            onClick={clearRecent}
-            className="ml-2 rounded-full border border-gray-200 px-2 py-0.5 text-xs text-gray-500 hover:bg-gray-50"
-          >
-            clear
-          </button>
-        </section>
-      )}
-
-      {/* Brand shortcuts */}
-      <section className="mt-6 flex flex-wrap gap-2">
-        {BRANDS.map((b) => (
-          <button
-            key={b.label}
-            onClick={() => setQ(b.q)}
-            className="rounded-full border border-gray-300 px-3 py-1 text-sm hover:bg-gray-100"
-            title={`Search ${b.label}`}
-          >
-            {b.label}
-          </button>
-        ))}
-      </section>
-
-      {/* Top controls */}
-      <section className="mt-6 grid grid-cols-1 gap-3 md:grid-cols-5">
-        <div className="md:col-span-2">
-          <label className="mb-1 block text-sm font-medium">Search</label>
-          <input
-            type="text"
-            value={q}
-            onChange={(e) => setQ(e.target.value)}
-            placeholder="e.g. scotty cameron newport"
-            className="w-full rounded-md border border-gray-300 px-3 py-2 outline-none focus:ring-2 focus:ring-blue-500"
-          />
-        </div>
-
-        <div>
-          <label className="mb-1 block text-sm font-medium">Sort</label>
-          <select
-            value={sortBy}
-            onChange={(e) => setSortBy(e.target.value)}
-            className="w-full rounded-md border border-gray-300 px-3 py-2"
-          >
-            {SORT_OPTIONS.map((s) => (
-              <option key={s.value} value={s.value}>{s.label}</option>
-            ))}
-          </select>
-        </div>
-
-        <div className="rounded-md border border-gray-200 p-3">
-          <label className="flex items-center gap-2 text-sm">
-            <input type="checkbox" checked={broaden} onChange={(e) => setBroaden(e.target.checked)} />
-            Broaden search (include common variants)
-          </label>
-          <p className="mt-1 text-xs text-gray-500">
-            Pulls more pages from eBay before filtering. Helpful for niche models/years.
+          <p className="text-sm text-slate-300">
+            Badges based on recent comps.{" "}
+            <a className="font-semibold text-emerald-300 underline hover:text-emerald-200" href="/methodology">
+              See methodology
+            </a>
+            .
           </p>
         </div>
-	<div className="rounded-md border border-gray-200 p-3">
-  <label className="flex items-center gap-2 text-sm">
-    <input
-      type="checkbox"
-      checked={includeProShops}
-      onChange={(e) => setIncludeProShops(e.target.checked)}
-    />
-    Include pro-shop sites (2nd Swing – beta)
-  </label>
-  <p className="mt-1 text-xs text-gray-500">
-    Adds 2nd Swing listings when enabled.
-  </p>
-</div>
+      </HeroSection>
 
+      <SectionWrapper variant="light">
+        <div className="space-y-8">
+          <HighlightCard className="gap-6 p-6">
+            <div className="flex flex-col gap-6">
+              {recent.length > 0 && (
+                <div className="flex flex-wrap items-center gap-2">
+                  <span className="text-xs font-semibold uppercase tracking-wide text-slate-500">Recently viewed:</span>
+                  {recent.map((m) => (
+                    <button
+                      key={m}
+                      onClick={() => setQ(m)}
+                      className="rounded-full border border-slate-200 bg-white px-3 py-1 text-sm font-medium text-slate-700 transition hover:border-emerald-200 hover:text-emerald-700 hover:shadow-sm"
+                      title={`Search ${m}`}
+                    >
+                      {m}
+                    </button>
+                  ))}
+                  <button
+                    onClick={clearRecent}
+                    className="ml-2 rounded-full border border-slate-200 px-2 py-0.5 text-xs text-slate-500 transition hover:border-emerald-200 hover:text-emerald-700"
+                  >
+                    Clear
+                  </button>
+                </div>
+              )}
 
-        <div className="flex items-end justify-between gap-3">
-          <button onClick={clearAll} className="w-full rounded-md border border-gray-300 px-3 py-2 text-sm hover:bg-gray-100">
-            Clear
-          </button>
-        </div>
-      </section>
-
-      {/* Filters */}
-      <section className="mt-4 grid grid-cols-1 gap-4 md:grid-cols-5">
-        {/* Quality */}
-        <div className="rounded-lg border border-gray-200 p-4">
-          <h3 className="mb-3 text-xs font-semibold uppercase tracking-wide text-gray-600">Quality</h3>
-          <label className="flex items-center gap-2 text-sm">
-            <input
-              type="checkbox"
-              checked={onlyComplete}
-              onChange={(e) => setOnlyComplete(e.target.checked)}
-            />
-            Only show listings with price & image
-          </label>
-        </div>
-
-        {/* Price */}
-        <div className="rounded-lg border border-gray-200 p-4">
-          <h3 className="mb-3 text-xs font-semibold uppercase tracking-wide text-gray-600">Price</h3>
-          <div className="flex items-center gap-2">
-            <input
-              type="number"
-              min="0"
-              placeholder="Min"
-              value={minPrice}
-              onChange={(e) => setMinPrice(e.target.value)}
-              className="w-full rounded-md border border-gray-300 px-2 py-1"
-            />
-            <span className="text-gray-400">—</span>
-            <input
-              type="number"
-              min="0"
-              placeholder="Max"
-              value={maxPrice}
-              onChange={(e) => setMaxPrice(e.target.value)}
-              className="w-full rounded-md border border-gray-300 px-2 py-1"
-            />
-          </div>
-        </div>
-
-        {/* Condition */}
-        <div className="rounded-lg border border-gray-200 p-4">
-          <h3 className="mb-3 text-xs font-semibold uppercase tracking-wide text-gray-600">Condition</h3>
-          <div className="flex flex-col gap-2">
-            {CONDITION_OPTIONS.map((c) => (
-              <label key={c.value} className="flex items-center gap-2 text-sm">
-                <input
-                  type="checkbox"
-                  checked={conds.includes(c.value)}
-                  onChange={() =>
-                    setConds((prev) =>
-                      prev.includes(c.value)
-                        ? prev.filter((v) => v !== c.value)
-                        : [...prev, c.value]
-                    )
-                  }
-                />
-                {c.label}
-              </label>
-            ))}
-          </div>
-        </div>
-
-        {/* Dexterity */}
-        <div className="rounded-lg border border-gray-200 p-4">
-          <h3 className="mb-3 text-xs font-semibold uppercase tracking-wide text-gray-600">Dexterity</h3>
-          <div className="flex flex-col gap-2 text-sm">
-            <label className="flex items-center gap-2">
-              <input
-                type="radio"
-                name="dex"
-                checked={dex === ""}
-                onChange={() => setDex("")}
-              />
-              Any
-            </label>
-            <label className="flex items-center gap-2">
-              <input
-                type="radio"
-                name="dex"
-                checked={dex === "RIGHT"}
-                onChange={() => setDex("RIGHT")}
-              />
-              Right-handed
-            </label>
-            <label className="flex items-center gap-2">
-              <input
-                type="radio"
-                name="dex"
-                checked={dex === "LEFT"}
-                onChange={() => setDex("LEFT")}
-              />
-              Left-handed
-            </label>
-          </div>
-        </div>
-
-        {/* Head Type */}
-        <div className="rounded-lg border border-gray-200 p-4">
-          <h3 className="mb-3 text-xs font-semibold uppercase tracking-wide text-gray-600">Head Type</h3>
-          <div className="flex flex-col gap-2 text-sm">
-            <label className="flex items-center gap-2">
-              <input
-                type="radio"
-                name="head"
-                checked={head === ""}
-                onChange={() => setHead("")}
-              />
-              Any
-            </label>
-            <label className="flex items-center gap-2">
-              <input
-                type="radio"
-                name="head"
-                checked={head === "BLADE"}
-                onChange={() => setHead("BLADE")}
-              />
-              Blade
-            </label>
-            <label className="flex items-center gap-2">
-              <input
-                type="radio"
-                name="head"
-                checked={head === "MALLET"}
-                onChange={() => setHead("MALLET")}
-              />
-              Mallet
-            </label>
-          </div>
-        </div>
-
-        {/* Length (common) */}
-        <div className="rounded-lg border border-gray-200 p-4 md:col-span-2">
-          <h3 className="mb-3 text-xs font-semibold uppercase tracking-wide text-gray-600">Length (common)</h3>
-          <div className="flex flex-wrap gap-3 text-sm">
-            {[33,34,35,36].map(L => (
-              <label key={L} className="flex items-center gap-2">
-                <input
-                  type="checkbox"
-                  checked={lengths.includes(L)}
-                  onChange={() => {
-                    setLengths(prev => prev.includes(L) ? prev.filter(x => x !== L) : [...prev, L]);
-                  }}
-                />
-                {L}&quot;
-              </label>
-            ))}
-            <div className="text-xs text-gray-500 basis-full">
-              We match titles within ±0.5&quot; of the selected length(s).
-            </div>
-          </div>
-        </div>
-
-        {/* Buying Options + Advanced */}
-        <div className="rounded-lg border border-gray-200 p-4 md:col-span-3">
-          <h3 className="mb-3 text-xs font-semibold uppercase tracking-wide text-gray-600">Buying Options</h3>
-          <div className="flex flex-wrap gap-3">
-            {BUYING_OPTIONS.map((b) => (
-              <label key={b.value} className="flex items-center gap-2 text-sm">
-                <input
-                  type="checkbox"
-                  checked={buying.includes(b.value)}
-                  onChange={() =>
-                    setBuying((prev) =>
-                      prev.includes(b.value)
-                        ? prev.filter((v) => v !== b.value)
-                        : [...prev, b.value]
-                    )
-                  }
-                />
-                {b.label}
-              </label>
-            ))}
-            <label className="flex items-center gap-2 text-sm">
-              <input
-                type="checkbox"
-                checked={hasBids}
-                onChange={(e) => setHasBids(e.target.checked)}
-              />
-              Has bids
-            </label>
-          </div>
-
-          <div className="mt-4">
-            <label className="flex items-center gap-2 text-sm">
-              <input
-                type="checkbox"
-                checked={showAdvanced}
-                onChange={(e) => setShowAdvanced(e.target.checked)}
-              />
-              Show advanced options
-            </label>
-
-            {showAdvanced && (
-              <label className="mt-3 flex items-center gap-2 text-sm">
-                <input
-                  type="checkbox"
-                  checked={groupMode}
-                  onChange={(e) => setGroupMode(e.target.checked)}
-                />
-                Group similar listings (model cards)
-              </label>
-            )}
-          </div>
-        </div>
-      </section>
-
-      {!q.trim() && (
-        <div className="mt-8 rounded-md border border-gray-200 bg-white p-6 text-center text-sm text-gray-600">
-          Start by typing a putter model or choose a brand above to see grouped price comparisons.
-        </div>
-      )}
-
-      {q.trim() && !loading && !err && (
-        <div className="mt-2 text-sm text-gray-600">
-          Showing{" "}
-          <span className="font-medium">{groupMode ? groups?.length ?? 0 : offers?.length ?? 0}</span>{" "}
-          {groupMode ? "model groups" : "listings"}
-          {typeof keptCount === "number" && typeof fetchedCount === "number" ? (
-            <> from <span className="font-medium">{keptCount}</span> kept (fetched {fetchedCount}).</>
-          ) : null}
-        </div>
-      )}
-
-      {/* LIVE analytics snapshot */}
-      <MarketSnapshot snapshot={apiData?.analytics?.snapshot} meta={apiData?.meta} query={q} />
-
-      {/* Loading & error UI */}
-      {q.trim() && loading && (
-        <div className="mt-6 grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-2">
-          {Array.from({ length: Math.min(FIXED_PER_PAGE, 6) }).map((_, i) => (
-            <div key={i} className="animate-pulse overflow-hidden rounded-xl border border-gray-200 bg-white">
-              <div className="h-40 bg-gray-100" />
-              <div className="space-y-3 p-4">
-                <div className="h-4 w-1/2 rounded bg-gray-200" />
-                <div className="h-3 w-1/3 rounded bg-gray-200" />
-                <div className="h-8 w-full rounded bg-gray-100" />
+              <div>
+                <h2 className="text-sm font-semibold uppercase tracking-wide text-slate-500">Brand shortcuts</h2>
+                <div className="mt-3 flex flex-wrap gap-2">
+                  {BRANDS.map((b) => (
+                    <button
+                      key={b.label}
+                      onClick={() => setQ(b.q)}
+                      className="rounded-full border border-slate-200 bg-slate-50 px-3 py-1 text-sm font-medium text-slate-700 transition hover:border-emerald-200 hover:bg-emerald-50 hover:text-emerald-700"
+                      title={`Search ${b.label}`}
+                    >
+                      {b.label}
+                    </button>
+                  ))}
+                </div>
               </div>
-            </div>
-          ))}
-        </div>
-      )}
-      {q.trim() && err && (
-        <div className="mt-6 rounded-md border border-red-200 bg-red-50 p-4">
-          <p className="text-sm text-red-700">{err}</p>
-        </div>
-      )}
 
-      {/* GROUPED VIEW */}
-      {q.trim() && !loading && !err && groupMode && (
-        <>
-          <section className="mt-6 grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-2">
-            {sortedGroups.map((g) => {
-              const isOpen = !!expanded[g.model];
+              <div className="grid gap-4 md:grid-cols-5">
+                <div className="md:col-span-2">
+                  <label className="mb-1 block text-sm font-semibold text-slate-700">Search</label>
+                  <input
+                    type="text"
+                    value={q}
+                    onChange={(e) => setQ(e.target.value)}
+                    placeholder="e.g. scotty cameron newport"
+                    className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-slate-900 shadow-sm outline-none transition focus:border-emerald-400 focus:ring-2 focus:ring-emerald-400/40"
+                  />
+                </div>
 
-              const ordered =
-                sortBy === "best_price_desc"
-                  ? [...g.offers].sort((a,b) => (b.price ?? -Infinity) - (a.price ?? -Infinity))
-                  : [...g.offers].sort((a,b) => (a.price ?? Infinity) - (b.price ?? Infinity));
+                <div>
+                  <label className="mb-1 block text-sm font-semibold text-slate-700">Sort</label>
+                  <select
+                    value={sortBy}
+                    onChange={(e) => setSortBy(e.target.value)}
+                    className="w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-slate-900 shadow-sm outline-none transition focus:border-emerald-400 focus:ring-2 focus:ring-emerald-400/40"
+                  >
+                    {SORT_OPTIONS.map((s) => (
+                      <option key={s.value} value={s.value}>
+                        {s.label}
+                      </option>
+                    ))}
+                  </select>
+                </div>
 
-              const nums = ordered.map(o => o?.price).filter(x => typeof x === "number").sort((a,b)=>a-b);
-              const nNums = nums.length;
-              const med = nNums < 2 ? null : (nNums % 2 ? nums[Math.floor(nNums/2)] : (nums[nNums/2-1]+nums[nNums/2])/2);
-              const bestDelta = (typeof g.bestPrice === "number" && typeof med === "number" && med - g.bestPrice > 0)
-                ? { diff: med - g.bestPrice, pct: ((med - g.bestPrice)/med)*100 }
-                : null;
+                <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4">
+                  <label className="flex items-start gap-3 text-sm text-slate-700">
+                    <input
+                      type="checkbox"
+                      checked={broaden}
+                      onChange={(e) => setBroaden(e.target.checked)}
+                      className="mt-1 h-4 w-4 rounded border-slate-300 text-emerald-500 focus:ring-emerald-400"
+                    />
+                    <span>
+                      Broaden search (include common variants)
+                      <span className="mt-1 block text-xs text-slate-500">
+                        Pulls more pages from eBay before filtering. Helpful for niche models/years.
+                      </span>
+                    </span>
+                  </label>
+                </div>
 
-              const { domDex, domHead, domLen } = summarizeDexHead(g);
+                <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4">
+                  <label className="flex items-start gap-3 text-sm text-slate-700">
+                    <input
+                      type="checkbox"
+                      checked={includeProShops}
+                      onChange={(e) => setIncludeProShops(e.target.checked)}
+                      className="mt-1 h-4 w-4 rounded border-slate-300 text-emerald-500 focus:ring-emerald-400"
+                    />
+                    <span>
+                      Include pro-shop sites (2nd Swing – beta)
+                      <span className="mt-1 block text-xs text-slate-500">Adds 2nd Swing listings when enabled.</span>
+                    </span>
+                  </label>
+                </div>
 
-              const showAll = !!showAllOffersByModel[g.model];
-              const list = isOpen ? (showAll ? ordered : ordered.slice(0, 10)) : [];
+                <div className="flex items-end">
+                  <button
+                    onClick={clearAll}
+                    className="w-full rounded-full bg-slate-900 px-4 py-2 text-sm font-semibold text-white shadow-sm transition hover:bg-slate-700"
+                  >
+                    Clear filters
+                  </button>
+                </div>
+              </div>
 
-              const lows = lowsByModel[g.model];
-              const series = seriesByModel[g.model] || [];
-              const groupCond = selectedConditionBand(conds) || inferConditionBandFromOffers(g?.offers || []) || "";
-              const statsKey = getStatsKey(g.model, groupCond);
-              const stats = statsByModel[statsKey] || null;
-
-              const firstOffer = ordered[0];
-              const bestUrl = firstOffer?.url ?? null;
-
-              const helperModelKey = firstOffer ? getModelKey(firstOffer) : g.model;
-              const helperVariant = firstOffer ? detectVariant(firstOffer?.title) : null;
-              const helperVariantKey = getStatsKey3(helperModelKey, helperVariant, groupCond);
-              const helperBaseKey = getStatsKey(helperModelKey, groupCond);
-              const helperVariantStats = statsByModel[helperVariantKey] ?? null;
-              const helperBaseStats = statsByModel[helperBaseKey] ?? stats;
-
-              const fair = fairPriceBadge(g.bestPrice, stats);
-
-              return (
-                <article key={g.model} className="overflow-hidden rounded-xl border border-gray-200 bg-white shadow-sm">
-                  <div className="relative aspect-[4/3] w-full max-h-48 bg-gray-50">
-                    {g.image ? (
-                      // eslint-disable-next-line @next/next/no-img-element
-                      <img src={g.image} alt={g.model} className="h-full w-full object-contain" loading="lazy" />
-                    ) : (
-                      <div className="flex h-full w-full items-center justify-center text-xs text-gray-400">
-                        No image
-                      </div>
-                    )}
+              <div>
+                <h2 className="text-sm font-semibold uppercase tracking-wide text-slate-500">Filters</h2>
+                <div className="mt-4 grid grid-cols-1 gap-4 md:grid-cols-5">
+                  <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4">
+                    <h3 className="mb-3 text-xs font-semibold uppercase tracking-wide text-slate-500">Quality</h3>
+                    <label className="flex items-center gap-2 text-sm text-slate-700">
+                      <input
+                        type="checkbox"
+                        checked={onlyComplete}
+                        onChange={(e) => setOnlyComplete(e.target.checked)}
+                        className="h-4 w-4 rounded border-slate-300 text-emerald-500 focus:ring-emerald-400"
+                      />
+                      Only show listings with price & image
+                    </label>
                   </div>
 
-                  <div className="p-4">
-                    <div className="flex items-start justify-between gap-3">
-                      <div className="min-w-0">
-                        <h3 className="text-lg font-semibold leading-tight">{g.model}</h3>
-                        <p className="mt-1 text-xs text-gray-500">
-                          {g.count} offer{g.count === 1 ? "" : "s"} · {g.retailers.join(", ")}
-                        </p>
+                  <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4">
+                    <h3 className="mb-3 text-xs font-semibold uppercase tracking-wide text-slate-500">Price</h3>
+                    <div className="flex items-center gap-2">
+                      <input
+                        type="number"
+                        min="0"
+                        placeholder="Min"
+                        value={minPrice}
+                        onChange={(e) => setMinPrice(e.target.value)}
+                        className="w-full rounded-lg border border-slate-200 bg-white px-2 py-1 text-sm text-slate-900 focus:border-emerald-400 focus:outline-none focus:ring-1 focus:ring-emerald-400/40"
+                      />
+                      <span className="text-slate-400">—</span>
+                      <input
+                        type="number"
+                        min="0"
+                        placeholder="Max"
+                        value={maxPrice}
+                        onChange={(e) => setMaxPrice(e.target.value)}
+                        className="w-full rounded-lg border border-slate-200 bg-white px-2 py-1 text-sm text-slate-900 focus:border-emerald-400 focus:outline-none focus:ring-1 focus:ring-emerald-400/40"
+                      />
+                    </div>
+                  </div>
 
-                        {/* Dominant chips + BADGES */}
-                        <div className="mt-2 flex flex-wrap items-center gap-2">
-                          {domDex && (
-                            <span className="rounded-full bg-slate-100 px-2 py-0.5 text-[11px] font-medium text-slate-700">
-                              {domDex === "LEFT" ? "Left-hand" : "Right-hand"}
-                            </span>
-                          )}
-                          {domHead && (
-                            <span className="rounded-full bg-indigo-100 px-2 py-0.5 text-[11px] font-medium text-indigo-700">
-                              {domHead === "MALLET" ? "Mallet" : "Blade"}
-                            </span>
-                          )}
-                          {Number.isFinite(domLen) && (
-                            <span className="rounded-full bg-amber-100 px-2 py-0.5 text-[11px] font-medium text-amber-800">
-                              ~{domLen}&quot;
-                            </span>
-                          )}
-
-                          {/* Group header price badge */}
-                          <SmartPriceBadge
-                            price={Number(g.bestPrice)}
-                            baseStats={helperBaseStats}
-                            variantStats={helperVariantStats}
-                            className="ml-1"
+                  <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4">
+                    <h3 className="mb-3 text-xs font-semibold uppercase tracking-wide text-slate-500">Condition</h3>
+                    <div className="flex flex-col gap-2">
+                      {CONDITION_OPTIONS.map((c) => (
+                        <label key={c.value} className="flex items-center gap-2 text-sm text-slate-700">
+                          <input
+                            type="checkbox"
+                            checked={conds.includes(c.value)}
+                            onChange={() =>
+                              setConds((prev) =>
+                                prev.includes(c.value)
+                                  ? prev.filter((v) => v !== c.value)
+                                  : [...prev, c.value]
+                              )
+                            }
+                            className="h-4 w-4 rounded border-slate-300 text-emerald-500 focus:ring-emerald-400"
                           />
+                          {c.label}
+                        </label>
+                      ))}
+                    </div>
+                  </div>
 
-                          {/* Optional quick chip */}
-                          {fair && (
-                            <span className={`rounded-full px-2 py-0.5 text-[11px] font-medium text-white ${fair.tone === "emerald" ? "bg-emerald-600" : "bg-green-600"}`}>
-                              {fair.label}
-                            </span>
-                          )}
-                        </div>
+                  <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4">
+                    <h3 className="mb-3 text-xs font-semibold uppercase tracking-wide text-slate-500">Dexterity</h3>
+                    <div className="flex flex-col gap-2 text-sm text-slate-700">
+                      <label className="flex items-center gap-2">
+                        <input
+                          type="radio"
+                          name="dex"
+                          checked={dex === ""}
+                          onChange={() => setDex("")}
+                          className="h-4 w-4 border-slate-300 text-emerald-500 focus:ring-emerald-400"
+                        />
+                        Any
+                      </label>
+                      <label className="flex items-center gap-2">
+                        <input
+                          type="radio"
+                          name="dex"
+                          checked={dex === "RIGHT"}
+                          onChange={() => setDex("RIGHT")}
+                          className="h-4 w-4 border-slate-300 text-emerald-500 focus:ring-emerald-400"
+                        />
+                        Right-handed
+                      </label>
+                      <label className="flex items-center gap-2">
+                        <input
+                          type="radio"
+                          name="dex"
+                          checked={dex === "LEFT"}
+                          onChange={() => setDex("LEFT")}
+                          className="h-4 w-4 border-slate-300 text-emerald-500 focus:ring-emerald-400"
+                        />
+                        Left-handed
+                      </label>
+                    </div>
+                  </div>
 
-                        {/* Helper badge (variant-aware from first listing) */}
-                        <div className="mt-2">
-                          <SmartPriceBadge
-                            price={Number(g.bestPrice)}
-                            baseStats={helperBaseStats}
-                            variantStats={helperVariantStats}
-                            title={firstOffer?.title || g.model}
-                            specs={firstOffer?.specs}
-                            brand={g?.brand}
-                            showHelper
+                  <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4">
+                    <h3 className="mb-3 text-xs font-semibold uppercase tracking-wide text-slate-500">Head Type</h3>
+                    <div className="flex flex-col gap-2 text-sm text-slate-700">
+                      <label className="flex items-center gap-2">
+                        <input
+                          type="radio"
+                          name="head"
+                          checked={head === ""}
+                          onChange={() => setHead("")}
+                          className="h-4 w-4 border-slate-300 text-emerald-500 focus:ring-emerald-400"
+                        />
+                        Any
+                      </label>
+                      <label className="flex items-center gap-2">
+                        <input
+                          type="radio"
+                          name="head"
+                          checked={head === "BLADE"}
+                          onChange={() => setHead("BLADE")}
+                          className="h-4 w-4 border-slate-300 text-emerald-500 focus:ring-emerald-400"
+                        />
+                        Blade
+                      </label>
+                      <label className="flex items-center gap-2">
+                        <input
+                          type="radio"
+                          name="head"
+                          checked={head === "MALLET"}
+                          onChange={() => setHead("MALLET")}
+                          className="h-4 w-4 border-slate-300 text-emerald-500 focus:ring-emerald-400"
+                        />
+                        Mallet
+                      </label>
+                    </div>
+                  </div>
+
+                  <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4 md:col-span-2">
+                    <h3 className="mb-3 text-xs font-semibold uppercase tracking-wide text-slate-500">Length (common)</h3>
+                    <div className="flex flex-wrap gap-3 text-sm text-slate-700">
+                      {[33, 34, 35, 36].map((L) => (
+                        <label key={L} className="flex items-center gap-2">
+                          <input
+                            type="checkbox"
+                            checked={lengths.includes(L)}
+                            onChange={() => {
+                              setLengths((prev) => (prev.includes(L) ? prev.filter((x) => x !== L) : [...prev, L]));
+                            }}
+                            className="h-4 w-4 rounded border-slate-300 text-emerald-500 focus:ring-emerald-400"
                           />
-                        </div>
-
-                        {/* Lows row (on expand) */}
-                        {isOpen && (
-                          <div className="mt-2 text-xs text-gray-600">
-                            <span className="mr-2">Lows:</span>
-                            <span className="mr-3">1d {formatPrice(Number(lows?.low1d))}</span>
-                            <span className="mr-3">7d {formatPrice(Number(lows?.low7d))}</span>
-                            <span>30d {formatPrice(Number(lows?.low30d))}</span>
-                          </div>
-                        )}
-                      </div>
-
-                      <div className="flex flex-col items-end gap-1">
-                        <div className="shrink-0 rounded-full bg-green-100 px-3 py-1 text-xs font-semibold text-green-700">
-                          Best: {formatPrice(g.bestPrice, g.bestCurrency)}
-                        </div>
-                        {bestDelta && (
-                          <div
-                            className="rounded-full bg-emerald-50 px-3 py-1 text-[11px] font-medium text-emerald-700"
-                            title={`Median ${formatPrice(med)} · Save ~${formatPrice(bestDelta.diff)} (~${bestDelta.pct.toFixed(0)}%)`}
-                          >
-                            Save {formatPrice(bestDelta.diff)} (~{bestDelta.pct.toFixed(0)}%)
-                          </div>
-                        )}
-
-                        {/* Copy best link */}
-                        <button
-                          disabled={!bestUrl}
-                          onClick={async () => {
-                            if (!bestUrl) return;
-                            await copyToClipboard(bestUrl);
-                            setCopiedFor(g.model);
-                            setTimeout(() => setCopiedFor((c) => (c === g.model ? "" : c)), 1500);
-                          }}
-                          className={`mt-1 rounded-md border px-2 py-1 text-[11px] ${bestUrl ? "hover:bg-gray-50" : "opacity-50 cursor-not-allowed"}`}
-                          title="Copy best listing link"
-                        >
-                          {copiedFor === g.model ? "Copied!" : "Copy best"}
-                        </button>
+                          {L}&quot;
+                        </label>
+                      ))}
+                      <div className="basis-full text-xs text-slate-500">
+                        We match titles within ±0.5&quot; of the selected length(s).
                       </div>
                     </div>
+                  </div>
 
-                    {/* Sparkline */}
-                    {isOpen && Array.isArray(series) && series.length > 1 && (
-                      <div className="mt-3">
-                        <PriceSparkline data={series} height={70} showAverage showMedian className="h-[70px]" />
-                      </div>
-                    )}
+                  <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4 md:col-span-3">
+                    <h3 className="mb-3 text-xs font-semibold uppercase tracking-wide text-slate-500">Buying Options</h3>
+                    <div className="flex flex-wrap gap-3 text-sm text-slate-700">
+                      {BUYING_OPTIONS.map((b) => (
+                        <label key={b.value} className="flex items-center gap-2">
+                          <input
+                            type="checkbox"
+                            checked={buying.includes(b.value)}
+                            onChange={() =>
+                              setBuying((prev) =>
+                                prev.includes(b.value) ? prev.filter((v) => v !== b.value) : [...prev, b.value]
+                              )
+                            }
+                            className="h-4 w-4 rounded border-slate-300 text-emerald-500 focus:ring-emerald-400"
+                          />
+                          {b.label}
+                        </label>
+                      ))}
+                      <label className="flex items-center gap-2">
+                        <input
+                          type="checkbox"
+                          checked={hasBids}
+                          onChange={(e) => setHasBids(e.target.checked)}
+                          className="h-4 w-4 rounded border-slate-300 text-emerald-500 focus:ring-emerald-400"
+                        />
+                        Has bids
+                      </label>
+                    </div>
 
-                    <div className="mt-4 flex gap-2">
-                      <button
-                        onClick={() => toggleExpand(g.model)}
-                        className="w-full rounded-md border border-gray-300 px-3 py-2 text-sm hover:bg-gray-50"
-                      >
-                        {isOpen ? "Hide offers" : `View offers (${g.count})`}
-                      </button>
-                      {isOpen && g.count > 10 && (
-                        <button
-                          onClick={() => toggleShowAllOffers(g.model)}
-                          className="rounded-md border border-gray-300 px-3 py-2 text-sm hover:bg-gray-50"
-                        >
-                          {showAll ? "Show top 10" : "Show all"}
-                        </button>
+                    <div className="mt-4 space-y-2 text-sm text-slate-700">
+                      <label className="flex items-center gap-2">
+                        <input
+                          type="checkbox"
+                          checked={showAdvanced}
+                          onChange={(e) => setShowAdvanced(e.target.checked)}
+                          className="h-4 w-4 rounded border-slate-300 text-emerald-500 focus:ring-emerald-400"
+                        />
+                        Show advanced options
+                      </label>
+
+                      {showAdvanced && (
+                        <label className="flex items-center gap-2">
+                          <input
+                            type="checkbox"
+                            checked={groupMode}
+                            onChange={(e) => setGroupMode(e.target.checked)}
+                            className="h-4 w-4 rounded border-slate-300 text-emerald-500 focus:ring-emerald-400"
+                          />
+                          Group similar listings (model cards)
+                        </label>
                       )}
                     </div>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </HighlightCard>
 
-                    {/* Expanded listings */}
-                    {isOpen && (
-                      <ul className="mt-3 space-y-2">
-                        {list.map((o) => {
-                          const condParam =
-                            (o?.conditionBand || o?.condition || "").toUpperCase() ||
-                            selectedConditionBand(conds) ||
-                            "";
+          <HighlightCard className="p-6">
+            <div className="flex flex-col gap-6">
+              <div className="flex flex-col gap-2 sm:flex-row sm:items-end sm:justify-between">
+                <div>
+                  <h2 className="text-2xl font-semibold text-slate-900">Live results</h2>
+                  <p className="text-sm text-slate-600">
+                    Results refresh automatically as you adjust filters. Group view bundles listings by model.
+                  </p>
+                </div>
+                {q.trim() && (
+                  <div className="text-sm text-slate-600">
+                    {groupMode ? "Grouped by model" : "Flat list"} · Page{" "}
+                    <span className="font-semibold text-slate-900">{page}</span> ·{" "}
+                    <span className="font-semibold text-slate-900">{FIXED_PER_PAGE}</span>{" "}
+                    {groupMode ? "groups" : "listings"}
+                  </div>
+                )}
+              </div>
 
-                          // Variant-aware stats lookup
-                          const modelKey   = getModelKey(o);
-                          const variant    = detectVariant(o?.title);
-                          const variantKey = getStatsKey3(modelKey, variant, condParam);
-                          const baseKey    = getStatsKey(modelKey, condParam);
-                          const variantStats = statsByModel[variantKey] ?? null;
-                          const baseStats = statsByModel[baseKey] ?? stats;
+              {!q.trim() && (
+                <div className="rounded-2xl border border-slate-200 bg-slate-50 p-6 text-center text-sm text-slate-600">
+                  Start by typing a putter model or choose a brand above to see grouped price comparisons.
+                </div>
+              )}
 
-                          return (
-                            <li
-                              key={o.productId + o.url}
-                              className="flex items-center justify-between gap-3 rounded border border-gray-100 p-2"
-                            >
-                              {/* LEFT: logo + retailer/seller */}
-                              <div className="flex min-w-0 items-center gap-2">
-                                {retailerLogos[o.retailer] && (
-                                  // eslint-disable-next-line @next/next/no-img-element
-                                  <img
-                                    src={retailerLogos[o.retailer]}
-                                    alt={o.retailer}
-                                    className="h-4 w-12 object-contain"
+              {q.trim() && !loading && !err && (
+                <div className="text-sm text-slate-600">
+                  Showing{" "}
+                  <span className="font-semibold text-slate-900">{groupMode ? groups?.length ?? 0 : offers?.length ?? 0}</span>{" "}
+                  {groupMode ? "model groups" : "listings"}
+                  {typeof keptCount === "number" && typeof fetchedCount === "number" ? (
+                    <> from <span className="font-semibold text-slate-900">{keptCount}</span> kept (fetched {fetchedCount}).</>
+                  ) : null}
+                </div>
+              )}
+
+              <MarketSnapshot snapshot={apiData?.analytics?.snapshot} meta={apiData?.meta} query={q} />
+
+              {q.trim() && loading && (
+                <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-2">
+                  {Array.from({ length: Math.min(FIXED_PER_PAGE, 6) }).map((_, i) => (
+                    <div
+                      key={i}
+                      className="animate-pulse overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm"
+                    >
+                      <div className="h-40 bg-slate-100" />
+                      <div className="space-y-3 p-4">
+                        <div className="h-4 w-1/2 rounded bg-slate-200" />
+                        <div className="h-3 w-1/3 rounded bg-slate-200" />
+                        <div className="h-8 w-full rounded bg-slate-100" />
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
+
+              {q.trim() && err && (
+                <div className="rounded-2xl border border-red-200 bg-red-50 p-4">
+                  <p className="text-sm text-red-700">{err}</p>
+                </div>
+              )}
+
+              {q.trim() && !loading && !err && groupMode && (
+                <>
+                  <section className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-2">
+                    {sortedGroups.map((g) => {
+                      const isOpen = !!expanded[g.model];
+
+                      const ordered =
+                        sortBy === "best_price_desc"
+                          ? [...g.offers].sort((a, b) => (b.price ?? -Infinity) - (a.price ?? -Infinity))
+                          : [...g.offers].sort((a, b) => (a.price ?? Infinity) - (b.price ?? Infinity));
+
+                      const nums = ordered
+                        .map((o) => o?.price)
+                        .filter((x) => typeof x === "number")
+                        .sort((a, b) => a - b);
+                      const nNums = nums.length;
+                      const med =
+                        nNums < 2
+                          ? null
+                          : nNums % 2
+                          ? nums[Math.floor(nNums / 2)]
+                          : (nums[nNums / 2 - 1] + nums[nNums / 2]) / 2;
+                      const bestDelta =
+                        typeof g.bestPrice === "number" && typeof med === "number" && med - g.bestPrice > 0
+                          ? { diff: med - g.bestPrice, pct: ((med - g.bestPrice) / med) * 100 }
+                          : null;
+
+                      const { domDex, domHead, domLen } = summarizeDexHead(g);
+
+                      const showAll = !!showAllOffersByModel[g.model];
+                      const list = isOpen ? (showAll ? ordered : ordered.slice(0, 10)) : [];
+
+                      const lows = lowsByModel[g.model];
+                      const series = seriesByModel[g.model] || [];
+                      const groupCond =
+                        selectedConditionBand(conds) || inferConditionBandFromOffers(g?.offers || []) || "";
+                      const statsKey = getStatsKey(g.model, groupCond);
+                      const stats = statsByModel[statsKey] || null;
+
+                      const firstOffer = ordered[0];
+                      const bestUrl = firstOffer?.url ?? null;
+
+                      const helperModelKey = firstOffer ? getModelKey(firstOffer) : g.model;
+                      const helperVariant = firstOffer ? detectVariant(firstOffer?.title) : null;
+                      const helperVariantKey = getStatsKey3(helperModelKey, helperVariant, groupCond);
+                      const helperBaseKey = getStatsKey(helperModelKey, groupCond);
+                      const helperVariantStats = statsByModel[helperVariantKey] ?? null;
+                      const helperBaseStats = statsByModel[helperBaseKey] ?? stats;
+
+                      const fair = fairPriceBadge(g.bestPrice, stats);
+
+                      return (
+                        <article
+                          key={g.model}
+                          className="overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm transition hover:-translate-y-1 hover:shadow-lg"
+                        >
+                          <div className="relative aspect-[4/3] w-full max-h-48 bg-slate-100">
+                            {g.image ? (
+                              // eslint-disable-next-line @next/next/no-img-element
+                              <img src={g.image} alt={g.model} className="h-full w-full object-contain" loading="lazy" />
+                            ) : (
+                              <div className="flex h-full w-full items-center justify-center text-xs text-slate-500">
+                                No image
+                              </div>
+                            )}
+                          </div>
+
+                          <div className="p-5">
+                            <div className="flex items-start justify-between gap-3">
+                              <div className="min-w-0">
+                                <h3 className="text-lg font-semibold leading-tight text-slate-900">{g.model}</h3>
+                                <p className="mt-1 text-xs text-slate-500">
+                                  {g.count} offer{g.count === 1 ? "" : "s"} · {g.retailers.join(", ")}
+                                </p>
+
+                                <div className="mt-2 flex flex-wrap items-center gap-2">
+                                  {domDex && (
+                                    <span className="rounded-full bg-slate-100 px-2 py-0.5 text-[11px] font-medium text-slate-700">
+                                      {domDex === "LEFT" ? "Left-hand" : "Right-hand"}
+                                    </span>
+                                  )}
+                                  {domHead && (
+                                    <span className="rounded-full bg-indigo-100 px-2 py-0.5 text-[11px] font-medium text-indigo-700">
+                                      {domHead === "MALLET" ? "Mallet" : "Blade"}
+                                    </span>
+                                  )}
+                                  {Number.isFinite(domLen) && (
+                                    <span className="rounded-full bg-amber-100 px-2 py-0.5 text-[11px] font-medium text-amber-800">
+                                      ~{domLen}&quot;
+                                    </span>
+                                  )}
+
+                                  <SmartPriceBadge
+                                    price={Number(g.bestPrice)}
+                                    baseStats={helperBaseStats}
+                                    variantStats={helperVariantStats}
+                                    className="ml-1"
                                   />
-                                )}
 
-                                <div className="min-w-0">
-                                  <div className="truncate text-sm font-medium">
-                                    {o.retailer}
-                                    {o?.seller?.username && (
-                                      <span className="ml-2 text-xs text-gray-500">@{o.seller.username}</span>
-                                    )}
-                                    {typeof o?.seller?.feedbackPct === "number" && (
-                                      <span className="ml-2 rounded-full bg-gray-100 px-2 py-[2px] text-[11px] font-medium text-gray-700">
-                                        {o.seller.feedbackPct.toFixed(1)}%
-                                      </span>
-                                    )}
-                                    {Number(o?.buying?.bidCount) > 0 && (
-                                      <span className="ml-2 text-xs font-medium text-amber-600">
-                                        · {o.buying.bidCount} bids
-                                      </span>
-                                    )}
-                                  </div>
-
-                                  {/* Enhanced spec line */}
-                                  <div className="mt-0.5 truncate text-xs text-gray-500">
-                                    {(o.specs?.dexterity || "").toUpperCase() === "LEFT" ? "LH" :
-                                     (o.specs?.dexterity || "").toUpperCase() === "RIGHT" ? "RH" : "—"}
-                                    {" · "}
-                                    {(o.specs?.headType || "").toUpperCase() || "—"}
-                                    {" · "}
-                                    {Number.isFinite(Number(o?.specs?.length)) ? `${o.specs.length}"` : "—"}
-                                    {o?.specs?.shaft && <> · {String(o.specs.shaft).toLowerCase()}</>}
-                                    {o?.specs?.hosel && <> · {o.specs.hosel}</>}
-                                    {o?.specs?.face && <> · {o.specs.face}</>}
-                                    {o?.specs?.grip && <> · {o.specs.grip}</>}
-                                    {o?.specs?.hasHeadcover && <> · HC</>}
-                                    {o?.specs?.toeHang && <> · {o.specs.toeHang} toe</>}
-                                    {Number.isFinite(Number(o?.specs?.loft)) && <> · {o.specs.loft}° loft</>}
-                                    {Number.isFinite(Number(o?.specs?.lie)) && <> · {o.specs.lie}° lie</>}
-                                    {o.createdAt && (<> · listed {timeAgo(new Date(o.createdAt).getTime())}</>)}
-                                  </div>
+                                  {fair && (
+                                    <span
+                                      className={`rounded-full px-2 py-0.5 text-[11px] font-medium text-white ${fair.tone === "emerald" ? "bg-emerald-600" : "bg-green-600"}`}
+                                    >
+                                      {fair.label}
+                                    </span>
+                                  )}
                                 </div>
+
+                                <div className="mt-2">
+                                  <SmartPriceBadge
+                                    price={Number(g.bestPrice)}
+                                    baseStats={helperBaseStats}
+                                    variantStats={helperVariantStats}
+                                    title={firstOffer?.title || g.model}
+                                    specs={firstOffer?.specs}
+                                    brand={g?.brand}
+                                    showHelper
+                                  />
+                                </div>
+
+                                {isOpen && (
+                                  <div className="mt-2 text-xs text-slate-600">
+                                    <span className="mr-2 font-semibold text-slate-700">Lows:</span>
+                                    <span className="mr-3">1d {formatPrice(Number(lows?.low1d))}</span>
+                                    <span className="mr-3">7d {formatPrice(Number(lows?.low7d))}</span>
+                                    <span>30d {formatPrice(Number(lows?.low30d))}</span>
+                                  </div>
+                                )}
                               </div>
 
-                              {/* RIGHT: badge + price + view */}
-                              <div className="flex items-center gap-3">
+                              <div className="flex flex-col items-end gap-1">
+                                <div className="shrink-0 rounded-full bg-emerald-100 px-3 py-1 text-xs font-semibold text-emerald-700">
+                                  Best: {formatPrice(g.bestPrice, g.bestCurrency)}
+                                </div>
+                                {bestDelta && (
+                                  <div
+                                    className="rounded-full bg-emerald-50 px-3 py-1 text-[11px] font-medium text-emerald-700"
+                                    title={`Median ${formatPrice(med)} · Save ~${formatPrice(bestDelta.diff)} (~${bestDelta.pct.toFixed(0)}%)`}
+                                  >
+                                    Save {formatPrice(bestDelta.diff)} (~{bestDelta.pct.toFixed(0)}%)
+                                  </div>
+                                )}
+
+                                <button
+                                  disabled={!bestUrl}
+                                  onClick={async () => {
+                                    if (!bestUrl) return;
+                                    await copyToClipboard(bestUrl);
+                                    setCopiedFor(g.model);
+                                    setTimeout(() => setCopiedFor((c) => (c === g.model ? "" : c)), 1500);
+                                  }}
+                                  className={`mt-1 rounded-full border border-slate-200 px-3 py-1 text-[11px] font-medium transition ${bestUrl ? "text-slate-700 hover:border-emerald-200 hover:text-emerald-700" : "opacity-50"}`}
+                                  title="Copy best listing link"
+                                >
+                                  {copiedFor === g.model ? "Copied!" : "Copy best"}
+                                </button>
+                              </div>
+                            </div>
+
+                            {isOpen && Array.isArray(series) && series.length > 1 && (
+                              <div className="mt-4">
+                                <PriceSparkline data={series} height={70} showAverage showMedian className="h-[70px]" />
+                              </div>
+                            )}
+
+                            <div className="mt-4 flex gap-2">
+                              <button
+                                onClick={() => toggleExpand(g.model)}
+                                className="w-full rounded-full border border-slate-200 px-3 py-2 text-sm font-semibold text-slate-700 transition hover:border-emerald-200 hover:text-emerald-700"
+                              >
+                                {isOpen ? "Hide offers" : `View offers (${g.count})`}
+                              </button>
+                              {isOpen && g.count > 10 && (
+                                <button
+                                  onClick={() => toggleShowAllOffers(g.model)}
+                                  className="rounded-full border border-slate-200 px-3 py-2 text-sm font-semibold text-slate-700 transition hover:border-emerald-200 hover:text-emerald-700"
+                                >
+                                  {showAll ? "Show top 10" : "Show all"}
+                                </button>
+                              )}
+                            </div>
+
+                            {isOpen && (
+                              <ul className="mt-4 space-y-3">
+                                {list.map((o) => {
+                                  const condParam =
+                                    (o?.conditionBand || o?.condition || "").toUpperCase() ||
+                                    selectedConditionBand(conds) ||
+                                    "";
+
+                                  const modelKey = getModelKey(o);
+                                  const variant = detectVariant(o?.title);
+                                  const variantKey = getStatsKey3(modelKey, variant, condParam);
+                                  const baseKey = getStatsKey(modelKey, condParam);
+                                  const variantStats = statsByModel[variantKey] ?? null;
+                                  const baseStats = statsByModel[baseKey] ?? stats;
+
+                                  return (
+                                    <li
+                                      key={o.productId + o.url}
+                                      className="flex flex-col gap-3 rounded-2xl border border-slate-200 bg-slate-50 p-3 text-sm text-slate-700 sm:flex-row sm:items-center sm:justify-between"
+                                    >
+                                      <div className="flex flex-1 flex-col gap-1">
+                                        <div className="font-semibold text-slate-900">{o.title}</div>
+                                        <div className="text-xs text-slate-500">
+                                          {o?.seller?.username && <>@{o.seller.username} · </>}
+                                          {typeof o?.seller?.feedbackPct === "number" && (
+                                            <>{o.seller.feedbackPct.toFixed(1)}% · </>
+                                          )}
+                                          {Number(o?.buying?.bidCount) > 0 && <>{o.buying.bidCount} bids · </>}
+                                          {(o.specs?.dexterity || "").toUpperCase() === "LEFT"
+                                            ? "LH"
+                                            : (o.specs?.dexterity || "").toUpperCase() === "RIGHT"
+                                            ? "RH"
+                                            : "—"}
+                                          {" · "}
+                                          {(o.specs?.headType || "").toUpperCase() || "—"}
+                                          {" · "}
+                                          {Number.isFinite(Number(o?.specs?.length)) ? `${o.specs.length}"` : "—"}
+                                          {o?.specs?.shaft && <> · {String(o.specs.shaft).toLowerCase()}</>}
+                                          {o?.specs?.hosel && <> · {o.specs.hosel}</>}
+                                          {o?.specs?.face && <> · {o.specs.face}</>}
+                                          {o?.specs?.grip && <> · {o.specs.grip}</>}
+                                          {o?.specs?.hasHeadcover && <> · HC</>}
+                                          {o?.specs?.toeHang && <> · {o.specs.toeHang} toe</>}
+                                          {Number.isFinite(Number(o?.specs?.loft)) && <> · {o.specs.loft}° loft</>}
+                                          {Number.isFinite(Number(o?.specs?.lie)) && <> · {o.specs.lie}° lie</>}
+                                          {o.createdAt && <> · listed {timeAgo(new Date(o.createdAt).getTime())}</>}
+                                        </div>
+                                      </div>
+
+                                      <div className="flex items-center gap-3">
+                                        <SmartPriceBadge
+                                          price={Number(o.price)}
+                                          baseStats={baseStats}
+                                          variantStats={variantStats}
+                                          title={o.title}
+                                          specs={o.specs}
+                                          brand={g?.brand}
+                                        />
+                                        <span className="text-sm font-semibold text-slate-900">
+                                          {typeof o.price === "number" ? formatPrice(o.price, o.currency) : "—"}
+                                        </span>
+                                        <a
+                                          href={o.url}
+                                          target="_blank"
+                                          rel="noreferrer"
+                                          className="rounded-full bg-emerald-500 px-3 py-1 text-xs font-semibold text-slate-950 transition hover:bg-emerald-400"
+                                        >
+                                          View
+                                        </a>
+                                      </div>
+                                    </li>
+                                  );
+                                })}
+                              </ul>
+                            )}
+                          </div>
+                        </article>
+                      );
+                    })}
+                  </section>
+
+                  <div className="flex items-center justify-between">
+                    <button
+                      disabled={!canPrev}
+                      onClick={() => setPage((p) => Math.max(1, p - 1))}
+                      className={`rounded-full px-4 py-2 text-sm font-semibold transition ${canPrev ? "border border-slate-200 text-slate-700 hover:border-emerald-200 hover:text-emerald-700" : "cursor-not-allowed border border-slate-100 text-slate-300"}`}
+                    >
+                      ← Prev
+                    </button>
+                    <div className="text-sm text-slate-600">
+                      Page <span className="font-semibold text-slate-900">{page}</span> · {FIXED_PER_PAGE} groups per page
+                    </div>
+                    <button
+                      disabled={!canNext}
+                      onClick={() => setPage((p) => p + 1)}
+                      className={`rounded-full px-4 py-2 text-sm font-semibold transition ${canNext ? "border border-slate-200 text-slate-700 hover:border-emerald-200 hover:text-emerald-700" : "cursor-not-allowed border border-slate-100 text-slate-300"}`}
+                    >
+                      Next →
+                    </button>
+                  </div>
+                </>
+              )}
+
+              {q.trim() && !loading && !err && !groupMode && showAdvanced && (
+                <>
+                  <section className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
+                    {offers.map((o) => {
+                      const modelKey = getModelKey(o);
+                      const condParam =
+                        (o?.conditionBand || o?.condition || "").toUpperCase() ||
+                        selectedConditionBand(conds) ||
+                        "";
+                      const variant = detectVariant(o?.title);
+                      const variantKey = getStatsKey3(modelKey, variant, condParam);
+                      const baseKey = getStatsKey(modelKey, condParam);
+                      const variantStats = statsByModel[variantKey] ?? null;
+                      const baseStats = statsByModel[baseKey] ?? null;
+                      const stats = variantStats ?? baseStats;
+
+                      return (
+                        <article
+                          key={o.productId + o.url}
+                          className="overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm transition hover:-translate-y-1 hover:shadow-lg"
+                        >
+                          <div className="relative aspect-[4/3] w-full bg-slate-100">
+                            {o.image ? (
+                              // eslint-disable-next-line @next/next/no-img-element
+                              <img src={o.image} alt={o.title} className="h-full w-full object-contain" loading="lazy" />
+                            ) : (
+                              <div className="flex h-full w-full items-center justify-center text-xs text-slate-500">No image</div>
+                            )}
+                          </div>
+                          <div className="p-5">
+                            <h3 className="line-clamp-2 text-sm font-semibold text-slate-900">{o.title}</h3>
+                            <p className="mt-1 text-xs text-slate-500">
+                              {o?.seller?.username && <>@{o.seller.username} · </>}
+                              {typeof o?.seller?.feedbackPct === "number" && <>{o.seller.feedbackPct.toFixed(1)}% · </>}
+                              {Number(o?.buying?.bidCount) > 0 && <>{o.buying.bidCount} bids · </>}
+                              {(o.specs?.dexterity || "").toUpperCase() || "—"} · {(o.specs?.headType || "").toUpperCase() || "—"} ·
+                              {Number.isFinite(Number(o?.specs?.length)) ? `${o.specs.length}"` : "—"}
+                              {o?.specs?.shaft && <> · {String(o.specs.shaft).toLowerCase()}</>}
+                              {o?.specs?.hosel && <> · {o.specs.hosel}</>}
+                              {o?.specs?.face && <> · {o.specs.face}</>}
+                              {o?.specs?.grip && <> · {o.specs.grip}</>}
+                              {o?.specs?.hasHeadcover && <> · HC</>}
+                              {o?.specs?.toeHang && <> · {o.specs.toeHang} toe</>}
+                              {Number.isFinite(Number(o?.specs?.loft)) && <> · {o.specs.loft}° loft</>}
+                              {Number.isFinite(Number(o?.specs?.lie)) && <> · {o.specs.lie}° lie</>}
+                              {o.createdAt && (<> · listed {timeAgo(new Date(o.createdAt).getTime())}</>)}
+                            </p>
+
+                            <div className="mt-4 flex items-center justify-between">
+                              <div className="flex items-center gap-2">
                                 <SmartPriceBadge
                                   price={Number(o.price)}
                                   baseStats={baseStats}
                                   variantStats={variantStats}
                                   title={o.title}
                                   specs={o.specs}
-                                  brand={g?.brand}
+                                  brand={o.brand || ""}
+                                  className="mr-2"
                                 />
-                                <span className="text-sm font-semibold">
-                                  {typeof o.price === "number" ? formatPrice(o.price, o.currency) : "—"}
-                                </span>
-                                <a
-                                  href={o.url}
-                                  target="_blank"
-                                  rel="noreferrer"
-                                  className="rounded-md border px-2 py-1 text-xs"
-                                >
-                                  View
-                                </a>
+
+                                <span className="text-base font-semibold text-slate-900">{formatPrice(o.price, o.currency)}</span>
+
+                                {(() => {
+                                  const p50 = stats?.p50;
+                                  if (
+                                    Number.isFinite(Number(p50)) &&
+                                    typeof o.price === "number" &&
+                                    o.price < Number(p50)
+                                  ) {
+                                    const save = Number(p50) - o.price;
+                                    const pct = Math.round((save / Number(p50)) * 100);
+                                    return (
+                                      <span
+                                        className="rounded-full bg-emerald-50 px-2 py-0.5 text-[11px] font-medium text-emerald-700"
+                                        title={`Median ${formatPrice(Number(p50))} · Save ~${formatPrice(save)} (~${pct}%)`}
+                                      >
+                                        Save {formatPrice(save)}
+                                      </span>
+                                    );
+                                  }
+                                  return null;
+                                })()}
                               </div>
-                            </li>
-                          );
-                        })}
 
-                        {!showAll && g.count > 10 && (
-                          <li className="px-2 pt-1 text-xs text-gray-500">Showing top 10 offers.</li>
-                        )}
-                      </ul>
-                    )}
-                  </div>
-                </article>
-              );
-            })}
-          </section>
-
-          {/* Pagination (grouped) */}
-          <div className="mt-8 flex items-center justify-between">
-            <button
-              disabled={!canPrev}
-              onClick={() => setPage((p) => Math.max(1, p - 1))}
-              className={`rounded-md border px-3 py-2 text-sm ${canPrev ? "hover:bg-gray-100" : "cursor-not-allowed opacity-50"}`}
-            >
-              ← Prev
-            </button>
-            <div className="text-sm text-gray-600">
-              Page <span className="font-medium">{page}</span> · {FIXED_PER_PAGE} groups per page
-            </div>
-            <button
-              disabled={!canNext}
-              onClick={() => setPage((p) => p + 1)}
-              className={`rounded-md border px-3 py-2 text-sm ${canNext ? "hover:bg-gray-100" : "cursor-not-allowed opacity-50"}`}
-            >
-              Next →
-            </button>
-          </div>
-        </>
-      )}
-
-      {/* FLAT VIEW (advanced) */}
-      {q.trim() && !loading && !err && !groupMode && showAdvanced && (
-        <>
-          <section className="mt-6 grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
-            {offers.map((o) => {
-              const modelKey = getModelKey(o);
-              const condParam =
-                (o?.conditionBand || o?.condition || "").toUpperCase() ||
-                selectedConditionBand(conds) ||
-                "";
-              const variant    = detectVariant(o?.title);
-              const variantKey = getStatsKey3(modelKey, variant, condParam);
-              const baseKey    = getStatsKey(modelKey, condParam);
-              const variantStats = statsByModel[variantKey] ?? null;
-              const baseStats    = statsByModel[baseKey] ?? null;
-              const stats        = variantStats ?? baseStats;
-
-              return (
-                <article key={o.productId + o.url} className="overflow-hidden rounded-xl border border-gray-200 bg-white shadow-sm">
-                  <div className="relative aspect-[4/3] w-full bg-gray-50">
-                    {o.image ? (
-                      // eslint-disable-next-line @next/next/no-img-element
-                      <img src={o.image} alt={o.title} className="h-full w-full object-contain" loading="lazy" />
-                    ) : (
-                      <div className="flex h-full w-full items-center justify-center text-xs text-gray-400">No image</div>
-                    )}
-                  </div>
-                  <div className="p-4">
-                    <h3 className="line-clamp-2 text-sm font-semibold">{o.title}</h3>
-                    <p className="mt-1 text-xs text-gray-500">
-                      {o?.seller?.username && <>@{o.seller.username} · </>}
-                      {typeof o?.seller?.feedbackPct === "number" && <>{o.seller.feedbackPct.toFixed(1)}% · </>}
-                      {Number(o?.buying?.bidCount) > 0 && <>{o.buying.bidCount} bids · </>}
-                      {(o.specs?.dexterity || "").toUpperCase() || "—"} · {(o.specs?.headType || "").toUpperCase() || "—"} ·
-                      {Number.isFinite(Number(o?.specs?.length)) ? `${o.specs.length}"` : "—"}
-                      {o?.specs?.shaft && <> · {String(o.specs.shaft).toLowerCase()}</>}
-                      {o?.specs?.hosel && <> · {o.specs.hosel}</>}
-                      {o?.specs?.face && <> · {o.specs.face}</>}
-                      {o?.specs?.grip && <> · {o.specs.grip}</>}
-                      {o?.specs?.hasHeadcover && <> · HC</>}
-                      {o?.specs?.toeHang && <> · {o.specs.toeHang} toe</>}
-                      {Number.isFinite(Number(o?.specs?.loft)) && <> · {o.specs.loft}° loft</>}
-                      {Number.isFinite(Number(o?.specs?.lie)) && <> · {o.specs.lie}° lie</>}
-                      {o.createdAt && (<> · listed {timeAgo(new Date(o.createdAt).getTime())}</>)}
-                    </p>
-
-                    <div className="mt-3 flex items-center justify-between">
-                      <div className="flex items-center gap-2">
-                        <SmartPriceBadge
-                          price={Number(o.price)}
-                          baseStats={baseStats}
-                          variantStats={variantStats}
-                          title={o.title}
-                          specs={o.specs}
-                          brand={o.brand || ""}
-                          className="mr-2"
-                        />
-
-                        <span className="text-base font-semibold">{formatPrice(o.price, o.currency)}</span>
-
-                        {/* Optional Save $ chip if below median */}
-                        {(() => {
-                          const p50 = stats?.p50;
-                          if (Number.isFinite(Number(p50)) && typeof o.price === "number" && o.price < Number(p50)) {
-                            const save = Number(p50) - o.price;
-                            const pct = Math.round((save / Number(p50)) * 100);
-                            return (
-                              <span
-                                className="rounded-full bg-emerald-50 px-2 py-0.5 text-[11px] font-medium text-emerald-700"
-                                title={`Median ${formatPrice(Number(p50))} · Save ~${formatPrice(save)} (~${pct}%)`}
+                              <a
+                                href={o.url}
+                                target="_blank"
+                                rel="noopener noreferrer"
+                                className="inline-flex items-center rounded-full bg-emerald-500 px-3 py-1.5 text-sm font-semibold text-slate-950 transition hover:bg-emerald-400"
                               >
-                                Save {formatPrice(save)}
-                              </span>
-                            );
-                          }
-                          return null;
-                        })()}
-                      </div>
+                                View
+                              </a>
+                            </div>
+                          </div>
+                        </article>
+                      );
+                    })}
+                  </section>
 
-                      {/* Affiliate/outbound link UNCHANGED */}
-                      <a
-                        href={o.url}
-                        target="_blank"
-                        rel="noopener noreferrer"
-                        className="inline-flex items-center rounded-md bg-blue-600 px-3 py-1.5 text-sm font-medium text-white hover:bg-blue-700"
-                      >
-                        View
-                      </a>
+                  <div className="flex items-center justify-between">
+                    <button
+                      disabled={!hasPrev || page <= 1 || loading}
+                      onClick={() => setPage((p) => Math.max(1, p - 1))}
+                      className={`rounded-full px-4 py-2 text-sm font-semibold transition ${hasPrev && page > 1 && !loading ? "border border-slate-200 text-slate-700 hover:border-emerald-200 hover:text-emerald-700" : "cursor-not-allowed border border-slate-100 text-slate-300"}`}
+                    >
+                      ← Prev
+                    </button>
+                    <div className="text-sm text-slate-600">
+                      Page <span className="font-semibold text-slate-900">{page}</span> · {FIXED_PER_PAGE} listings per page
                     </div>
+                    <button
+                      disabled={!hasNext || loading}
+                      onClick={() => setPage((p) => p + 1)}
+                      className={`rounded-full px-4 py-2 text-sm font-semibold transition ${hasNext && !loading ? "border border-slate-200 text-slate-700 hover:border-emerald-200 hover:text-emerald-700" : "cursor-not-allowed border border-slate-100 text-slate-300"}`}
+                    >
+                      Next →
+                    </button>
                   </div>
-                </article>
-              );
-            })}
-          </section>
-
-          {/* Pagination (flat) */}
-          <div className="mt-8 flex items-center justify-between">
-            <button
-              disabled={!hasPrev || page <= 1 || loading}
-              onClick={() => setPage((p) => Math.max(1, p - 1))}
-              className={`rounded-md border px-3 py-2 text-sm ${hasPrev && page > 1 && !loading ? "hover:bg-gray-100" : "cursor-not-allowed opacity-50"}`}
-            >
-              ← Prev
-            </button>
-            <div className="text-sm text-gray-600">
-              Page <span className="font-medium">{page}</span> · {FIXED_PER_PAGE} listings per page
+                </>
+              )}
             </div>
-            <button
-              disabled={!hasNext || loading}
-              onClick={() => setPage((p) => p + 1)}
-              className={`rounded-md border px-3 py-2 text-sm ${hasNext && !loading ? "hover:bg-gray-100" : "cursor-not-allowed opacity-50"}`}
-            >
-              Next →
-            </button>
-          </div>
-        </>
-      )}
+          </HighlightCard>
+        </div>
+      </SectionWrapper>
     </main>
   );
 }
