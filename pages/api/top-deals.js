@@ -1,8 +1,8 @@
 export const runtime = "nodejs";
 
-import { getSql } from "../../lib/db";
-import { PUTTER_CATALOG } from "../../lib/data/putterCatalog";
-import { normalizeModelKey } from "../../lib/normalize";
+import { getSql } from "../../lib/db.js";
+import { PUTTER_CATALOG } from "../../lib/data/putterCatalog.js";
+import { normalizeModelKey } from "../../lib/normalize.js";
 
 const CATALOG_LOOKUP = (() => {
   const map = new Map();
@@ -49,14 +49,10 @@ function centsToNumber(value) {
   return num / 100;
 }
 
-export default async function handler(req, res) {
-  try {
-    const sql = getSql();
-    const limitParam = Array.isArray(req.query.limit) ? req.query.limit[0] : req.query.limit;
-    const parsedLimit = toNumber(limitParam);
-    const limit = Math.min(12, Math.max(3, parsedLimit ?? 6));
+const DEFAULT_LOOKBACK_WINDOWS_HOURS = [24, 72, 168];
 
-    const rows = await sql`
+async function queryTopDeals(sql, since) {
+  return sql`
       WITH latest_prices AS (
         SELECT DISTINCT ON (p.item_id)
           p.item_id,
@@ -66,7 +62,7 @@ export default async function handler(req, res) {
           COALESCE(p.total, p.price + COALESCE(p.shipping, 0)) AS total,
           p.condition
         FROM item_prices p
-        WHERE p.observed_at >= date_trunc('day', now())
+        WHERE p.observed_at >= ${since}
         ORDER BY p.item_id, p.observed_at DESC
       ),
       base_stats AS (
@@ -127,102 +123,133 @@ export default async function handler(req, res) {
         AND stats.n IS NOT NULL
         AND stats.n >= 5
     `;
+}
 
-    const grouped = new Map();
+function buildDealsFromRows(rows, limit) {
+  const grouped = new Map();
 
-    for (const row of rows) {
-      const modelKey = row.model_key || "";
-      if (!modelKey) continue;
+  for (const row of rows) {
+    const modelKey = row.model_key || "";
+    if (!modelKey) continue;
 
-      const total = toNumber(row.total);
-      const price = toNumber(row.price);
-      const shipping = toNumber(row.shipping);
-      const median = centsToNumber(row.p50_cents);
-      if (!Number.isFinite(total) || !Number.isFinite(median) || median <= 0) continue;
+    const total = toNumber(row.total);
+    const price = toNumber(row.price);
+    const shipping = toNumber(row.shipping);
+    const median = centsToNumber(row.p50_cents);
+    if (!Number.isFinite(total) || !Number.isFinite(median) || median <= 0) continue;
 
-      const savingsAmount = median - total;
-      const savingsPercent = median > 0 ? savingsAmount / median : null;
-      if (!Number.isFinite(savingsPercent) || savingsPercent <= 0) continue;
+    const savingsAmount = median - total;
+    const savingsPercent = median > 0 ? savingsAmount / median : null;
+    if (!Number.isFinite(savingsPercent) || savingsPercent <= 0) continue;
 
-      const current = grouped.get(modelKey);
-      if (!current || savingsPercent > current.savingsPercent || (savingsPercent === current.savingsPercent && total < current.total)) {
-        grouped.set(modelKey, {
-          modelKey,
-          row,
-          total,
-          price,
-          shipping,
-          median,
-          savingsAmount,
-          savingsPercent,
-        });
-      }
-    }
-
-    const ranked = Array.from(grouped.values())
-      .sort((a, b) => {
-        if (Number.isFinite(b.savingsPercent) && Number.isFinite(a.savingsPercent) && b.savingsPercent !== a.savingsPercent) {
-          return b.savingsPercent - a.savingsPercent;
-        }
-        if (Number.isFinite(a.total) && Number.isFinite(b.total) && a.total !== b.total) {
-          return a.total - b.total;
-        }
-        return 0;
-      })
-      .slice(0, limit);
-
-    const deals = ranked.map((entry) => {
-      const { row, total, price, shipping, median, savingsAmount, savingsPercent } = entry;
-      const label = formatModelLabel(row.model_key, row.brand, row.title);
-      const currency = row.currency || "USD";
-      const stats = {
-        p10: centsToNumber(row.p10_cents),
-        p50: median,
-        p90: centsToNumber(row.p90_cents),
-        n: toNumber(row.n),
-        dispersionRatio: toNumber(row.dispersion_ratio),
-      };
-      const statsMeta = {
-        windowDays: toNumber(row.window_days),
-        updatedAt: row.updated_at || null,
-      };
-      const bestOffer = {
-        itemId: row.item_id,
-        title: row.title,
-        url: row.url,
-        price,
+    const current = grouped.get(modelKey);
+    if (!current || savingsPercent > current.savingsPercent || (savingsPercent === current.savingsPercent && total < current.total)) {
+      grouped.set(modelKey, {
+        modelKey,
+        row,
         total,
+        price,
         shipping,
-        currency,
-        image: row.image_url,
-        observedAt: row.observed_at || null,
-        condition: row.condition || null,
-        retailer: "eBay",
-        specs: {
-          headType: row.head_type || null,
-          dexterity: row.dexterity || null,
-          length: toNumber(row.length_in),
-        },
-        brand: row.brand || null,
-      };
+        median,
+        savingsAmount,
+        savingsPercent,
+      });
+    }
+  }
 
-      return {
-        modelKey: row.model_key,
-        label,
-        query: `${label} putter`,
-        image: row.image_url || null,
-        currency,
-        bestPrice: total,
-        bestOffer,
-        stats,
-        statsMeta,
-        totalListings: toNumber(row.listing_count),
-        savings: {
-          amount: Number.isFinite(savingsAmount) ? savingsAmount : null,
-          percent: Number.isFinite(savingsPercent) ? savingsPercent : null,
-        },
-      };
-    });
+  const ranked = Array.from(grouped.values())
+    .sort((a, b) => {
+      if (Number.isFinite(b.savingsPercent) && Number.isFinite(a.savingsPercent) && b.savingsPercent !== a.savingsPercent) {
+        return b.savingsPercent - a.savingsPercent;
+      }
+      if (Number.isFinite(a.total) && Number.isFinite(b.total) && a.total !== b.total) {
+        return a.total - b.total;
+      }
+      return 0;
+    })
+    .slice(0, limit);
+
+  return ranked.map((entry) => {
+    const { row, total, price, shipping, median, savingsAmount, savingsPercent } = entry;
+    const label = formatModelLabel(row.model_key, row.brand, row.title);
+    const currency = row.currency || "USD";
+    const stats = {
+      p10: centsToNumber(row.p10_cents),
+      p50: median,
+      p90: centsToNumber(row.p90_cents),
+      n: toNumber(row.n),
+      dispersionRatio: toNumber(row.dispersion_ratio),
+    };
+    const statsMeta = {
+      windowDays: toNumber(row.window_days),
+      updatedAt: row.updated_at || null,
+    };
+    const bestOffer = {
+      itemId: row.item_id,
+      title: row.title,
+      url: row.url,
+      price,
+      total,
+      shipping,
+      currency,
+      image: row.image_url,
+      observedAt: row.observed_at || null,
+      condition: row.condition || null,
+      retailer: "eBay",
+      specs: {
+        headType: row.head_type || null,
+        dexterity: row.dexterity || null,
+        length: toNumber(row.length_in),
+      },
+      brand: row.brand || null,
+    };
+
+    return {
+      modelKey: row.model_key,
+      label,
+      query: `${label} putter`,
+      image: row.image_url || null,
+      currency,
+      bestPrice: total,
+      bestOffer,
+      stats,
+      statsMeta,
+      totalListings: toNumber(row.listing_count),
+      savings: {
+        amount: Number.isFinite(savingsAmount) ? savingsAmount : null,
+        percent: Number.isFinite(savingsPercent) ? savingsPercent : null,
+      },
+    };
+  });
+}
+
+export async function loadRankedDeals(sql, limit, lookbackWindows = DEFAULT_LOOKBACK_WINDOWS_HOURS) {
+  const windows = Array.isArray(lookbackWindows) && lookbackWindows.length > 0 ? lookbackWindows : DEFAULT_LOOKBACK_WINDOWS_HOURS;
+
+  let deals = [];
+  let windowHours = windows[windows.length - 1] ?? null;
+
+  for (const hours of windows) {
+    const since = new Date(Date.now() - hours * 60 * 60 * 1000);
+    const rows = await queryTopDeals(sql, since);
+    const computed = buildDealsFromRows(rows, limit);
+    deals = computed;
+    windowHours = hours;
+    if (computed.length > 0) {
+      break;
+    }
+  }
+
+  return { deals, windowHours };
+}
+
+export default async function handler(req, res) {
+  try {
+    const sql = getSql();
+    const limitParam = Array.isArray(req.query.limit) ? req.query.limit[0] : req.query.limit;
+    const parsedLimit = toNumber(limitParam);
+    const limit = Math.min(12, Math.max(3, parsedLimit ?? 6));
+    const { deals, windowHours } = await loadRankedDeals(sql, limit);
 
     return res.status(200).json({
       ok: true,
@@ -231,6 +258,7 @@ export default async function handler(req, res) {
       meta: {
         limit,
         modelCount: deals.length,
+        lookbackWindowHours: windowHours,
       },
     });
   } catch (err) {
