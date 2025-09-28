@@ -30,6 +30,7 @@ const BRAND_PATTERNS = [
   { key: "Ping", pattern: /\bping\b/i },
   { key: "Odyssey", pattern: /odyssey/i },
   { key: "Bettinardi", pattern: /bettinardi/i },
+  { key: "Callaway", pattern: /callaway/i },
   { key: "L.A.B. Golf", pattern: /\blab\b|lie\s*angle\s*balance/i },
   { key: "Evnroll", pattern: /evnroll/i },
   { key: "Mizuno", pattern: /mizuno/i },
