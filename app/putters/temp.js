@@ -1033,7 +1033,13 @@ export default function PuttersPage() {
                     {/* Sparkline */}
                     {isOpen && Array.isArray(series) && series.length > 1 && (
                       <div className="mt-3">
-                        <PriceSparkline data={series} height={70} showAverage showMedian className="h-[70px]" />
+                        <PriceSparkline
+                          data={series}
+                          height={70}
+                          showAverage
+                          showMedian
+                          className="h-[70px] text-sky-600"
+                        />
                       </div>
                     )}
 

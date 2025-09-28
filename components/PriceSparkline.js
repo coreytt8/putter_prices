@@ -115,8 +115,10 @@ export default function PriceSparkline({
 
   // Use currentColor for themeable stroke/fill; parent sets color.
   // Example parent wrappers: "text-sky-600" or "text-emerald-600"
+  const wrapperClassName = ['w-full', className].filter(Boolean).join(' ');
+
   return (
-    <div className={`w-full text-sky-600 ${className}`}>
+    <div className={wrapperClassName}>
       <ResponsiveContainer width="100%" height={height}>
         <AreaChart
           data={series.points}
