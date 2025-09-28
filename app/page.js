@@ -421,12 +421,7 @@ export default async function Home() {
 
         {heroSnapshot && (
           <div className="mt-16">
-            {/* Ensure the snapshot query falls back to the default when none is resolved */}
-            <MarketSnapshot
-              snapshot={heroSnapshot}
-              meta={snapshotMeta}
-              query={snapshotQuery || DEFAULT_SNAPSHOT_QUERY}
-            />
+            <MarketSnapshot snapshot={heroSnapshot} meta={snapshotMeta} query={snapshotQuery} />
           </div>
         )}
       </HeroSection>
