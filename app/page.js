@@ -239,96 +239,6 @@ async function fetchJson(url, init) {
   }
 }
 
-function detectBrandFromTitle(title = "") {
-  for (const entry of BRAND_PATTERNS) {
-    if (entry.pattern.test(title)) return entry.key;
-  }
-  return null;
-}
-
-function buildSnapshotFromOffers(offers = []) {
-  const priceValues = offers
-    .map((o) => {
-      const total = Number(o?.total);
-      const price = Number(o?.price);
-      if (Number.isFinite(total)) return total;
-      if (Number.isFinite(price)) return price;
-      return null;
-    })
-    .filter((v) => Number.isFinite(v));
-
-  if (!priceValues.length) return null;
-
-  const min = Math.min(...priceValues);
-  const max = Math.max(...priceValues);
-  const avg = priceValues.reduce((acc, val) => acc + val, 0) / priceValues.length;
-
-  const bucketCount = Math.min(7, Math.max(4, Math.ceil(Math.sqrt(priceValues.length))));
-  const range = Math.max(max - min, 1);
-  const bucketSize = range / bucketCount;
-  const histogram = Array.from({ length: bucketCount }, () => 0);
-  const buckets = [];
-
-  for (let i = 0; i < bucketCount; i++) {
-    buckets.push(Math.round(min + bucketSize * (i + 1)));
-  }
-
-  for (const value of priceValues) {
-    const idx = Math.min(bucketCount - 1, Math.floor((value - min) / bucketSize));
-    histogram[idx] += 1;
-  }
-
-  const conditionCounts = new Map();
-  const buyingCounts = new Map();
-  const brandCounts = new Map();
-
-  offers.forEach((offer) => {
-    const condition = String(offer?.condition || "").trim();
-    if (condition) {
-      const key = condition.toUpperCase();
-      conditionCounts.set(key, (conditionCounts.get(key) || 0) + 1);
-    }
-
-    const buyingTypes = Array.isArray(offer?.buying?.types) ? offer.buying.types : [];
-    buyingTypes.forEach((type) => {
-      const key = String(type || "").trim();
-      if (!key) return;
-      buyingCounts.set(key, (buyingCounts.get(key) || 0) + 1);
-    });
-
-    const brand = detectBrandFromTitle(String(offer?.title || ""));
-    if (brand) {
-      brandCounts.set(brand, (brandCounts.get(brand) || 0) + 1);
-    }
-  });
-
-  const conditions = Array.from(conditionCounts.entries())
-    .map(([key, count]) => ({ key, count }))
-    .sort((a, b) => (b.count || 0) - (a.count || 0));
-
-  const buyingOptions = Array.from(buyingCounts.entries())
-    .map(([key, count]) => ({ key, count }))
-    .sort((a, b) => (b.count || 0) - (a.count || 0));
-
-  const brandsTop = Array.from(brandCounts.entries())
-    .map(([key, count]) => ({ key, count }))
-    .sort((a, b) => (b.count || 0) - (a.count || 0))
-    .slice(0, 6);
-
-  return {
-    price: {
-      min,
-      max,
-      avg,
-      histogram,
-      buckets,
-    },
-    conditions,
-    buyingOptions,
-    brandsTop,
-  };
-}
-
 export default async function Home() {
   const baseUrl = await resolveBaseUrl();
 
@@ -386,25 +296,37 @@ export default async function Home() {
       })
     : [];
 
+  const tourResponse = await fetchJson(`${baseUrl}/api/tour-putters`, {
+    next: { revalidate: 900 },
+  });
+
+  const rawTourModels = Array.isArray(tourResponse?.models) ? tourResponse.models : [];
+  const tourModels = rawTourModels.map((model) => {
+    const source = model?.displayName || model?.modelKey || "";
+    const { label, query } = sanitizeModelKey(source);
+    return {
+      modelKey: model?.modelKey || "",
+      displayName: model?.displayName || label || model?.modelKey || "",
+      usageRank: Number.isFinite(Number(model?.usageRank)) ? Number(model.usageRank) : null,
+      playerCount: Number.isFinite(Number(model?.playerCount)) ? Number(model.playerCount) : null,
+      sourceUrl: model?.sourceUrl || null,
+      snapshot: model?.snapshot || null,
+      meta: model?.meta || null,
+      label: label || model?.displayName || model?.modelKey || "",
+      query: query || source || DEFAULT_SNAPSHOT_QUERY,
+    };
+  });
+
+  const heroSnapshot = tourResponse?.summary?.snapshot || null;
+  const snapshotMeta = tourResponse?.summary?.meta || null;
+  const snapshotSampleSize = Number(snapshotMeta?.sampleSize) || 0;
+  const snapshotLabel = snapshotMeta?.label || "2024 tour lineup";
+
   const snapshotQuery =
+    tourModels.find((model) => model?.query)?.query ||
     deals.find((deal) => deal?.query)?.query ||
     trending.find((item) => item?.query)?.query ||
     DEFAULT_SNAPSHOT_QUERY;
-  const snapshotParams = new URLSearchParams({
-    q: snapshotQuery,
-    group: "false",
-    page: "1",
-    perPage: "24",
-    samplePages: "2",
-    sort: "best_price_asc",
-  });
-
-  const snapshotResponse = await fetchJson(`${baseUrl}/api/putters?${snapshotParams.toString()}`, {
-    next: { revalidate: 300 },
-  });
-
-  const snapshotOffers = Array.isArray(snapshotResponse?.offers) ? snapshotResponse.offers : [];
-  const heroSnapshot = buildSnapshotFromOffers(snapshotOffers);
 
   const smartExample =
     deals.find(
@@ -438,7 +360,13 @@ export default async function Home() {
           <p className="mt-6 text-lg leading-8 text-slate-200">
             {heroSnapshot ? (
               <>
-                We just scanned {snapshotOffers.length} live listings for "{snapshotQuery}" and found prices as low as {formatCurrency(heroSnapshot.price.min)} with a typical range topping out near {formatCurrency(heroSnapshot.price.max)}.
+                We just analyzed
+                {" "}
+                {snapshotSampleSize
+                  ? `${snapshotSampleSize.toLocaleString()} recent listings`
+                  : "the latest tour listings"}
+                {" "}
+                across our {snapshotLabel} and found prices as low as {formatCurrency(heroSnapshot.price.min)} with typical asks topping out near {formatCurrency(heroSnapshot.price.max)}.
               </>
             ) : (
               <>We monitor real-time listings from eBay and partner shops, then benchmark every asking price against historical comps.</>
@@ -496,7 +424,50 @@ export default async function Home() {
 
         {heroSnapshot && (
           <div className="mt-16">
-            <MarketSnapshot snapshot={heroSnapshot} meta={snapshotResponse?.meta} query={snapshotQuery} />
+            <MarketSnapshot snapshot={heroSnapshot} meta={snapshotMeta} query={snapshotLabel} />
+          </div>
+        )}
+
+        {tourModels.length > 0 && (
+          <div className="mx-auto mt-10 max-w-4xl text-left">
+            <div className="rounded-2xl border border-white/10 bg-white/5 p-6 backdrop-blur">
+              <p className="text-sm uppercase tracking-wide text-emerald-200/80">Verified 2024 tour lineup</p>
+              <ul className="mt-4 space-y-4">
+                {tourModels.map((model) => {
+                  const avgPrice = Number(model?.snapshot?.price?.avg);
+                  const avgDisplay = Number.isFinite(avgPrice) ? formatCurrency(avgPrice) : "—";
+                  const sample = Number(model?.meta?.sampleSize) || 0;
+                  return (
+                    <li key={model.modelKey || model.displayName} className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+                      <div>
+                        <p className="text-base font-semibold text-white">{model.displayName}</p>
+                        <p className="mt-1 text-xs text-slate-200/80">
+                          {sample > 0
+                            ? `Tracking ${sample.toLocaleString()} live listings · Typical ask ${avgDisplay}`
+                            : "Watching for fresh pricing data."}
+                        </p>
+                      </div>
+                      <div className="flex flex-col items-start gap-1 text-xs text-emerald-200 sm:items-end">
+                        <span>
+                          {model.usageRank ? `#${model.usageRank} in 2024 PGA Tour usage` : "Usage rank updating"}
+                          {model.playerCount ? ` · ${model.playerCount} players` : ""}
+                        </span>
+                        {model.sourceUrl ? (
+                          <a
+                            href={model.sourceUrl}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            className="text-emerald-300 underline decoration-emerald-300/40 decoration-dotted underline-offset-4 transition hover:text-emerald-200"
+                          >
+                            Source citation
+                          </a>
+                        ) : null}
+                      </div>
+                    </li>
+                  );
+                })}
+              </ul>
+            </div>
           </div>
         )}
       </HeroSection>
@@ -643,7 +614,9 @@ export default async function Home() {
             <div className="rounded-3xl border border-slate-200 bg-slate-50 p-6">
               <h3 className="text-xl font-semibold text-slate-900">Real-market baselines</h3>
               <p className="mt-3 text-sm text-slate-600">
-                Market Snapshot tiles use the same raw listings you&apos;ll browse—{snapshotOffers.length} pulled moments ago—to show price distributions, condition mixes, and buying options without guessing.
+                Market Snapshot tiles use the same raw listings you&apos;ll browse—
+                {snapshotSampleSize ? `${snapshotSampleSize.toLocaleString()} pulled moments ago` : "live samples updating"}
+                —to show price distributions, condition mixes, and buying options without guessing.
               </p>
             </div>
             <div className="rounded-3xl border border-slate-200 bg-slate-50 p-6">
