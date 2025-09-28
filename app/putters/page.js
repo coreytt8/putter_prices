@@ -266,6 +266,7 @@ export default function PuttersPage() {
   const [maxPrice, setMaxPrice] = useState("");
   const [conds, setConds] = useState([]);
   const [buying, setBuying] = useState([]);
+  const [hasBids, setHasBids] = useState(false);
   const [dex, setDex] = useState("");            // "", "LEFT", "RIGHT"
   const [head, setHead] = useState("");          // "", "BLADE", "MALLET"
   const [lengths, setLengths] = useState([]);    // [] or [33,34,35,36]
@@ -316,6 +317,7 @@ export default function PuttersPage() {
     if (sp.has("maxPrice")) setMaxPrice(sp.get("maxPrice") || "");
     if (sp.has("conditions")) setConds(gList("conditions"));
     if (sp.has("buyingOptions")) setBuying(gList("buyingOptions"));
+    if (sp.has("hasBids")) setHasBids(sp.get("hasBids") === "true");
     if (sp.has("dex")) setDex(sp.get("dex") || "");
     if (sp.has("head")) setHead(sp.get("head") || "");
     if (sp.has("lengths")) setLengths(gNumList("lengths"));
@@ -339,6 +341,7 @@ export default function PuttersPage() {
     if (maxPrice) params.set("maxPrice", String(maxPrice));
     if (conds.length) params.set("conditions", conds.join(","));
     if (buying.length) params.set("buyingOptions", buying.join(","));
+    if (hasBids) params.set("hasBids", "true");
     if (sortParam[sortBy]) params.set("sort", sortParam[sortBy]);
     if (broaden) params.set("broaden", "true");
     if (dex) params.set("dex", dex);
@@ -351,7 +354,7 @@ export default function PuttersPage() {
     const qs = params.toString();
     const url = qs ? `/putters?${qs}` : "/putters";
     window.history.replaceState({}, "", url);
-  }, [q, onlyComplete, minPrice, maxPrice, conds, buying, sortBy, page, groupMode, broaden, dex, head, lengths]);
+  }, [q, onlyComplete, minPrice, maxPrice, conds, buying, hasBids, sortBy, page, groupMode, broaden, dex, head, lengths, includeProShops]);
 
   // API URL
   const apiUrl = useMemo(() => {
@@ -362,6 +365,7 @@ export default function PuttersPage() {
     if (maxPrice) params.set("maxPrice", String(maxPrice));
     if (conds.length) params.set("conditions", conds.join(","));
     if (buying.length) params.set("buyingOptions", buying.join(","));
+    if (hasBids) params.set("hasBids", "true");
     if (sortParam[sortBy]) params.set("sort", sortParam[sortBy]);
     if (broaden) params.set("broaden", "true");
     if (dex) params.set("dex", dex);
@@ -374,12 +378,12 @@ export default function PuttersPage() {
     params.set("samplePages", "3");
     params.set("_ts", String(Date.now()));
     return `/api/putters?${params.toString()}`;
-  }, [q, onlyComplete, minPrice, maxPrice, conds, buying, sortBy, page, groupMode, broaden, dex, head, lengths]);
+  }, [q, onlyComplete, minPrice, maxPrice, conds, buying, hasBids, sortBy, page, groupMode, broaden, dex, head, lengths, includeProShops]);
 
   // Reset to page 1 when inputs change
   useEffect(() => {
     setPage(1);
-  }, [q, onlyComplete, minPrice, maxPrice, conds, buying, sortBy, groupMode, broaden, dex, head, lengths]);
+  }, [q, onlyComplete, minPrice, maxPrice, conds, buying, hasBids, sortBy, groupMode, broaden, dex, head, lengths, includeProShops]);
 
   // Fetch results
   useEffect(() => {
@@ -547,10 +551,11 @@ export default function PuttersPage() {
   const clearAll = () => {
     setQ(""); setOnlyComplete(true);
     setMinPrice(""); setMaxPrice("");
-    setConds([]); setBuying([]);
+    setConds([]); setBuying([]); setHasBids(false);
     setDex(""); setHead(""); setLengths([]);
     setSortBy("best_price_asc");
     setPage(1); setGroupMode(true); setBroaden(false);
+    setIncludeProShops(false);
   };
 
   /* ============================
@@ -921,6 +926,14 @@ export default function PuttersPage() {
                 {b.label}
               </label>
             ))}
+            <label className="flex items-center gap-2 text-sm">
+              <input
+                type="checkbox"
+                checked={hasBids}
+                onChange={(e) => setHasBids(e.target.checked)}
+              />
+              Has bids
+            </label>
           </div>
 
           <div className="mt-4">
@@ -1207,6 +1220,11 @@ export default function PuttersPage() {
                                         {o.seller.feedbackPct.toFixed(1)}%
                                       </span>
                                     )}
+                                    {Number(o?.buying?.bidCount) > 0 && (
+                                      <span className="ml-2 text-xs font-medium text-amber-600">
+                                        · {o.buying.bidCount} bids
+                                      </span>
+                                    )}
                                   </div>
 
                                   {/* Enhanced spec line */}
@@ -1322,6 +1340,7 @@ export default function PuttersPage() {
                     <p className="mt-1 text-xs text-gray-500">
                       {o?.seller?.username && <>@{o.seller.username} · </>}
                       {typeof o?.seller?.feedbackPct === "number" && <>{o.seller.feedbackPct.toFixed(1)}% · </>}
+                      {Number(o?.buying?.bidCount) > 0 && <>{o.buying.bidCount} bids · </>}
                       {(o.specs?.dexterity || "").toUpperCase() || "—"} · {(o.specs?.headType || "").toUpperCase() || "—"} ·
                       {Number.isFinite(Number(o?.specs?.length)) ? `${o.specs.length}"` : "—"}
                       {o?.specs?.shaft && <> · {String(o.specs.shaft).toLowerCase()}</>}
