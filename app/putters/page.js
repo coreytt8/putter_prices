@@ -1006,7 +1006,15 @@ export default function PuttersPage() {
               const statsKey = getStatsKey(g.model, groupCond);
               const stats = statsByModel[statsKey] || null;
 
-              const bestUrl = ordered.length ? ordered[0]?.url : null;
+              const firstOffer = ordered[0];
+              const bestUrl = firstOffer?.url ?? null;
+
+              const helperModelKey = firstOffer ? getModelKey(firstOffer) : g.model;
+              const helperVariant = firstOffer ? detectVariant(firstOffer?.title) : null;
+              const helperVariantKey = getStatsKey3(helperModelKey, helperVariant, groupCond);
+              const helperBaseKey = getStatsKey(helperModelKey, groupCond);
+              const helperVariantStats = statsByModel[helperVariantKey] ?? null;
+              const helperBaseStats = statsByModel[helperBaseKey] ?? stats;
 
               const fair = fairPriceBadge(g.bestPrice, stats);
 
@@ -1050,7 +1058,12 @@ export default function PuttersPage() {
                           )}
 
                           {/* Group header price badge */}
-                          <SmartPriceBadge price={Number(g.bestPrice)} baseStats={stats} className="ml-1" />
+                          <SmartPriceBadge
+                            price={Number(g.bestPrice)}
+                            baseStats={helperBaseStats}
+                            variantStats={helperVariantStats}
+                            className="ml-1"
+                          />
 
                           {/* Optional quick chip */}
                           {fair && (
@@ -1062,29 +1075,15 @@ export default function PuttersPage() {
 
                         {/* Helper badge (variant-aware from first listing) */}
                         <div className="mt-2">
-                          {(() => {
-                            const first = ordered?.[0];
-                            const condParam = selectedConditionBand(conds) || inferConditionBandFromOffers(g?.offers || []) || "";
-                            const modelKey = first ? getModelKey(first) : g.model;
-                            const variant  = first ? detectVariant(first?.title) : null;
-
-                            const variantKey = getStatsKey3(modelKey, variant, condParam);
-                            const baseKey    = getStatsKey(modelKey, condParam);
-                            const firstVariantStats = statsByModel[variantKey] ?? null;
-                            const firstBaseStats = statsByModel[baseKey] ?? stats;
-
-                            return (
-                              <SmartPriceBadge
-                                price={Number(g.bestPrice)}
-                                baseStats={firstBaseStats}
-                                variantStats={firstVariantStats}
-                                title={first?.title || g.model}
-                                specs={first?.specs}
-                                brand={g?.brand}
-                                showHelper
-                              />
-                            );
-                          })()}
+                          <SmartPriceBadge
+                            price={Number(g.bestPrice)}
+                            baseStats={helperBaseStats}
+                            variantStats={helperVariantStats}
+                            title={firstOffer?.title || g.model}
+                            specs={firstOffer?.specs}
+                            brand={g?.brand}
+                            showHelper
+                          />
                         </div>
 
                         {/* Lows row (on expand) */}
