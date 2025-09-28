@@ -6,6 +6,8 @@ import HeroSection from "@/components/HeroSection";
 import SectionWrapper from "@/components/SectionWrapper";
 import HighlightCard from "@/components/HighlightCard";
 
+const DEFAULT_SNAPSHOT_QUERY = "golf putter";
+
 const BRAND_PATTERNS = [
   { key: "Scotty Cameron", pattern: /scotty\s+cameron/i },
   { key: "TaylorMade", pattern: /taylormade|tm\b/i },
@@ -217,7 +219,7 @@ export default async function Home() {
 
     return {
       label: item?.label || item?.modelKey || "Live Smart Price deal",
-      query: item?.query || item?.modelKey || "scotty cameron putter",
+      query: item?.query || item?.modelKey || DEFAULT_SNAPSHOT_QUERY,
       blurb,
       group: item?.group || null,
       bestOffer: item?.bestOffer || null,
@@ -233,23 +235,6 @@ export default async function Home() {
       },
     };
   });
-
-  const snapshotQuery = deals.find((deal) => deal?.query)?.query || "scotty cameron putter";
-  const snapshotParams = new URLSearchParams({
-    q: snapshotQuery,
-    group: "false",
-    page: "1",
-    perPage: "24",
-    samplePages: "2",
-    sort: "best_price_asc",
-  });
-
-  const snapshotResponse = await fetchJson(`${baseUrl}/api/putters?${snapshotParams.toString()}`, {
-    next: { revalidate: 300 },
-  });
-
-  const snapshotOffers = Array.isArray(snapshotResponse?.offers) ? snapshotResponse.offers : [];
-  const heroSnapshot = buildSnapshotFromOffers(snapshotOffers);
 
   const trendingRes = await fetchJson(`${baseUrl}/api/models/search?q=putter`, {
     next: { revalidate: 3600 },
@@ -267,6 +252,26 @@ export default async function Home() {
         };
       })
     : [];
+
+  const snapshotQuery =
+    deals.find((deal) => deal?.query)?.query ||
+    trending.find((item) => item?.query)?.query ||
+    DEFAULT_SNAPSHOT_QUERY;
+  const snapshotParams = new URLSearchParams({
+    q: snapshotQuery,
+    group: "false",
+    page: "1",
+    perPage: "24",
+    samplePages: "2",
+    sort: "best_price_asc",
+  });
+
+  const snapshotResponse = await fetchJson(`${baseUrl}/api/putters?${snapshotParams.toString()}`, {
+    next: { revalidate: 300 },
+  });
+
+  const snapshotOffers = Array.isArray(snapshotResponse?.offers) ? snapshotResponse.offers : [];
+  const heroSnapshot = buildSnapshotFromOffers(snapshotOffers);
 
   const smartExample =
     deals.find(
@@ -318,7 +323,7 @@ export default async function Home() {
                 href={`/putters?q=${encodeURIComponent(snapshotQuery)}`}
                 className="inline-flex items-center justify-center rounded-full bg-white/10 px-6 py-3 text-base font-semibold text-white ring-1 ring-inset ring-white/20 transition hover:bg-white/20"
               >
-                View that market snapshot
+                View the market snapshot
               </Link>
             )}
           </div>
