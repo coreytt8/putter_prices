@@ -42,9 +42,12 @@ Object.entries(BRAND_SYNONYMS).forEach(([brand, aliases]) => {
 });
 
 /**
- * Example:
+ * Examples:
  * sanitizeModelKey("Titleist|Scotty Cameron|Super Select|Cameron");
  * // => { label: "Super Select", query: "Scotty Cameron Super Select" }
+ *
+ * sanitizeModelKey("Odyssey|White Hot OG|2-Ball|35");
+ * // => { label: "White Hot OG 2-Ball 35", query: "Odyssey White Hot OG 2-Ball" }
  */
 function sanitizeModelKey(rawKey = "") {
   if (!rawKey) {
@@ -146,17 +149,23 @@ function sanitizeModelKey(rawKey = "") {
   const cleanedLabel = label.trim();
   const humanLabel = cleanedLabel || fallbackText;
 
+  const lengthTokenPattern = /^\d+(?:\.\d+)?(?:(?:in)|["”])?$/i;
+  const searchTokens = cleanedLabel
+    ? cleanedLabel
+        .split(/\s+/)
+        .filter((token) => token && !lengthTokenPattern.test(token))
+    : [];
+  const searchText = searchTokens.join(" ").trim();
+
   let query = "";
-  if (cleanedLabel && detectedBrand) {
-    const lowerLabel = cleanedLabel.toLowerCase();
-    const labelStartsWithBrand = aliasList.some((alias) =>
-      lowerLabel.startsWith(alias.toLowerCase())
+  if (searchText && detectedBrand) {
+    const lowerSearch = searchText.toLowerCase();
+    const searchStartsWithBrand = aliasList.some((alias) =>
+      lowerSearch.startsWith(alias.toLowerCase())
     );
-    query = labelStartsWithBrand ? cleanedLabel : `${detectedBrand} ${cleanedLabel}`.trim();
-  } else if (cleanedLabel) {
-    query = cleanedLabel;
-  } else {
-    query = String(rawKey).trim();
+    query = searchStartsWithBrand ? searchText : `${detectedBrand} ${searchText}`.trim();
+  } else if (searchText) {
+    query = searchText;
   }
 
   if (!query) {
