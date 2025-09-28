@@ -5,7 +5,8 @@
   "scripts": {
     "dev": "next dev --turbopack",
     "build": "next build --turbopack",
-    "start": "next start"
+    "start": "next start",
+    "test": "node --test pages/api/__tests__/*.test.js"
   },
   "dependencies": {
     "@neondatabase/serverless": "^1.0.1",

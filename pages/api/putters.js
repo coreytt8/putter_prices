@@ -103,6 +103,7 @@ async function getEbayToken() {
 
 // -------------------- Helpers --------------------
 const safeNum = (n) => {
+  if (n === null || n === undefined) return null;
   const x = Number(n);
   return Number.isFinite(x) ? x : null;
 };
@@ -145,8 +146,6 @@ const tokenize = (s) => {
   return Array.from(tokenSet);
 };
 
-export { tokenize };
-
 function pickCheapestShipping(shippingOptions) {
   if (!Array.isArray(shippingOptions) || shippingOptions.length === 0) return null;
   const sorted = [...shippingOptions].sort((a, b) => {
@@ -163,6 +162,76 @@ function pickCheapestShipping(shippingOptions) {
     currency: cheapest?.shippingCost?.currency || "USD",
     free: safeNum(cheapest?.shippingCost?.value) === 0,
     type: cheapest?.type || null,
+  };
+}
+
+const normalizeBidCountValue = (raw) => {
+  if (raw === null || raw === undefined) return null;
+  if (typeof raw === "object") {
+    if (raw && "value" in raw) return normalizeBidCountValue(raw.value);
+    if (raw && "content" in raw) return normalizeBidCountValue(raw.content);
+    return null;
+  }
+  return safeNum(raw);
+};
+
+const extractBidCount = (item) => {
+  const primary = normalizeBidCountValue(item?.sellingStatus?.bidCount);
+  if (primary !== null) return primary;
+  return normalizeBidCountValue(item?.bidCount);
+};
+
+function mapEbayItemToOffer(item) {
+  const image = item?.image?.imageUrl || item?.thumbnailImages?.[0]?.imageUrl || null;
+
+  const shipping = pickCheapestShipping(item?.shippingOptions);
+  const sellerPct = item?.seller?.feedbackPercentage ? Number(item.seller.feedbackPercentage) : null;
+  const sellerScore = item?.seller?.feedbackScore ? Number(item.seller.feedbackScore) : null;
+  const returnsAccepted = Boolean(item?.returnTerms?.returnsAccepted);
+  const returnDays = item?.returnTerms?.returnPeriod?.value ? Number(item.returnTerms.returnPeriod.value) : null;
+  const buying = {
+    types: Array.isArray(item?.buyingOptions) ? item.buyingOptions : [],
+    bidCount: extractBidCount(item),
+  };
+
+  const specs = parseSpecsFromItem(item);
+  const family = specs?.family || null;
+
+  const itemPrice = safeNum(item?.price?.value);
+  const shippingValue = Number.isFinite(shipping?.cost) ? shipping.cost : null;
+  const total = itemPrice != null ? itemPrice + (shippingValue ?? 0) : itemPrice ?? null;
+
+  const rawUrl = item?.itemWebUrl || item?.itemHref;
+  const url = decorateEbayUrl(rawUrl);
+
+  const modelKey = normalizeModelFromTitle(item?.title || "", family);
+
+  return {
+    productId: item?.itemId || item?.legacyItemId || item?.itemHref || item?.title,
+    url,
+    title: item?.title,
+    retailer: "eBay",
+    price: itemPrice,
+    shipping: shippingValue,
+    total,
+    currency: item?.price?.currency || "USD",
+    condition: item?.condition || null,
+    createdAt: item?.itemCreationDate || item?.itemEndDate || item?.estimatedAvailDate || null,
+    image,
+    shippingDetails: shipping
+      ? {
+          cost: shipping.cost,
+          currency: shipping.currency || item?.price?.currency || "USD",
+          free: Boolean(shipping.free),
+          type: shipping.type || null,
+        }
+      : null,
+    seller: { feedbackPct: sellerPct, feedbackScore: sellerScore, username: item?.seller?.username || null },
+    location: { country: item?.itemLocation?.country || null, postalCode: item?.itemLocation?.postalCode || null },
+    returns: { accepted: returnsAccepted, days: returnDays },
+    buying,
+    specs, // { length, family, headType, dexterity, hasHeadcover, shaft }
+    __model: modelKey,
   };
 }
 
@@ -471,7 +540,7 @@ async function fetchEbayBrowse({ q, limit = 50, offset = 0, sort, forceCategory 
 }
 
 // -------------------- API Route --------------------
-export default async function handler(req, res) {
+async function handler(req, res) {
   if (req.method !== "GET") return res.status(405).json({ ok: false, error: "Method Not Allowed" });
 
   const sp = req.query;
@@ -558,60 +627,8 @@ export default async function handler(req, res) {
 
     const fetchedCount = items.length;
 
-    // --- Map eBay → offers (UNCHANGED LOGIC) ---
-    let ebayOffers = items.map((item) => {
-      const image = item?.image?.imageUrl || item?.thumbnailImages?.[0]?.imageUrl || null;
-
-      const shipping = pickCheapestShipping(item?.shippingOptions);
-      const sellerPct = item?.seller?.feedbackPercentage ? Number(item.seller.feedbackPercentage) : null;
-      const sellerScore = item?.seller?.feedbackScore ? Number(item.seller.feedbackScore) : null;
-      const returnsAccepted = Boolean(item?.returnTerms?.returnsAccepted);
-      const returnDays = item?.returnTerms?.returnPeriod?.value ? Number(item.returnTerms.returnPeriod.value) : null;
-      const buying = {
-        types: Array.isArray(item?.buyingOptions) ? item.buyingOptions : [],
-        bidCount: item?.bidCount != null ? Number(item.bidCount) : null,
-      };
-
-      const specs = parseSpecsFromItem(item);
-      const family = specs?.family || null;
-
-      const itemPrice = safeNum(item?.price?.value);
-      const shippingValue = Number.isFinite(shipping?.cost) ? shipping.cost : null;
-      const total = itemPrice != null ? itemPrice + (shippingValue ?? 0) : itemPrice ?? null;
-
-      const rawUrl = item?.itemWebUrl || item?.itemHref;
-      const url = decorateEbayUrl(rawUrl);
-
-      const modelKey = normalizeModelFromTitle(item?.title || "", family);
-
-      return {
-        productId: item?.itemId || item?.legacyItemId || item?.itemHref || item?.title,
-        url,
-        title: item?.title,
-        retailer: "eBay",
-        price: itemPrice,
-        shipping: shippingValue,
-        total,
-        currency: item?.price?.currency || "USD",
-        condition: item?.condition || null,
-        createdAt: item?.itemCreationDate || item?.itemEndDate || item?.estimatedAvailDate || null,
-        image,
-        shippingDetails: shipping
-          ? {
-              cost: shipping.cost,
-              currency: shipping.currency || item?.price?.currency || "USD",
-              free: Boolean(shipping.free),
-              type: shipping.type || null,
-            }
-          : null,
-        seller: { feedbackPct: sellerPct, feedbackScore: sellerScore, username: item?.seller?.username || null },
-        location: { country: item?.itemLocation?.country || null, postalCode: item?.itemLocation?.postalCode || null },
-        returns: { accepted: returnsAccepted, days: returnDays },
-        buying,
-        specs, // { length, family, headType, dexterity, hasHeadcover, shaft }
-        __model: modelKey,
-      };
-    });
+    // --- Map eBay → offers ---
+    let ebayOffers = items.map((item) => mapEbayItemToOffer(item));
 
     // ===== Append pro-shop sources (guarded) → mergedOffers =====
     let mergedOffers = Array.isArray(ebayOffers) ? ebayOffers.slice() : [];
@@ -882,3 +899,7 @@ if (sort === "newlylisted") {
     return res.status(500).json({ ok: false, error: String(err?.message || err) });
   }
 }
+
+module.exports = handler;
+module.exports.tokenize = tokenize;
+module.exports.mapEbayItemToOffer = mapEbayItemToOffer;
