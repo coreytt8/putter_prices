@@ -1,7 +1,7 @@
 export const runtime = "nodejs";
 
 import { getSql } from "../../lib/db.js";
-import { TOUR_PUTTERS_2024 } from "../../lib/data/tourPutters2024.js";
+import { TOUR_PUTTERS_2025 } from "../../lib/data/tourPutters2025.js";
 
 const DEFAULT_WINDOW_DAYS = 45;
 
@@ -133,7 +133,7 @@ function computeSnapshot(rows = [], { windowDays, label }) {
 }
 
 function normalizeLineup() {
-  return TOUR_PUTTERS_2024.map((entry) => {
+  return TOUR_PUTTERS_2025.map((entry) => {
     const modelKey = String(entry?.modelKey || "").trim();
     if (!modelKey) return null;
     return {
@@ -159,7 +159,7 @@ export default async function handler(req, res) {
 
     const lineup = normalizeLineup();
     if (lineup.length === 0) {
-      return res.status(200).json({ ok: true, summary: { snapshot: null, meta: { sampleSize: 0, windowDays, label: "2024 tour lineup" } }, models: [] });
+      return res.status(200).json({ ok: true, summary: { snapshot: null, meta: { sampleSize: 0, windowDays, label: "2025 tour lineup" } }, models: [] });
     }
 
     const sql = getSql();
@@ -221,7 +221,7 @@ export default async function handler(req, res) {
 
     const summary = computeSnapshot(summaryRows, {
       windowDays,
-      label: "2024 tour lineup",
+      label: "2025 tour lineup",
     });
 
     return res.status(200).json({
