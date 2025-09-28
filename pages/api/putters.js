@@ -601,6 +601,8 @@ export default async function handler(req, res) {
   const buyingOptions = (sp.buyingOptions || "").toString().split(",").map((s) => s.trim()).filter(Boolean);
   const hasBids = (sp.hasBids || "").toString() === "true";
   const sort = (sp.sort || "").toString();
+  const modelKeyParam = ((sp.modelKey ?? sp.model) || "").toString().trim();
+  const normalizedModelParam = modelKeyParam ? norm(modelKeyParam) : "";
 
   const dex = (sp.dex || "").toString().toUpperCase();
   const head = (sp.head || "").toString().toUpperCase();
@@ -730,14 +732,31 @@ export default async function handler(req, res) {
     );
 
     if (queryTokens.length) {
-      // Enforce normalized title-token matches before other filters so downstream logic sees focused offers.
+      // Enforce normalized token matches before other filters so downstream logic sees focused offers.
       mergedOffers = mergedOffers.filter((o) => {
         const titleTokens = new Set(
           tokenize(o?.title)
             .map((t) => t.trim())
             .filter((t) => t.length > 1 || /\d/.test(t))
         );
-        return queryTokens.every((tok) => titleTokens.has(tok));
+
+        if (!normalizedModelParam) {
+          return queryTokens.every((tok) => titleTokens.has(tok));
+        }
+
+        const offerModel = o?.__model ? norm(o.__model) : "";
+        const matchesTargetModel = offerModel && offerModel === normalizedModelParam;
+        if (!matchesTargetModel) {
+          return queryTokens.every((tok) => titleTokens.has(tok));
+        }
+
+        const modelTokens = new Set(
+          tokenize(o?.__model)
+            .map((t) => t.trim())
+            .filter((t) => t.length > 1 || /\d/.test(t))
+        );
+
+        return queryTokens.every((tok) => titleTokens.has(tok) || modelTokens.has(tok));
       });
     }
 

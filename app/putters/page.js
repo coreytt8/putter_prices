@@ -278,7 +278,8 @@ export default function PuttersPage() {
   const [sortBy, setSortBy] = useState("best_price_asc");
   const [page, setPage] = useState(1);
   const [q, setQ] = useState("");
-  const [broaden, setBroaden] = useState(false); 
+  const [modelKeyParam, setModelKeyParam] = useState("");
+  const [broaden, setBroaden] = useState(false);
   const [includeProShops, setIncludeProShops] = useState(false);
 
 
@@ -333,6 +334,13 @@ export default function PuttersPage() {
     if (sp.has("broaden")) setBroaden(sp.get("broaden") === "true");
     if (sp.has("pro")) setIncludeProShops(sp.get("pro") === "true");
     if (sp.has("page")) setPage(Math.max(1, Number(sp.get("page") || "1")));
+    if (sp.has("modelKey")) {
+      const fromUrlModel = (sp.get("modelKey") || "").trim();
+      setModelKeyParam(fromUrlModel);
+    } else if (sp.has("model")) {
+      const fromUrlModel = (sp.get("model") || "").trim();
+      setModelKeyParam(fromUrlModel);
+    }
   }, []);
 
   // reflect state → URL
@@ -351,13 +359,20 @@ export default function PuttersPage() {
     if (head) params.set("head", head);
     if (lengths.length) params.set("lengths", lengths.join(","));
     if (includeProShops) params.set("pro","true");
+    if (modelKeyParam.trim()) params.set("modelKey", modelKeyParam.trim());
     params.set("page", String(page));
     params.set("group", groupMode ? "true" : "false");
 
     const qs = params.toString();
     const url = qs ? `/putters?${qs}` : "/putters";
     window.history.replaceState({}, "", url);
-  }, [q, onlyComplete, minPrice, maxPrice, conds, buying, hasBids, sortBy, page, groupMode, broaden, dex, head, lengths, includeProShops]);
+  }, [q, onlyComplete, minPrice, maxPrice, conds, buying, hasBids, sortBy, page, groupMode, broaden, dex, head, lengths, includeProShops, modelKeyParam]);
+
+  useEffect(() => {
+    if (!q.trim() && modelKeyParam) {
+      setModelKeyParam("");
+    }
+  }, [q, modelKeyParam]);
 
   // API URL
   const apiUrl = useMemo(() => {
@@ -375,18 +390,19 @@ export default function PuttersPage() {
     if (includeProShops) params.set("pro","true");
     if (head) params.set("head", head);
     if (lengths.length) params.set("lengths", lengths.join(","));
+    if (modelKeyParam.trim()) params.set("modelKey", modelKeyParam.trim());
     params.set("page", String(page));
     params.set("perPage", String(FIXED_PER_PAGE));
     params.set("group", groupMode ? "true" : "false");
     params.set("samplePages", "3");
     params.set("_ts", String(Date.now()));
     return `/api/putters?${params.toString()}`;
-  }, [q, onlyComplete, minPrice, maxPrice, conds, buying, hasBids, sortBy, page, groupMode, broaden, dex, head, lengths, includeProShops]);
+  }, [q, onlyComplete, minPrice, maxPrice, conds, buying, hasBids, sortBy, page, groupMode, broaden, dex, head, lengths, includeProShops, modelKeyParam]);
 
   // Reset to page 1 when inputs change
   useEffect(() => {
     setPage(1);
-  }, [q, onlyComplete, minPrice, maxPrice, conds, buying, hasBids, sortBy, groupMode, broaden, dex, head, lengths, includeProShops]);
+  }, [q, onlyComplete, minPrice, maxPrice, conds, buying, hasBids, sortBy, groupMode, broaden, dex, head, lengths, includeProShops, modelKeyParam]);
 
   // Fetch results
   useEffect(() => {
