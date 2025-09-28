@@ -486,6 +486,7 @@ export default async function handler(req, res) {
   const maxPrice = safeNum(sp.maxPrice);
   const conds = (sp.conditions || "").toString().split(",").map((s) => s.trim()).filter(Boolean);
   const buyingOptions = (sp.buyingOptions || "").toString().split(",").map((s) => s.trim()).filter(Boolean);
+  const hasBids = (sp.hasBids || "").toString() === "true";
   const sort = (sp.sort || "").toString();
 
   const dex = (sp.dex || "").toString().toUpperCase();
@@ -722,6 +723,10 @@ export default async function handler(req, res) {
         if (!Number.isFinite(L)) return false;
         return lengthList.some((sel) => Math.abs(L - sel) <= 0.5);
       });
+    }
+
+    if (hasBids) {
+      mergedOffers = mergedOffers.filter((o) => Number(o?.buying?.bidCount) > 0);
     }
 
     // ----- server-side sort BEFORE slicing so other sources can appear on page 1 -----
