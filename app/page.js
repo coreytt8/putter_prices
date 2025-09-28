@@ -20,6 +20,52 @@ const BRAND_PATTERNS = [
   { key: "Wilson", pattern: /wilson/i },
 ];
 
+function escapeRegExp(value = "") {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+function sanitizeModelKey(rawKey = "") {
+  if (!rawKey) {
+    return {
+      label: "Model updating",
+      query: "",
+    };
+  }
+
+  const segments = String(rawKey)
+    .split(/::|\|/g)
+    .map((segment) => segment.trim())
+    .filter(Boolean);
+
+  const working = segments.join(" ");
+  const remainingSegments = (() => {
+    if (segments.length <= 1) return segments;
+    const first = segments[0];
+    const brandMatched = BRAND_PATTERNS.some((brand) => {
+      if (!brand?.pattern) return false;
+      return brand.pattern.test(first) || brand.key.toLowerCase() === first.toLowerCase();
+    });
+    return brandMatched ? segments.slice(1) : segments;
+  })();
+
+  let label = remainingSegments.join(" ").trim();
+
+  for (const brand of BRAND_PATTERNS) {
+    if (!brand?.key) continue;
+    const brandRegex = new RegExp(`^${escapeRegExp(brand.key)}\s+`, "i");
+    if (brandRegex.test(label)) {
+      label = label.replace(brandRegex, "").trim();
+      break;
+    }
+  }
+
+  const cleanedLabel = label || working || String(rawKey).trim();
+  return {
+    label: cleanedLabel,
+    query: cleanedLabel,
+  };
+}
+
 function formatCurrency(value, currency = "USD") {
   if (typeof value !== "number" || !Number.isFinite(value)) return "—";
   try {
@@ -210,10 +256,16 @@ export default async function Home() {
   });
 
   const trending = Array.isArray(trendingRes?.models)
-    ? trendingRes.models.slice(0, 6).map((m) => ({
-        modelKey: m?.model_key || "",
-        count: Number(m?.cnt || m?.count || 0) || 0,
-      }))
+    ? trendingRes.models.slice(0, 6).map((m) => {
+        const modelKey = m?.model_key || "";
+        const { label, query } = sanitizeModelKey(modelKey);
+        return {
+          modelKey,
+          label,
+          query,
+          count: Number(m?.cnt || m?.count || 0) || 0,
+        };
+      })
     : [];
 
   const smartExample =
@@ -418,8 +470,8 @@ export default async function Home() {
           <div className="mt-10 grid gap-6 md:grid-cols-2 xl:grid-cols-3">
             {trending.map((item) => (
               <div key={item.modelKey} className="flex flex-col rounded-2xl border border-slate-200 bg-white p-6 shadow-sm">
-                <p className="text-sm uppercase tracking-wide text-slate-500">Model key</p>
-                <h3 className="mt-2 text-xl font-semibold text-slate-900">{item.modelKey || "Model updating"}</h3>
+                <p className="text-sm uppercase tracking-wide text-slate-500">Trending search</p>
+                <h3 className="mt-2 text-xl font-semibold text-slate-900">{item.label || "Model updating"}</h3>
                 <p className="mt-2 text-sm text-slate-600">
                   {item.count > 0
                     ? `${item.count.toLocaleString()} recent listings tracked`
@@ -427,7 +479,7 @@ export default async function Home() {
                 </p>
                 <div className="mt-6">
                   <Link
-                    href={`/putters?q=${encodeURIComponent(item.modelKey)}`}
+                    href={`/putters?q=${encodeURIComponent(item.query)}`}
                     className="inline-flex items-center rounded-full bg-emerald-500 px-5 py-2 text-sm font-semibold text-slate-950 shadow-sm transition hover:bg-emerald-400"
                   >
                     Explore this model
