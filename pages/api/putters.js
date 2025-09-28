@@ -733,6 +733,8 @@ if (sort === "newlylisted") {
   });
 } else if (sort === "best_price_desc") {
   mergedOffers.sort((a, b) => (b.price ?? -Infinity) - (a.price ?? -Infinity));
+} else if (sort === "best_price_asc") {
+  mergedOffers.sort((a, b) => (a.price ?? Infinity) - (b.price ?? Infinity));
 } else if (sort === "model_asc") {
   // Use title as a proxy for model in flat view
   mergedOffers.sort((a, b) => (a.title || "").localeCompare(b.title || ""));
@@ -836,6 +838,8 @@ if (sort === "newlylisted") {
       });
     } else if (sort === "best_price_desc") {
       groups.sort((a, b) => (b.bestPrice ?? -Infinity) - (a.bestPrice ?? -Infinity));
+    } else if (sort === "best_price_asc") {
+      groups.sort((a, b) => (a.bestPrice ?? Infinity) - (b.bestPrice ?? Infinity));
     } else if (sort === "model_asc") {
       groups.sort((a, b) => (a.model || "").localeCompare(b.model || ""));
     } else if (sort === "count_desc") {
