@@ -4,7 +4,7 @@
 //   <SmartPriceBadge
 //      price={Number(o.price)}
 //      baseStats={statsByModel[g.model]}
-//      variantStats={null}                 // pass real variant stats later
+//      variantStats={statsByModel[variantKey]}
 //      title={o.title}
 //      specs={o.specs}
 //      brand={g?.brand}
@@ -62,20 +62,30 @@ function detectPremiumSignals({ title = "", aspects = {}, brand = "" } = {}) {
 
 // 2) Tier logic with variant-aware anchor and a safe fallback
 function chooseBadge({ price, baseStats, variantStats, looksPremium }) {
-  const pick = (variantStats && isFinite(variantStats?.p50)) ? variantStats : baseStats;
-  if (!pick) return null;
+  const toNumber = (val) => {
+    const num = Number(val);
+    return Number.isFinite(num) ? num : NaN;
+  };
 
-  const p10 = Number(pick.p10);
-  const p50 = Number(pick.p50);
-  const p90 = Number(pick.p90);
+  const variantNums = {
+    p10: toNumber(variantStats?.p10),
+    p50: toNumber(variantStats?.p50),
+    p90: toNumber(variantStats?.p90),
+  };
+  const baseNums = {
+    p10: toNumber(baseStats?.p10),
+    p50: toNumber(baseStats?.p50),
+    p90: toNumber(baseStats?.p90),
+  };
 
-  const haveAny =
-    [p10, p50, p90].some((v) => Number.isFinite(v)) && Number.isFinite(price);
-  if (!haveAny) return null;
+  const variantHasPercentiles =
+    !!variantStats && [variantNums.p10, variantNums.p50, variantNums.p90].some(Number.isFinite);
+  const baseHasPercentiles =
+    !!baseStats && [baseNums.p10, baseNums.p50, baseNums.p90].some(Number.isFinite);
 
-  const usingBaseForPremium = looksPremium && pick === baseStats;
+  if (!Number.isFinite(price)) return null;
 
-  if (usingBaseForPremium) {
+  if (looksPremium && variantStats && !variantHasPercentiles) {
     return {
       tier: "special",
       tone: "indigo",
@@ -84,6 +94,16 @@ function chooseBadge({ price, baseStats, variantStats, looksPremium }) {
         "Tour/Limited signals detected but variant comps are thin. Comparing to base would be misleading.",
     };
   }
+
+  const pick = variantHasPercentiles
+    ? { ...variantNums }
+    : baseHasPercentiles
+      ? { ...baseNums }
+      : null;
+
+  if (!pick) return null;
+
+  const { p10, p50, p90 } = pick;
 
   if (Number.isFinite(p10) && price <= p10) {
     return {
