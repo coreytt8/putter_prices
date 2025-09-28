@@ -6,24 +6,6 @@ import HeroSection from "@/components/HeroSection";
 import SectionWrapper from "@/components/SectionWrapper";
 import HighlightCard from "@/components/HighlightCard";
 
-const CURATED_SEARCHES = [
-  {
-    label: "Scotty Cameron Newport 2",
-    query: "scotty cameron newport 2 putter",
-    blurb: "Tour-proven blade feel with premium milling and collectible runs.",
-  },
-  {
-    label: "TaylorMade Spider X",
-    query: "taylormade spider x putter",
-    blurb: "High-MOI mallet stability for players chasing a smoother roll.",
-  },
-  {
-    label: "Odyssey White Hot OG",
-    query: "odyssey white hot og putter",
-    blurb: "Iconic insert feel that keeps climbing in eBay demand.",
-  },
-];
-
 const BRAND_PATTERNS = [
   { key: "Scotty Cameron", pattern: /scotty\s+cameron/i },
   { key: "TaylorMade", pattern: /taylormade|tm\b/i },
@@ -44,6 +26,11 @@ function formatCurrency(value, currency = "USD") {
   } catch {
     return `$${value.toFixed(2)}`;
   }
+}
+
+function safeNumber(value) {
+  const num = Number(value);
+  return Number.isFinite(num) ? num : null;
 }
 
 async function resolveBaseUrl() {
@@ -163,50 +150,44 @@ function buildSnapshotFromOffers(offers = []) {
 export default async function Home() {
   const baseUrl = await resolveBaseUrl();
 
-  const deals = await Promise.all(
-    CURATED_SEARCHES.map(async (item) => {
-      const searchParams = new URLSearchParams({
-        q: item.query,
-        group: "true",
-        page: "1",
-        perPage: "1",
-        sort: "best_price_asc",
-        samplePages: "2",
-      });
+  const topDealsRes = await fetchJson(`${baseUrl}/api/top-deals`, {
+    next: { revalidate: 300 },
+  });
 
-      const searchData = await fetchJson(`${baseUrl}/api/putters?${searchParams.toString()}`, {
-        next: { revalidate: 300 },
-      });
+  const dealsRaw = Array.isArray(topDealsRes?.deals) ? topDealsRes.deals : [];
 
-      const group = Array.isArray(searchData?.groups) ? searchData.groups[0] : null;
-      const bestOffer = group?.offers?.[0] || null;
-      const targetForStats = group?.model || item.query;
+  const deals = dealsRaw.map((item) => {
+    const bestPrice = safeNumber(item?.bestPrice ?? item?.bestOffer?.total ?? item?.bestOffer?.price);
+    const currency = item?.currency || item?.bestOffer?.currency || "USD";
+    const savingsAmount = safeNumber(item?.savings?.amount);
+    const savingsPercent = safeNumber(item?.savings?.percent);
+    const roundedPct = Number.isFinite(savingsPercent) ? Math.round(savingsPercent * 100) : null;
+    const blurb =
+      item?.blurb ||
+      (Number.isFinite(roundedPct)
+        ? `Smart Price spotted about ${roundedPct}% below the typical ask on this model today.`
+        : "Smart Price benchmarks live listings against historical comps to surface real savings.");
 
-      const statsRes = await fetchJson(
-        `${baseUrl}/api/model-stats?model=${encodeURIComponent(targetForStats)}`,
-        { next: { revalidate: 1800 } }
-      );
+    return {
+      label: item?.label || item?.modelKey || "Live Smart Price deal",
+      query: item?.query || item?.modelKey || "scotty cameron putter",
+      blurb,
+      group: item?.group || null,
+      bestOffer: item?.bestOffer || null,
+      stats: item?.stats || null,
+      statsMeta: item?.statsMeta || null,
+      bestPrice: Number.isFinite(bestPrice) ? bestPrice : null,
+      currency,
+      image: item?.image || item?.bestOffer?.image || null,
+      totalListings: safeNumber(item?.totalListings),
+      savings: {
+        amount: Number.isFinite(savingsAmount) ? savingsAmount : null,
+        percent: Number.isFinite(savingsPercent) ? savingsPercent : null,
+      },
+    };
+  });
 
-      const stats = statsRes?.stats || null;
-
-      const bestPrice = Number(bestOffer?.price ?? group?.bestPrice ?? NaN);
-      const currency = bestOffer?.currency || group?.bestCurrency || "USD";
-
-      return {
-        ...item,
-        group,
-        bestOffer,
-        stats,
-        statsMeta: statsRes?.segment || null,
-        bestPrice: Number.isFinite(bestPrice) ? bestPrice : null,
-        currency,
-        image: group?.image || bestOffer?.image || null,
-        totalListings: Number(searchData?.meta?.total ?? searchData?.keptCount ?? 0) || null,
-      };
-    })
-  );
-
-  const snapshotQuery = deals[0]?.query || "scotty cameron putter";
+  const snapshotQuery = deals.find((deal) => deal?.query)?.query || "scotty cameron putter";
   const snapshotParams = new URLSearchParams({
     q: snapshotQuery,
     group: "false",
@@ -234,13 +215,16 @@ export default async function Home() {
       }))
     : [];
 
-  const smartExample = deals.find(
-    (deal) =>
-      deal &&
-      Number.isFinite(deal.bestPrice) &&
-      Number.isFinite(deal?.stats?.p50) &&
-      deal.bestOffer
-  );
+  const smartExample =
+    deals.find(
+      (deal) =>
+        deal &&
+        Number.isFinite(deal.bestPrice) &&
+        Number.isFinite(deal?.stats?.p50) &&
+        deal.bestOffer
+    ) ||
+    deals.find((deal) => deal && Number.isFinite(deal.bestPrice) && deal.bestOffer) ||
+    null;
 
   const exampleMedian = Number.isFinite(smartExample?.stats?.p50)
     ? Number(smartExample?.stats?.p50)
@@ -276,18 +260,20 @@ export default async function Home() {
             >
               Browse live deals
             </Link>
-            <Link
-              href={`/putters?q=${encodeURIComponent(snapshotQuery)}`}
-              className="inline-flex items-center justify-center rounded-full bg-white/10 px-6 py-3 text-base font-semibold text-white ring-1 ring-inset ring-white/20 transition hover:bg-white/20"
-            >
-              View that market snapshot
-            </Link>
+            {snapshotQuery && (
+              <Link
+                href={`/putters?q=${encodeURIComponent(snapshotQuery)}`}
+                className="inline-flex items-center justify-center rounded-full bg-white/10 px-6 py-3 text-base font-semibold text-white ring-1 ring-inset ring-white/20 transition hover:bg-white/20"
+              >
+                View that market snapshot
+              </Link>
+            )}
           </div>
           <p className="mt-3 text-sm text-emerald-200">
             We send you to the best eBay listing with verified savings.
           </p>
 
-          {smartExample && (
+          {smartExample ? (
             <div className="mx-auto mt-8 max-w-3xl rounded-2xl border border-white/10 bg-white/5 p-6 text-left backdrop-blur">
               <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
                 <div>
@@ -296,7 +282,9 @@ export default async function Home() {
                     {smartExample.label}: {formatCurrency(smartExample.bestPrice, smartExample.currency)} vs median {formatCurrency(exampleMedian, smartExample.currency)}
                   </h2>
                   <p className="mt-2 text-sm text-slate-200">
-                    We compare every listing against recent sale percentiles. This one sits {exampleSavings ? `about ${Math.round(exampleSavings)}% below` : "right on"} the typical asking price, so Smart Price flags it automatically.
+                    {exampleSavings
+                      ? `We compare every listing against recent sale percentiles. This one sits about ${Math.round(exampleSavings)}% below the typical asking price, so Smart Price flags it automatically.`
+                      : "We compare every listing against recent sale percentiles. Smart Price highlights the standouts as soon as fresh comps confirm the savings."}
                   </p>
                 </div>
                 <SmartPriceBadge
@@ -307,6 +295,10 @@ export default async function Home() {
                   brand={smartExample.bestOffer?.brand}
                 />
               </div>
+            </div>
+          ) : (
+            <div className="mx-auto mt-8 max-w-3xl rounded-2xl border border-white/10 bg-white/5 p-6 text-center text-sm text-slate-200 backdrop-blur">
+              Smart Price is crunching today&apos;s listings. Fresh deal examples appear here as soon as we validate the savings against recent comps.
             </div>
           )}
         </div>
@@ -328,18 +320,23 @@ export default async function Home() {
             </p>
           </div>
           <div className="mt-12 grid gap-8 md:grid-cols-2 xl:grid-cols-3">
-            {deals.map((deal) => {
-              const median = Number.isFinite(deal?.stats?.p50) ? Number(deal.stats.p50) : null;
-              const diff =
-                Number.isFinite(median) && Number.isFinite(deal.bestPrice)
-                  ? median - deal.bestPrice
-                  : null;
-              const diffPct =
-                Number.isFinite(median) && Number.isFinite(deal.bestPrice) && median > 0
-                  ? Math.round(((median - deal.bestPrice) / median) * 100)
-                  : null;
-              return (
-                <HighlightCard key={deal.query}>
+            {deals.length === 0 ? (
+              <div className="col-span-full rounded-3xl border border-slate-200 bg-white p-8 text-center text-slate-600">
+                Smart Price is refreshing today&apos;s leaderboard—check back soon for verified deals.
+              </div>
+            ) : (
+              deals.map((deal) => {
+                const median = Number.isFinite(deal?.stats?.p50) ? Number(deal.stats.p50) : null;
+                const diff =
+                  Number.isFinite(median) && Number.isFinite(deal.bestPrice)
+                    ? median - deal.bestPrice
+                    : null;
+                const diffPct =
+                  Number.isFinite(median) && Number.isFinite(deal.bestPrice) && median > 0
+                    ? Math.round(((median - deal.bestPrice) / median) * 100)
+                    : null;
+                return (
+                  <HighlightCard key={deal.query}>
                   <div className="aspect-[3/2] w-full bg-slate-100">
                     {deal.image ? (
                       <img src={deal.image} alt={deal.label} className="h-full w-full object-cover" loading="lazy" />
@@ -404,8 +401,9 @@ export default async function Home() {
                     </div>
                   </div>
                 </HighlightCard>
-              );
-            })}
+                );
+              })
+            )}
           </div>
       </SectionWrapper>
 
