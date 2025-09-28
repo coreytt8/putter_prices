@@ -1226,7 +1226,13 @@ export default function PuttersPage() {
 
                             {isOpen && Array.isArray(series) && series.length > 1 && (
                               <div className="mt-4">
-                                <PriceSparkline data={series} height={70} showAverage showMedian className="h-[70px]" />
+                                <PriceSparkline
+                                  data={series}
+                                  height={70}
+                                  showAverage
+                                  showMedian
+                                  className="h-[70px] text-sky-600"
+                                />
                               </div>
                             )}
 
