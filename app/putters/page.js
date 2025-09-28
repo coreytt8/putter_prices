@@ -1,6 +1,7 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import Link from "next/link";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import MarketSnapshot from "@/components/MarketSnapshot";
 import PriceSparkline from "@/components/PriceSparkline";
 import SmartPriceBadge from "@/components/SmartPriceBadge";
@@ -181,6 +182,37 @@ const SORT_OPTIONS = [
   { label: "A → Z (Model)", value: "model_asc" },
 ];
 
+const TRENDING_QUERIES = [
+  {
+    title: "Tour Proven Mallets",
+    query: "scotty cameron phantom x",
+    description: "Compare prices on Phantom X mallets trusted on tour for their stability and alignment.",
+    image:
+      "https://images.unsplash.com/photo-1618220179428-22790b461013?auto=format&fit=crop&w=800&q=80",
+  },
+  {
+    title: "Face-Balanced Innovation",
+    query: "lab golf df3",
+    description: "See how L.A.B. Golf's lie-angle-balanced putters stack up across condition and price tiers.",
+    image:
+      "https://images.unsplash.com/photo-1504609813442-a8924e83f76e?auto=format&fit=crop&w=800&q=80",
+  },
+  {
+    title: "Forgiving Game-Improvers",
+    query: "odyssey 2-ball ten",
+    description: "Browse high-MOI Odyssey models that help you start putts on line with confidence.",
+    image:
+      "https://images.unsplash.com/photo-1471295253337-3ceaaedca402?auto=format&fit=crop&w=800&q=80",
+  },
+  {
+    title: "Premium Blades",
+    query: "ping anser putter",
+    description: "Explore timeless Ping blade putters and spot listings with standout value.",
+    image:
+      "https://images.unsplash.com/photo-1502877338535-766e1452684a?auto=format&fit=crop&w=800&q=80",
+  },
+];
+
 const FIXED_PER_PAGE = 10;
 
 const retailerLogos = {
@@ -251,6 +283,23 @@ function getStatsKey3(model, variant, cond) {
 /* ============================
    PAGE
    ============================ */
+function trackEvent(eventName, payload) {
+  if (typeof window === "undefined") return;
+  try {
+    if (typeof window.analytics?.track === "function") {
+      window.analytics.track(eventName, payload);
+      return;
+    }
+  } catch (err) {
+    console.warn("analytics.track failed", err);
+  }
+  try {
+    window.dispatchEvent?.(
+      new CustomEvent("analytics", { detail: { eventName, payload } })
+    );
+  } catch {}
+}
+
 export default function PuttersPage() {
   // filters/state
   const [onlyComplete, setOnlyComplete] = useState(true);
@@ -295,6 +344,20 @@ export default function PuttersPage() {
 
   // recent models
   const { recent, push: pushRecent, clear: clearRecent } = useRecentModels();
+
+  const handleTrendingClick = useCallback(
+    (item) => {
+      trackEvent("trending_query_click", {
+        query: item.query,
+        title: item.title,
+        source: "empty_state",
+      });
+      setGroupMode(true);
+      setPage(1);
+      setQ(item.query);
+    },
+    [setGroupMode, setPage, setQ]
+  );
 
   // --- read URL params on first load ---
   useEffect(() => {
@@ -936,9 +999,46 @@ export default function PuttersPage() {
       </section>
 
       {!q.trim() && (
-        <div className="mt-8 rounded-md border border-gray-200 bg-white p-6 text-center text-sm text-gray-600">
-          Start by typing a putter model or choose a brand above to see grouped price comparisons.
-        </div>
+        <section className="mt-8">
+          <div className="mb-4 flex items-center justify-between gap-4">
+            <div>
+              <h2 className="text-lg font-semibold text-gray-900">Popular searches</h2>
+              <p className="text-sm text-gray-600">
+                Jump into a curated search to see grouped price comparisons, or start typing above to explore your own.
+              </p>
+            </div>
+          </div>
+          <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
+            {TRENDING_QUERIES.map((item) => {
+              const href = `/putters?q=${encodeURIComponent(item.query)}&group=true`;
+              return (
+                <article
+                  key={item.query}
+                  className="flex h-full flex-col overflow-hidden rounded-xl border border-gray-200 bg-white shadow-sm"
+                >
+                  <div className="relative h-40 w-full overflow-hidden">
+                    <img
+                      src={item.image}
+                      alt={item.title}
+                      className="h-full w-full object-cover transition-transform duration-300 ease-out hover:scale-105"
+                    />
+                  </div>
+                  <div className="flex flex-1 flex-col p-5">
+                    <h3 className="text-base font-semibold text-gray-900">{item.title}</h3>
+                    <p className="mt-2 flex-1 text-sm text-gray-600">{item.description}</p>
+                    <Link
+                      href={href}
+                      onClick={() => handleTrendingClick(item)}
+                      className="mt-4 inline-flex items-center justify-center rounded-md bg-emerald-600 px-4 py-2 text-sm font-medium text-white transition hover:bg-emerald-700"
+                    >
+                      View listings
+                    </Link>
+                  </div>
+                </article>
+              );
+            })}
+          </div>
+        </section>
       )}
 
       {q.trim() && !loading && !err && (
