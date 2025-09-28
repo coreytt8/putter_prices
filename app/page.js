@@ -7,6 +7,7 @@ import SectionWrapper from "@/components/SectionWrapper";
 import HighlightCard from "@/components/HighlightCard";
 import HomepageCompareDemo from "@/components/HomepageCompareDemo";
 import PriceComparisonTable from "@/components/PriceComparisonTable";
+import TrendingSparkline from "@/components/TrendingSparkline";
 
 const DEFAULT_SNAPSHOT_QUERY = "golf putter";
 
@@ -554,6 +555,7 @@ export default async function Home() {
                       ? `${item.count.toLocaleString()} recent listings tracked`
                       : "Pulling market counts…"}
                   </p>
+                  <TrendingSparkline modelKey={item.modelKey} />
                   <div className="mt-6">
                     <Link
                       href={href}
