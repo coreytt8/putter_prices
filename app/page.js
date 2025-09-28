@@ -320,7 +320,7 @@ export default async function Home() {
   const heroSnapshot = tourResponse?.summary?.snapshot || null;
   const snapshotMeta = tourResponse?.summary?.meta || null;
   const snapshotSampleSize = Number(snapshotMeta?.sampleSize) || 0;
-  const snapshotLabel = snapshotMeta?.label || "2024 tour lineup";
+  const snapshotLabel = snapshotMeta?.label || "2025 tour lineup";
 
   const snapshotQuery =
     tourModels.find((model) => model?.query)?.query ||
@@ -431,7 +431,7 @@ export default async function Home() {
         {tourModels.length > 0 && (
           <div className="mx-auto mt-10 max-w-4xl text-left">
             <div className="rounded-2xl border border-white/10 bg-white/5 p-6 backdrop-blur">
-              <p className="text-sm uppercase tracking-wide text-emerald-200/80">Verified 2024 tour lineup</p>
+              <p className="text-sm uppercase tracking-wide text-emerald-200/80">Verified 2025 tour lineup</p>
               <ul className="mt-4 space-y-4">
                 {tourModels.map((model) => {
                   const avgPrice = Number(model?.snapshot?.price?.avg);
@@ -449,7 +449,7 @@ export default async function Home() {
                       </div>
                       <div className="flex flex-col items-start gap-1 text-xs text-emerald-200 sm:items-end">
                         <span>
-                          {model.usageRank ? `#${model.usageRank} in 2024 PGA Tour usage` : "Usage rank updating"}
+                          {model.usageRank ? `#${model.usageRank} in 2025 PGA Tour usage` : "Usage rank updating"}
                           {model.playerCount ? ` · ${model.playerCount} players` : ""}
                         </span>
                         {model.sourceUrl ? (
