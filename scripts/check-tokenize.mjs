@@ -1,4 +1,7 @@
-import { tokenize } from "../pages/api/putters.js";
+import { createRequire } from "node:module";
+
+const require = createRequire(import.meta.url);
+const { tokenize } = require("../pages/api/putters.js");
 
 const cases = [
   {
