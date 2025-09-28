@@ -569,7 +569,13 @@ export default async function handler(req, res) {
       const returnDays = item?.returnTerms?.returnPeriod?.value ? Number(item.returnTerms.returnPeriod.value) : null;
       const buying = {
         types: Array.isArray(item?.buyingOptions) ? item.buyingOptions : [],
-        bidCount: item?.bidCount != null ? Number(item.bidCount) : null,
+        bidCount: (() => {
+          const bidRaw =
+            item?.sellingStatus?.bidCount != null
+              ? item.sellingStatus.bidCount
+              : item?.bidCount;
+          return bidRaw != null ? safeNum(bidRaw) : null;
+        })(),
       };
 
       const specs = parseSpecsFromItem(item);
