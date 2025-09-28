@@ -48,6 +48,9 @@ Object.entries(BRAND_SYNONYMS).forEach(([brand, aliases]) => {
  *
  * sanitizeModelKey("Odyssey|White Hot OG|2-Ball|35");
  * // => { label: "White Hot OG 2-Ball 35", query: "Odyssey White Hot OG 2-Ball" }
+ *
+ * sanitizeModelKey("mint TaylorMade my spider tour x x3 34.5 putter");
+ * // => { label: "mint TaylorMade my spider tour x x3 34.5 putter", query: "TaylorMade my spider tour x x3 putter" }
  */
 function sanitizeModelKey(rawKey = "") {
   if (!rawKey) {
@@ -150,10 +153,30 @@ function sanitizeModelKey(rawKey = "") {
   const humanLabel = cleanedLabel || fallbackText;
 
   const lengthTokenPattern = /^\d+(?:\.\d+)?(?:(?:in)|["”])?$/i;
+  const descriptorTokens = new Set([
+    "mint",
+    "brand",
+    "brand-new",
+    "brandnew",
+    "new",
+    "like-new",
+    "likenew",
+    "used",
+    "excellent",
+    "good",
+    "great",
+    "condition",
+    "nr",
+    "nib",
+  ]);
   const searchTokens = cleanedLabel
     ? cleanedLabel
         .split(/\s+/)
-        .filter((token) => token && !lengthTokenPattern.test(token))
+        .filter((token) => {
+          if (!token || lengthTokenPattern.test(token)) return false;
+          const normalized = token.toLowerCase();
+          return !descriptorTokens.has(normalized);
+        })
     : [];
   const searchText = searchTokens.join(" ").trim();
 
