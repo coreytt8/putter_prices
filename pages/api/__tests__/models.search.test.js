@@ -33,6 +33,7 @@ test('treats trivial queries as wildcard and returns top models', async () => {
     const text = strings.join(' ');
     if (text.includes('SELECT')) {
       assert.ok(!text.includes('LOWER(i.model_key) LIKE'));
+      assert.ok(text.includes('COUNT(DISTINCT i.item_id) AS cnt'));
       return fakeRows;
     }
 

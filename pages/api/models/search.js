@@ -8,7 +8,7 @@ export async function searchModels(sql, q = '') {
   const hasMeaningfulQuery = normalized.length > 0;
   const like = `%${normalized}%`;
   return sql`
-    SELECT i.model_key, COUNT(*) AS cnt
+    SELECT i.model_key, COUNT(DISTINCT i.item_id) AS cnt
     FROM items i
     JOIN item_prices ip ON ip.item_id = i.item_id
     WHERE i.model_key IS NOT NULL
