@@ -107,6 +107,53 @@ const safeNum = (n) => {
   return Number.isFinite(x) ? x : null;
 };
 
+const coerceNumericInput = (value, seen = new Set()) => {
+  if (value == null) return null;
+
+  const t = typeof value;
+  if (t === "number" || t === "string") return value;
+  if (t === "bigint") return Number(value);
+  if (t === "boolean") return value ? 1 : 0;
+
+  if (Array.isArray(value)) {
+    for (const entry of value) {
+      const result = coerceNumericInput(entry, seen);
+      if (result != null) return result;
+    }
+    return null;
+  }
+
+  if (t === "object") {
+    if (seen.has(value)) return null;
+    seen.add(value);
+
+    const candidateKeys = ["value", "_value", "amount", "raw", "values", "content"];
+    for (const key of candidateKeys) {
+      if (key in value) {
+        const nested = coerceNumericInput(value[key], seen);
+        if (nested != null) return nested;
+      }
+    }
+
+    if (typeof value.valueOf === "function") {
+      const valOf = value.valueOf();
+      if (valOf !== value) {
+        const nested = coerceNumericInput(valOf, seen);
+        if (nested != null) return nested;
+      }
+    }
+
+    if (typeof value.toString === "function") {
+      const str = value.toString();
+      if (typeof str === "string" && str && str !== "[object Object]") {
+        return str;
+      }
+    }
+  }
+
+  return null;
+};
+
 const norm = (s) => String(s || "").trim().toLowerCase();
 
 const tokenize = (s) => {
@@ -567,9 +614,16 @@ export default async function handler(req, res) {
       const sellerScore = item?.seller?.feedbackScore ? Number(item.seller.feedbackScore) : null;
       const returnsAccepted = Boolean(item?.returnTerms?.returnsAccepted);
       const returnDays = item?.returnTerms?.returnPeriod?.value ? Number(item.returnTerms.returnPeriod.value) : null;
+      const primaryBidCount = coerceNumericInput(item?.sellingStatus?.bidCount);
+      let bidCount = safeNum(primaryBidCount);
+      if (bidCount === null) {
+        const legacyBidCount = coerceNumericInput(item?.bidCount);
+        bidCount = safeNum(legacyBidCount);
+      }
+
       const buying = {
         types: Array.isArray(item?.buyingOptions) ? item.buyingOptions : [],
-        bidCount: item?.bidCount != null ? Number(item.bidCount) : null,
+        bidCount,
       };
 
       const specs = parseSpecsFromItem(item);
