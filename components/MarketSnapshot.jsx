@@ -41,10 +41,10 @@ export default function MarketSnapshot({ snapshot, meta, query }) {
         <div className="flex flex-col gap-1 border-b border-gray-100 p-5 sm:flex-row sm:items-center sm:justify-between">
           <div>
             <h2 className="text-lg font-semibold tracking-tight">
-              Market snapshot {query ? <span className="text-gray-600">for “{query}”</span> : null}
+              Live market coverage {query ? <span className="text-gray-600">for “{query}”</span> : null}
             </h2>
             <p className="mt-0.5 text-xs text-gray-500">
-              A quick read on current live listings (from this result set).
+              Aggregating live listings across our tracked marketplaces to map today’s pricing landscape.
             </p>
           </div>
           <div className="mt-2 sm:mt-0">
