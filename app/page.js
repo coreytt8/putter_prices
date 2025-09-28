@@ -40,12 +40,17 @@ function sanitizeModelKey(rawKey = "") {
     .filter(Boolean);
 
   const working = segments.join(" ");
+  let detectedBrand = null;
   const remainingSegments = (() => {
     if (segments.length <= 1) return segments;
     const first = segments[0];
     const brandMatched = BRAND_PATTERNS.some((brand) => {
       if (!brand?.pattern) return false;
-      return brand.pattern.test(first) || brand.key.toLowerCase() === first.toLowerCase();
+      const matches = brand.pattern.test(first) || brand.key.toLowerCase() === first.toLowerCase();
+      if (matches) {
+        detectedBrand = brand.key;
+      }
+      return matches;
     });
     return brandMatched ? segments.slice(1) : segments;
   })();
@@ -57,14 +62,33 @@ function sanitizeModelKey(rawKey = "") {
     const brandRegex = new RegExp(`^${escapeRegExp(brand.key)}\s+`, "i");
     if (brandRegex.test(label)) {
       label = label.replace(brandRegex, "").trim();
+      if (!detectedBrand) {
+        detectedBrand = brand.key;
+      }
       break;
     }
   }
 
-  const cleanedLabel = label || working || String(rawKey).trim();
+  const fallbackText = working || String(rawKey).trim();
+  const cleanedLabel = label.trim();
+  const humanLabel = cleanedLabel || fallbackText;
+
+  let query = "";
+  if (cleanedLabel && detectedBrand) {
+    query = `${detectedBrand} ${cleanedLabel}`.trim();
+  } else if (cleanedLabel) {
+    query = cleanedLabel;
+  } else {
+    query = String(rawKey).trim();
+  }
+
+  if (!query) {
+    query = fallbackText;
+  }
+
   return {
-    label: cleanedLabel,
-    query: cleanedLabel,
+    label: humanLabel,
+    query,
   };
 }
 
