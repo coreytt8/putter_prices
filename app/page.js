@@ -577,28 +577,36 @@ export default async function Home() {
             </p>
           </div>
           <div className="mt-10 grid gap-6 md:grid-cols-2 xl:grid-cols-3">
-            {trending.map((item) => (
-              <div key={item.modelKey} className="flex flex-col rounded-2xl border border-slate-200 bg-white p-6 shadow-sm">
-                <p className="text-sm uppercase tracking-wide text-slate-500">Trending search</p>
-                <h3 className="mt-2 text-xl font-semibold text-slate-900">{item.label || "Model updating"}</h3>
-                <p className="mt-2 text-sm text-slate-600">
-                  {item.count > 0
-                    ? `${item.count.toLocaleString()} recent listings tracked`
-                    : "Pulling market counts…"}
-                </p>
-                <div className="mt-6">
-                  <Link
-                    href={`/putters?q=${encodeURIComponent(item.query)}`}
-                    className="inline-flex items-center rounded-full bg-emerald-500 px-5 py-2 text-sm font-semibold text-slate-950 shadow-sm transition hover:bg-emerald-400"
-                  >
-                    Explore this model
-                  </Link>
-                  <p className="mt-2 text-xs text-emerald-600">
-                    We send you to the best eBay listing with verified savings.
+            {trending.map((item) => {
+              const params = new URLSearchParams();
+              if (item.query) params.set("q", item.query);
+              if (item.modelKey) params.set("modelKey", item.modelKey);
+              const qs = params.toString();
+              const href = qs ? `/putters?${qs}` : "/putters";
+
+              return (
+                <div key={item.modelKey} className="flex flex-col rounded-2xl border border-slate-200 bg-white p-6 shadow-sm">
+                  <p className="text-sm uppercase tracking-wide text-slate-500">Trending search</p>
+                  <h3 className="mt-2 text-xl font-semibold text-slate-900">{item.label || "Model updating"}</h3>
+                  <p className="mt-2 text-sm text-slate-600">
+                    {item.count > 0
+                      ? `${item.count.toLocaleString()} recent listings tracked`
+                      : "Pulling market counts…"}
                   </p>
+                  <div className="mt-6">
+                    <Link
+                      href={href}
+                      className="inline-flex items-center rounded-full bg-emerald-500 px-5 py-2 text-sm font-semibold text-slate-950 shadow-sm transition hover:bg-emerald-400"
+                    >
+                      Explore this model
+                    </Link>
+                    <p className="mt-2 text-xs text-emerald-600">
+                      We send you to the best eBay listing with verified savings.
+                    </p>
+                  </div>
                 </div>
-              </div>
-            ))}
+              );
+            })}
           </div>
       </SectionWrapper>
 
