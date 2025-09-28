@@ -4,6 +4,7 @@ export const runtime = 'nodejs';
 import { getSql } from '../../../lib/db';
 import { getEbayToken } from '../../../lib/ebayAuth';
 import { normalizeModelKey } from '../../../lib/normalize';
+import { PUTTER_SEED_QUERIES } from '../../../lib/data/putterCatalog';
 
 // --- simple auth: header or query param must match CRON_SECRET ---
 function isAuthorized(req) {
@@ -13,71 +14,8 @@ function isAuthorized(req) {
   return secret && (headerKey === secret || queryKey === secret);
 }
 
-// Expand/curate your seed queries here.
-// Keep them specific enough to stay under eBay's caps, broad enough to find inventory.
-const SEED_QUERIES = [
-  // Scotty Cameron
-  'scotty cameron newport 2 putter',
-  'scotty cameron newport putter',
-  'scotty cameron phantom 5 putter',
-  'scotty cameron phantom 7 putter',
-  'scotty cameron phantom 9 putter',
-  'scotty cameron phantom 11 putter',
-  'scotty cameron squareback putter',
-  'scotty cameron fastback putter',
-  'scotty cameron futura putter',
-  'scotty cameron button back putter',
-  'scotty cameron tei3 putter',
-  'scotty cameron studio select putter',
-  'scotty cameron studio style putter',
-  'scotty cameron special select putter',
-  'scotty cameron champions choice putter',
-  'scotty cameron jet set putter',
-  'scotty cameron newport beach putter',
-  'scotty cameron napa putter',
-  'scotty cameron circle t putter',
-
-  // Odyssey / Toulon
-  'odyssey two ball putter',
-  'odyssey eleven putter',
-  'odyssey seven putter',
-  'odyssey ten putter',
-  'odyssey versa putter',
-  'odyssey jailbird putter',
-  'odyssey white hot og putter',
-  'toulon atlanta putter',
-  'toulon memphis putter',
-  'toulon san diego putter',
-  'toulon las vegas putter',
-  'toulon garage putter',
-
-  // TaylorMade
-  'taylormade spider tour putter',
-  'taylormade spider x putter',
-  'taylormade spider gt putter',
-  'taylormade spider gtx putter',
-  'taylormade spider s putter',
-  'taylormade spider tour z putter',
-
-  // Ping
-  'ping anser putter',
-  'ping ds72 putter',
-  'ping tyne putter',
-
-  // LAB / Bettinardi / Evnroll / etc.
-  'lab golf mezz putter',
-  'lab golf df putter',
-  'lab golf link putter',
-  'bettinardi queen b putter',
-  'bettinardi studio stock putter',
-  'bettinardi bb putter',
-  'bettinardi inovai putter',
-  'evnroll er2 putter',
-  'evnroll er5 putter',
-  'mizuno m craft putter',
-  'wilson 8802 putter',
-  'sik putter',
-];
+// Seed queries are derived from the shared catalog so everything stays in sync.
+const SEED_QUERIES = PUTTER_SEED_QUERIES;
 
 // Small helpers to read price/shipping safely
 function readNumber(n) {
