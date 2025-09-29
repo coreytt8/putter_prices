@@ -277,72 +277,73 @@ export default async function Home() {
                   Number.isFinite(median) && Number.isFinite(deal.bestPrice) && median > 0
                     ? Math.round(((median - deal.bestPrice) / median) * 100)
                     : null;
+                const accessoryCtaQuery = deal?.queryVariants?.accessory || deal.query;
                 return (
                   <HighlightCard key={deal.query}>
-                  <div className="aspect-[3/2] w-full bg-slate-100">
-                    {deal.image ? (
-                      <img src={deal.image} alt={deal.label} className="h-full w-full object-cover" loading="lazy" />
-                    ) : (
-                      <div className="flex h-full items-center justify-center text-sm text-slate-500">
-                        Live data populates images as we refresh listings.
-                      </div>
-                    )}
-                  </div>
-                  <div className="flex flex-1 flex-col gap-4 p-6">
-                    <div>
-                      <h3 className="text-xl font-semibold text-slate-900">{deal.label}</h3>
-                      <p className="mt-2 text-sm text-slate-600">{deal.blurb}</p>
-                    </div>
-                    <div className="flex flex-col gap-3 rounded-2xl bg-slate-50 p-4">
-                      <div className="flex flex-wrap items-center justify-between gap-3">
-                        <div>
-                          <p className="text-xs uppercase tracking-wide text-slate-500">Best live ask</p>
-                          <p className="text-2xl font-semibold text-slate-900">
-                            {Number.isFinite(deal.bestPrice)
-                              ? formatCurrency(deal.bestPrice, deal.currency)
-                              : "Price updating"}
-                          </p>
+                    <div className="aspect-[3/2] w-full bg-slate-100">
+                      {deal.image ? (
+                        <img src={deal.image} alt={deal.label} className="h-full w-full object-cover" loading="lazy" />
+                      ) : (
+                        <div className="flex h-full items-center justify-center text-sm text-slate-500">
+                          Live data populates images as we refresh listings.
                         </div>
-                        {Number.isFinite(deal.bestPrice) && (
-                          <SmartPriceBadge
-                            price={deal.bestPrice}
-                            baseStats={deal.stats}
-                            title={deal.bestOffer?.title}
-                            specs={deal.bestOffer?.specs}
-                            brand={deal.bestOffer?.brand}
-                          />
+                      )}
+                    </div>
+                    <div className="flex flex-1 flex-col gap-4 p-6">
+                      <div>
+                        <h3 className="text-xl font-semibold text-slate-900">{deal.label}</h3>
+                        <p className="mt-2 text-sm text-slate-600">{deal.blurb}</p>
+                      </div>
+                      <div className="flex flex-col gap-3 rounded-2xl bg-slate-50 p-4">
+                        <div className="flex flex-wrap items-center justify-between gap-3">
+                          <div>
+                            <p className="text-xs uppercase tracking-wide text-slate-500">Best live ask</p>
+                            <p className="text-2xl font-semibold text-slate-900">
+                              {Number.isFinite(deal.bestPrice)
+                                ? formatCurrency(deal.bestPrice, deal.currency)
+                                : "Price updating"}
+                            </p>
+                          </div>
+                          {Number.isFinite(deal.bestPrice) && (
+                            <SmartPriceBadge
+                              price={deal.bestPrice}
+                              baseStats={deal.stats}
+                              title={deal.bestOffer?.title}
+                              specs={deal.bestOffer?.specs}
+                              brand={deal.bestOffer?.brand}
+                            />
+                          )}
+                        </div>
+                        {Number.isFinite(median) && (
+                          <p className="text-xs text-slate-600">
+                            Median from live percentile baseline: {formatCurrency(median, deal.currency)}
+                            {Number.isFinite(diff) && diff > 0 ? (
+                              <>
+                                {" "}· Save about {formatCurrency(diff, deal.currency)}
+                                {diffPct ? ` (${diffPct}% below)` : ""}
+                              </>
+                            ) : null}
+                          </p>
+                        )}
+                        {Number.isFinite(deal.totalListings) && deal.totalListings > 0 && (
+                          <p className="text-xs text-slate-500">
+                            Tracking {deal.totalListings} live listings in this search right now.
+                          </p>
                         )}
                       </div>
-                      {Number.isFinite(median) && (
-                        <p className="text-xs text-slate-600">
-                          Median from live percentile baseline: {formatCurrency(median, deal.currency)}
-                          {Number.isFinite(diff) && diff > 0 ? (
-                            <>
-                              {" "}· Save about {formatCurrency(diff, deal.currency)}
-                              {diffPct ? ` (${diffPct}% below)` : ""}
-                            </>
-                          ) : null}
+                      <div className="mt-auto">
+                        <Link
+                          href={`/putters?q=${encodeURIComponent(accessoryCtaQuery || "")}`}
+                          className="inline-flex items-center rounded-full bg-slate-900 px-5 py-2 text-sm font-semibold text-white shadow-sm transition hover:bg-slate-700"
+                        >
+                          See the latest listings
+                        </Link>
+                        <p className="mt-2 text-xs text-emerald-600">
+                          We send you to the best eBay listing with verified savings.
                         </p>
-                      )}
-                      {Number.isFinite(deal.totalListings) && deal.totalListings > 0 && (
-                        <p className="text-xs text-slate-500">
-                          Tracking {deal.totalListings} live listings in this search right now.
-                        </p>
-                      )}
+                      </div>
                     </div>
-                    <div className="mt-auto">
-                      <Link
-                        href={`/putters?q=${encodeURIComponent(deal.query)}`}
-                        className="inline-flex items-center rounded-full bg-slate-900 px-5 py-2 text-sm font-semibold text-white shadow-sm transition hover:bg-slate-700"
-                      >
-                        See the latest listings
-                      </Link>
-                      <p className="mt-2 text-xs text-emerald-600">
-                        We send you to the best eBay listing with verified savings.
-                      </p>
-                    </div>
-                  </div>
-                </HighlightCard>
+                  </HighlightCard>
                 );
               })
             )}
