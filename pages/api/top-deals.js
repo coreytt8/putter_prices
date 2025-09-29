@@ -3,7 +3,7 @@ export const runtime = "nodejs";
 import { getSql } from "../../lib/db.js";
 import { PUTTER_CATALOG } from "../../lib/data/putterCatalog.js";
 import { normalizeModelKey } from "../../lib/normalize.js";
-import { sanitizeModelKey } from "../../lib/sanitizeModelKey.js";
+import { sanitizeModelKey, stripAccessoryTokens } from "../../lib/sanitizeModelKey.js";
 
 const CATALOG_LOOKUP = (() => {
   const map = new Map();
@@ -48,6 +48,16 @@ function centsToNumber(value) {
   const num = toNumber(value);
   if (num === null) return null;
   return num / 100;
+}
+
+function ensurePutterQuery(text = "") {
+  let s = String(text || "").trim();
+  if (!s) return "golf putter";
+  s = s.replace(/\bputters\b/gi, "putter");
+  if (!/\bputter\b/i.test(s)) {
+    s = `${s} putter`;
+  }
+  return s.replace(/\s+/g, " ").trim();
 }
 
 const DEFAULT_LOOKBACK_WINDOWS_HOURS = [24, 72, 168];
@@ -210,15 +220,28 @@ function buildDealsFromRows(rows, limit, lookbackHours = null) {
   return ranked.map((entry) => {
     const { row, total, price, shipping, median, savingsAmount, savingsPercent } = entry;
     const label = formatModelLabel(row.model_key, row.brand, row.title);
-    const { query: canonicalQuery } = sanitizeModelKey(row.model_key);
+    const { query: canonicalQuery } = sanitizeModelKey(row.model_key, {
+      storedBrand: row.brand,
+    });
     const fallbackCandidates = [
       formatModelLabel(row.model_key, row.brand, row.title),
       [row.brand, row.title].filter(Boolean).join(" ").trim(),
     ].filter(Boolean);
     let query = canonicalQuery;
+    if (!query && row.brand) {
+      const { query: brandBackedQuery } = sanitizeModelKey(
+        `${row.brand} ${row.model_key}`,
+        { storedBrand: row.brand }
+      );
+      if (brandBackedQuery) {
+        query = brandBackedQuery;
+      }
+    }
     if (!query) {
       for (const candidate of fallbackCandidates) {
-        const { query: candidateQuery } = sanitizeModelKey(candidate);
+        const { query: candidateQuery } = sanitizeModelKey(candidate, {
+          storedBrand: row.brand,
+        });
         if (candidateQuery) {
           query = candidateQuery;
           break;
@@ -226,7 +249,8 @@ function buildDealsFromRows(rows, limit, lookbackHours = null) {
       }
     }
     if (!query) {
-      query = label;
+      const base = stripAccessoryTokens(`${row.brand || ""} ${label}`.trim());
+      query = ensurePutterQuery(base || label || row.brand || "");
     }
     const currency = row.currency || "USD";
     const statsSource = row.stats_source || null;
