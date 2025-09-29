@@ -464,7 +464,11 @@ export default function PuttersPage() {
       }
     }, 150);
 
-    return () => { ignore = true; clearTimeout(t); ctrl.abort(); };
+    return () => {
+      ignore = true;
+      ctrl.abort();
+      clearTimeout(t);
+    };
   }, [apiUrl, groupMode, sortBy, q]);
 
   const sortedGroups = useMemo(() => {
