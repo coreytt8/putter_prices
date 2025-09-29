@@ -261,7 +261,7 @@ export default async function Home() {
       item?.blurb ||
       (Number.isFinite(roundedPct)
         ? `Smart Price spotted about ${roundedPct}% below the typical ask on this model today.`
-        : "Smart Price benchmarks live listings against historical comps to surface real savings.");
+        : "Smart Price benchmarks every live listing against fresh percentile baselines to surface real savings.");
 
     return {
       label: item?.label || item?.modelKey || "Live Smart Price deal",
@@ -355,7 +355,7 @@ export default async function Home() {
           <p className="mt-6 text-lg leading-8 text-slate-200">
             {smartExample && exampleMedian && Number.isFinite(exampleGap) && exampleGap > 0 ? (
               <>
-                Smart Price watches every live putter listing and compares it to recent sale percentiles. Right now it has {smartExample.label}
+                Smart Price watches every live putter listing and compares it to recent live listing percentiles. Right now it has {smartExample.label}
                 {" "}
                 sitting at {formatCurrency(smartExample.bestPrice, smartExample.currency)}, about
                 {" "}
@@ -366,7 +366,7 @@ export default async function Home() {
                 , confirmed by the Smart Price badge.
               </>
             ) : (
-              <>Smart Price watches every live putter listing and compares it to recent sale percentiles so verified savings surface automatically.</>
+              <>Smart Price watches every live putter listing and compares it to recent live listing percentiles so verified savings surface automatically.</>
             )}
           </p>
           <div className="mt-8 flex flex-col items-center justify-center gap-3 sm:flex-row">
@@ -399,8 +399,8 @@ export default async function Home() {
                   </h2>
                   <p className="mt-2 text-sm text-slate-200">
                     {exampleSavings !== null
-                      ? `We compare every listing against recent sale percentiles. This one sits about ${Math.round(exampleSavings)}% below the typical asking price, so Smart Price flags it automatically.`
-                      : "We compare every listing against recent sale percentiles. Smart Price highlights the standouts as soon as fresh comps confirm the savings."}
+                      ? `We compare every listing against recent live listing percentiles. This one sits about ${Math.round(exampleSavings)}% below the typical asking price, so Smart Price flags it automatically.`
+                      : "We compare every listing against recent live listing percentiles. Smart Price highlights the standouts as soon as fresh baseline data confirms the savings."}
                   </p>
                 </div>
                 <SmartPriceBadge
@@ -414,7 +414,7 @@ export default async function Home() {
             </div>
           ) : (
             <div className="mx-auto mt-8 max-w-3xl rounded-2xl border border-white/10 bg-white/5 p-6 text-center text-sm text-slate-200 backdrop-blur">
-              Smart Price is crunching today&apos;s listings. Fresh deal examples appear here as soon as we validate the savings against recent comps.
+              Smart Price is crunching today&apos;s listings. Fresh deal examples appear here as soon as we validate the savings against updated live listing percentiles.
             </div>
           )}
         </div>
@@ -497,7 +497,7 @@ export default async function Home() {
                       </div>
                       {Number.isFinite(median) && (
                         <p className="text-xs text-slate-600">
-                          Median over recent comps: {formatCurrency(median, deal.currency)}
+                          Median from live percentile baseline: {formatCurrency(median, deal.currency)}
                           {Number.isFinite(diff) && diff > 0 ? (
                             <>
                               {" "}· Save about {formatCurrency(diff, deal.currency)}
@@ -535,7 +535,7 @@ export default async function Home() {
           <div className="max-w-3xl">
             <h2 className="text-3xl font-bold tracking-tight text-slate-900 sm:text-4xl">Trending models on eBay</h2>
             <p className="mt-4 text-base text-slate-600">
-              Our database looks across the last 90 days of completed listings to highlight where buyer attention is spiking. Jump straight into a focused search for each hot model.
+              Our database looks across the last 90 days of live listing history to highlight where buyer attention is spiking. Jump straight into a focused search for each hot model.
             </p>
           </div>
           <div className="mt-10 grid gap-6 md:grid-cols-2 xl:grid-cols-3">

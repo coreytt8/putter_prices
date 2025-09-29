@@ -90,8 +90,8 @@ function makeSmartBadge({ listingPrice, stats, windowDays = 60 }) {
   const nText = n ? `${n}` : "—";
   const condLabel = stats?.condition ? ` (${String(stats.condition).replace(/_/g," ").toLowerCase()})` : "";
   const tooltip = tier === "insufficient"
-    ? "Not enough comparable sales to estimate a fair market price confidently."
-    : `Based on ${nText} comparable sales${condLabel} in ~${windowDays} days. This listing is ${vsText} expected (median). Confidence: ${confidence}.`;
+    ? "Not enough live listing history to estimate a fair market baseline confidently."
+    : `Based on ${nText} live listings${condLabel} observed in ~${windowDays} days. This listing is ${vsText} the live median. Confidence: ${confidence}.`;
 
   return {
     tier,
@@ -589,7 +589,7 @@ export default function PuttersPage() {
             Type a model (e.g., <em>“scotty cameron newport”</em>) or pick a brand.
           </p>
           <p className="mt-1 text-xs text-gray-500">
-            Badges based on recent comps. <a className="text-blue-600 underline" href="/methodology">See methodology</a>.
+            Badges based on live listing percentiles. <a className="text-blue-600 underline" href="/methodology">See methodology</a>.
           </p>
         </div>
         {q.trim() && (

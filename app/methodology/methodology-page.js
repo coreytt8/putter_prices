@@ -16,31 +16,34 @@ export default function MethodologyPage() {
     <main className="mx-auto max-w-3xl px-4 py-10">
       <h1 className="text-3xl font-semibold tracking-tight">How We Calculate Fair Prices</h1>
       <p className="mt-3 text-slate-600">
-        PutterIQ estimates a fair market price for each model (and condition band) using robust statistics from recent
-        comparable sales. We highlight listings that are below, near, or above that expectation with a color-coded badge
-        and an optional deal score.
+        PutterIQ estimates a live market baseline for each model (and condition band) using percentile distributions built
+        from recent eBay listing history. We highlight listings that are below, near, or above that live baseline with a
+        color-coded badge and an optional deal score.
       </p>
 
       <section className="mt-8 space-y-5">
         <Row label="Data window">
-          We use recent sold listings (typically 60–90 days). Old or extreme outliers are down-weighted or discarded.
+          We analyze a rolling 60–90 day window of live listing history (including active and recently ended inventory) and
+          refresh throughout the day. Stale snapshots are removed quickly so baselines reflect the current market.
         </Row>
 
         <Row label="Condition bands">
-          Prices are computed separately for: <strong>New</strong>, <strong>Like‑New</strong>, <strong>Good</strong>, <strong>Fair</strong>.
-          If insufficient data exists for a band, we fall back to the model median with a lower confidence.
+          Baselines are computed separately for: <strong>New</strong>, <strong>Like‑New</strong>, <strong>Good</strong>, <strong>Fair</strong>.
+          When a band lacks data, we fall back to the overall model median and lower the confidence signal.
         </Row>
 
         <Row label="Cleaning & outliers">
-          We remove invalid prices and trim the tails (e.g., top/bottom 5%) to reduce the impact of outliers and rare bundles.
+          We remove invalid asks, duplicate listings, and trim the tails (e.g., top/bottom 5%) to reduce the impact of
+          outliers and rare bundles.
         </Row>
 
         <Row label="Expected price">
-          The primary estimator is the <strong>median</strong> (p50) of comparable sold prices after cleaning and trimming.
+          The primary estimator is the <strong>median</strong> (p50) of live listing totals after cleaning and trimming.
         </Row>
 
         <Row label="Dispersion & confidence">
-          We compute dispersion (e.g., IQR/median) and sample size <code>n</code>. Confidence increases with more sales and tighter dispersion.
+          We compute dispersion (e.g., IQR/median) and sample size <code>n</code>. Confidence increases with more qualifying listings
+          and tighter spreads in the live ask distribution.
         </Row>
 
         <Row label="Badge tiers">
