@@ -426,7 +426,7 @@ function mapEbayItemToOffer(item) {
   };
 }
 
-export { tokenize, mapEbayItemToOffer };
+export { tokenize, mapEbayItemToOffer, fetchEbayBrowse };
 
 // -------------------- Limited / Collectible recall helpers --------------------
 const GLOBAL_LIMITED_TOKENS = [
@@ -555,7 +555,14 @@ async function fetchEbayBrowse({ q, limit = 50, offset = 0, sort, forceCategory 
   url.searchParams.set("limit", String(limit));
   url.searchParams.set("offset", String(offset));
   url.searchParams.set("fieldgroups", "EXTENDED");
-  if (sort === "newlylisted") url.searchParams.set("sort", "newlyListed");
+  const normalizedSort = norm(sort);
+  const sortMap = {
+    newlylisted: "newlyListed",
+    best_price_asc: "pricePlusShippingLowest",
+    best_price_desc: "pricePlusShippingHighest",
+  };
+  const ebaySort = sortMap[normalizedSort];
+  if (ebaySort) url.searchParams.set("sort", ebaySort);
   if (forceCategory) url.searchParams.set("category_ids", "115280"); // Golf Clubs (covers putters)
 
   async function call(bearer) {

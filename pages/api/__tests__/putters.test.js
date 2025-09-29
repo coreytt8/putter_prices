@@ -45,3 +45,73 @@ test("mapEbayItemToOffer normalizes bid count variants", async () => {
     assert.equal(filtered.length, 1, `${desc} → hasBids filter retains offer`);
   }
 });
+
+test("fetchEbayBrowse forwards supported sort options", async () => {
+  const { fetchEbayBrowse } = await modulePromise;
+
+  const originalFetch = global.fetch;
+  const originalClientId = process.env.EBAY_CLIENT_ID;
+  const originalClientSecret = process.env.EBAY_CLIENT_SECRET;
+
+  process.env.EBAY_CLIENT_ID = "test-id";
+  process.env.EBAY_CLIENT_SECRET = "test-secret";
+
+  const scenarios = [
+    { label: "newly listed", input: "newlylisted", expected: "newlyListed" },
+    { label: "best price ascending", input: "best_price_asc", expected: "pricePlusShippingLowest" },
+    { label: "best price descending", input: "best_price_desc", expected: "pricePlusShippingHighest" },
+  ];
+
+  let oauthCalls = 0;
+  let browseCalls = 0;
+  let currentScenario = null;
+
+  global.fetch = async (url) => {
+    const str = typeof url === "string" ? url : url?.toString();
+    if (!str) throw new Error("Missing URL in fetch stub");
+
+    if (str.includes("/identity/")) {
+      oauthCalls += 1;
+      return {
+        ok: true,
+        status: 200,
+        json: async () => ({ access_token: "fake-token", expires_in: 7200 }),
+        text: async () => "",
+      };
+    }
+
+    if (str.startsWith("https://api.ebay.com/buy/browse/v1/item_summary/search")) {
+      browseCalls += 1;
+      assert.ok(currentScenario, "Scenario context should be set for browse call");
+      const actualSort = new URL(str).searchParams.get("sort");
+      assert.equal(
+        actualSort,
+        currentScenario.expected,
+        `${currentScenario.label} → expected sort param`
+      );
+      return {
+        ok: true,
+        status: 200,
+        json: async () => ({ itemSummaries: [] }),
+        text: async () => "",
+      };
+    }
+
+    throw new Error(`Unexpected fetch URL: ${str}`);
+  };
+
+  try {
+    for (const scenario of scenarios) {
+      currentScenario = scenario;
+      await fetchEbayBrowse({ q: "test", sort: scenario.input });
+    }
+  } finally {
+    global.fetch = originalFetch;
+    process.env.EBAY_CLIENT_ID = originalClientId;
+    process.env.EBAY_CLIENT_SECRET = originalClientSecret;
+    currentScenario = null;
+  }
+
+  assert.equal(browseCalls, scenarios.length);
+  assert.ok(oauthCalls >= 1, "OAuth token should be requested at least once");
+});
