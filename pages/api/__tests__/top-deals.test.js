@@ -64,3 +64,44 @@ test("loadRankedDeals returns listings observed before midnight when window is r
     Date.now = originalNow;
   }
 });
+
+test("loadRankedDeals surfaces refreshed totals for long-running listings", async () => {
+  const { loadRankedDeals } = await modulePromise;
+
+  const refreshedRow = {
+    model_key: "acme_racer",
+    brand: "Acme",
+    title: "Acme Racer",
+    image_url: "https://example.com/putter.jpg",
+    url: "https://example.com/listing",
+    currency: "USD",
+    head_type: "Blade",
+    dexterity: "Right",
+    length_in: 34,
+    item_id: "123",
+    price: 120,
+    shipping: 5,
+    total: 125,
+    observed_at: "2024-01-08T18:00:00.000Z",
+    condition: "USED",
+    n: 12,
+    window_days: 30,
+    p10_cents: 16000,
+    p50_cents: 20000,
+    p90_cents: 24000,
+    dispersion_ratio: 0.35,
+    updated_at: "2024-01-08T17:00:00Z",
+    listing_count: 4,
+  };
+
+  const mockSql = async () => [refreshedRow];
+
+  const { deals } = await loadRankedDeals(mockSql, 6, [24]);
+
+  assert.equal(deals.length, 1);
+  const [deal] = deals;
+  assert.equal(deal.bestOffer.total, refreshedRow.total);
+  assert.equal(deal.bestOffer.price, refreshedRow.price);
+  assert.equal(deal.bestOffer.shipping, refreshedRow.shipping);
+  assert.equal(Math.round(deal.savings.amount), Math.round((refreshedRow.p50_cents / 100) - refreshedRow.total));
+});
