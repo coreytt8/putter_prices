@@ -3,7 +3,11 @@ export const runtime = "nodejs";
 import { getSql } from "../../lib/db.js";
 import { PUTTER_CATALOG } from "../../lib/data/putterCatalog.js";
 import { normalizeModelKey } from "../../lib/normalize.js";
-import { sanitizeModelKey, stripAccessoryTokens } from "../../lib/sanitizeModelKey.js";
+import {
+  sanitizeModelKey,
+  stripAccessoryTokens,
+  containsAccessoryToken,
+} from "../../lib/sanitizeModelKey.js";
 
 const CATALOG_LOOKUP = (() => {
   const map = new Map();
@@ -220,30 +224,45 @@ function buildDealsFromRows(rows, limit, lookbackHours = null) {
   return ranked.map((entry) => {
     const { row, total, price, shipping, median, savingsAmount, savingsPercent } = entry;
     const label = formatModelLabel(row.model_key, row.brand, row.title);
-    const { query: canonicalQuery } = sanitizeModelKey(row.model_key, {
+    const sanitized = sanitizeModelKey(row.model_key, {
       storedBrand: row.brand,
     });
+    const {
+      query: canonicalQuery,
+      queryVariants: canonicalVariants = {},
+      rawLabel: rawLabelWithAccessories,
+      cleanLabel: cleanLabelWithoutAccessories,
+    } = sanitized;
+    let cleanQuery = canonicalQuery || null;
+    let accessoryQuery = canonicalVariants.accessory || null;
+    let query = cleanQuery;
     const fallbackCandidates = [
       formatModelLabel(row.model_key, row.brand, row.title),
       [row.brand, row.title].filter(Boolean).join(" ").trim(),
     ].filter(Boolean);
-    let query = canonicalQuery;
     if (!query && row.brand) {
-      const { query: brandBackedQuery } = sanitizeModelKey(
-        `${row.brand} ${row.model_key}`,
-        { storedBrand: row.brand }
-      );
-      if (brandBackedQuery) {
-        query = brandBackedQuery;
+      const brandBacked = sanitizeModelKey(`${row.brand} ${row.model_key}`, {
+        storedBrand: row.brand,
+      });
+      if (brandBacked?.query) {
+        query = brandBacked.query;
+        cleanQuery = cleanQuery || brandBacked.query;
+      }
+      if (!accessoryQuery && brandBacked?.queryVariants?.accessory) {
+        accessoryQuery = brandBacked.queryVariants.accessory;
       }
     }
     if (!query) {
       for (const candidate of fallbackCandidates) {
-        const { query: candidateQuery } = sanitizeModelKey(candidate, {
+        const candidateSanitized = sanitizeModelKey(candidate, {
           storedBrand: row.brand,
         });
-        if (candidateQuery) {
-          query = candidateQuery;
+        if (candidateSanitized?.query) {
+          query = candidateSanitized.query;
+          cleanQuery = cleanQuery || candidateSanitized.query;
+          if (!accessoryQuery && candidateSanitized?.queryVariants?.accessory) {
+            accessoryQuery = candidateSanitized.queryVariants.accessory;
+          }
           break;
         }
       }
@@ -251,7 +270,23 @@ function buildDealsFromRows(rows, limit, lookbackHours = null) {
     if (!query) {
       const base = stripAccessoryTokens(`${row.brand || ""} ${label}`.trim());
       query = ensurePutterQuery(base || label || row.brand || "");
+      if (!cleanQuery) {
+        cleanQuery = query;
+      }
+      const accessoryBase = `${row.brand || ""} ${label}`.trim();
+      if (!accessoryQuery && accessoryBase) {
+        accessoryQuery = ensurePutterQuery(accessoryBase);
+      }
     }
+
+    const labelWasAccessoryOnly = Boolean(rawLabelWithAccessories) && !cleanLabelWithoutAccessories;
+    const titleIncludesAccessoryTokens = containsAccessoryToken(row.title);
+    const shouldPreserveAccessories =
+      Boolean(accessoryQuery) && (labelWasAccessoryOnly || titleIncludesAccessoryTokens);
+    if (shouldPreserveAccessories) {
+      query = accessoryQuery;
+    }
+
     const currency = row.currency || "USD";
     const statsSource = row.stats_source || null;
     const stats = {
@@ -311,6 +346,10 @@ function buildDealsFromRows(rows, limit, lookbackHours = null) {
       savings: {
         amount: Number.isFinite(savingsAmount) ? savingsAmount : null,
         percent: Number.isFinite(savingsPercent) ? savingsPercent : null,
+      },
+      queryVariants: {
+        clean: cleanQuery || null,
+        accessory: accessoryQuery || null,
       },
     };
   });
