@@ -3,6 +3,7 @@ export const runtime = "nodejs";
 import { getSql } from "../../lib/db.js";
 import { PUTTER_CATALOG } from "../../lib/data/putterCatalog.js";
 import { normalizeModelKey } from "../../lib/normalize.js";
+import { sanitizeModelKey } from "../../lib/sanitizeModelKey.js";
 
 const CATALOG_LOOKUP = (() => {
   const map = new Map();
@@ -209,6 +210,24 @@ function buildDealsFromRows(rows, limit, lookbackHours = null) {
   return ranked.map((entry) => {
     const { row, total, price, shipping, median, savingsAmount, savingsPercent } = entry;
     const label = formatModelLabel(row.model_key, row.brand, row.title);
+    const { query: canonicalQuery } = sanitizeModelKey(row.model_key);
+    const fallbackCandidates = [
+      formatModelLabel(row.model_key, row.brand, row.title),
+      [row.brand, row.title].filter(Boolean).join(" ").trim(),
+    ].filter(Boolean);
+    let query = canonicalQuery;
+    if (!query) {
+      for (const candidate of fallbackCandidates) {
+        const { query: candidateQuery } = sanitizeModelKey(candidate);
+        if (candidateQuery) {
+          query = candidateQuery;
+          break;
+        }
+      }
+    }
+    if (!query) {
+      query = label;
+    }
     const currency = row.currency || "USD";
     const statsSource = row.stats_source || null;
     const stats = {
@@ -257,7 +276,7 @@ function buildDealsFromRows(rows, limit, lookbackHours = null) {
     return {
       modelKey: row.model_key,
       label,
-      query: `${label} putter`,
+      query,
       image: row.image_url || null,
       currency,
       bestPrice: total,
