@@ -1,12 +1,14 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import MarketSnapshot from "@/components/MarketSnapshot";
 import PriceSparkline from "@/components/PriceSparkline";
 import SmartPriceBadge from "@/components/SmartPriceBadge";
 import HeroSection from "@/components/HeroSection";
 import SectionWrapper from "@/components/SectionWrapper";
 import HighlightCard from "@/components/HighlightCard";
+import CompareBar from "@/components/CompareBar";
+import CompareTray from "@/components/CompareTray";
 import { detectVariant } from "@/lib/variantMap";
 
 /* ============================
@@ -146,6 +148,13 @@ async function copyToClipboard(text) {
     document.body.removeChild(ta);
     return true;
   }
+}
+
+function getOfferId(offer) {
+  if (!offer) return null;
+  if (offer.productId != null) return String(offer.productId);
+  if (offer.url) return String(offer.url);
+  return null;
 }
 
 /* ============================
@@ -298,7 +307,11 @@ export default function PuttersPage() {
   // UI state
   const [expanded, setExpanded] = useState({});
   const [showAllOffersByModel, setShowAllOffersByModel] = useState({});
-  const [copiedFor, setCopiedFor] = useState("")
+  const [copiedFor, setCopiedFor] = useState("");
+  const [compareItems, setCompareItems] = useState([]);
+  const [isCompareOpen, setIsCompareOpen] = useState(false);
+
+  const compareIds = useMemo(() => new Set(compareItems.map((item) => item._cid)), [compareItems]);
 
 
   // Per-model caches
@@ -342,6 +355,11 @@ export default function PuttersPage() {
       setModelKeyParam(fromUrlModel);
     }
   }, []);
+
+  useEffect(() => {
+    setCompareItems([]);
+    setIsCompareOpen(false);
+  }, [q]);
 
   // reflect state → URL
   useEffect(() => {
@@ -467,6 +485,59 @@ export default function PuttersPage() {
     return () => { ignore = true; clearTimeout(t); ctrl.abort(); };
   }, [apiUrl, groupMode, sortBy, q]);
 
+  useEffect(() => {
+    const latest = new Map();
+    if (Array.isArray(offers)) {
+      offers.forEach((offer) => {
+        const id = getOfferId(offer);
+        if (id && !latest.has(id)) {
+          latest.set(id, offer);
+        }
+      });
+    }
+    if (Array.isArray(groups)) {
+      groups.forEach((group) => {
+        (group?.offers || []).forEach((offer) => {
+          const id = getOfferId(offer);
+          if (id && !latest.has(id)) {
+            latest.set(id, offer);
+          }
+        });
+      });
+    }
+
+    setCompareItems((prev) => {
+      if (!prev.length) return prev;
+      const next = [];
+      let changed = false;
+
+      for (const item of prev) {
+        const match = latest.get(item._cid);
+        if (match) {
+          const nextItem = { ...match, _cid: item._cid };
+          next.push(nextItem);
+          if (!changed) {
+            const nextKeys = Object.keys(nextItem);
+            const prevKeys = Object.keys(item);
+            if (nextKeys.length !== prevKeys.length) {
+              changed = true;
+            } else if (nextKeys.some((key) => nextItem[key] !== item[key])) {
+              changed = true;
+            }
+          }
+        } else {
+          changed = true;
+        }
+      }
+
+      if (!changed) return prev;
+      if (next.length === 0) {
+        setIsCompareOpen(false);
+      }
+      return next;
+    });
+  }, [groups, offers]);
+
   const sortedGroups = useMemo(() => {
     const arr = [...groups];
     if (sortBy === "best_price_asc") {
@@ -577,6 +648,48 @@ export default function PuttersPage() {
     setIncludeProShops(false);
   };
 
+  const handleToggleCompare = useCallback((offer) => {
+    const id = getOfferId(offer);
+    if (!id) return;
+
+    setCompareItems((prev) => {
+      const exists = prev.some((item) => item._cid === id);
+      if (exists) {
+        const next = prev.filter((item) => item._cid !== id);
+        if (next.length === 0) {
+          setIsCompareOpen(false);
+        }
+        return next;
+      }
+      return [...prev, { ...offer, _cid: id }];
+    });
+  }, []);
+
+  const handleRemoveCompare = useCallback((id) => {
+    setCompareItems((prev) => {
+      const next = prev.filter((item) => item._cid !== id);
+      if (next.length === 0) {
+        setIsCompareOpen(false);
+      }
+      return next;
+    });
+  }, []);
+
+  const handleClearCompare = useCallback(() => {
+    setCompareItems([]);
+    setIsCompareOpen(false);
+  }, []);
+
+  const handleOpenCompare = useCallback(() => {
+    if (compareItems.length > 0) {
+      setIsCompareOpen(true);
+    }
+  }, [compareItems]);
+
+  const handleCloseCompare = useCallback(() => {
+    setIsCompareOpen(false);
+  }, []);
+
   /* ============================
      FLAT VIEW: prefetch stats for visible items (variant + base)
      ============================ */
@@ -658,7 +771,8 @@ export default function PuttersPage() {
   }, [q, loading, err, groupMode, showAdvanced, offers, JSON.stringify(conds)]);
 
   return (
-    <main className="min-h-screen bg-slate-950 text-white">
+    <>
+      <main className="min-h-screen bg-slate-950 text-white">
       <HeroSection containerClassName="max-w-6xl">
         <div className="space-y-6 text-left">
           <span className="inline-flex items-center rounded-full bg-emerald-500/10 px-4 py-1 text-sm font-semibold text-emerald-200 ring-1 ring-inset ring-emerald-400/30">
@@ -1106,6 +1220,8 @@ export default function PuttersPage() {
 
                       const firstOffer = ordered[0];
                       const bestUrl = firstOffer?.url ?? null;
+                      const firstOfferId = getOfferId(firstOffer);
+                      const firstOfferCompared = firstOfferId ? compareIds.has(firstOfferId) : false;
 
                       const helperModelKey = firstOffer ? getModelKey(firstOffer) : g.model;
                       const helperVariant = firstOffer ? detectVariant(firstOffer?.title) : null;
@@ -1196,6 +1312,25 @@ export default function PuttersPage() {
                               </div>
 
                               <div className="flex flex-col items-end gap-1">
+                                <button
+                                  type="button"
+                                  disabled={!firstOfferId}
+                                  onClick={() => {
+                                    if (firstOffer) {
+                                      handleToggleCompare(firstOffer);
+                                    }
+                                  }}
+                                  aria-pressed={firstOfferCompared}
+                                  className={`inline-flex items-center gap-1 rounded-full px-3 py-1 text-xs font-semibold transition ${
+                                    firstOfferCompared
+                                      ? "border border-blue-600 bg-blue-600 text-white hover:border-blue-700 hover:bg-blue-700"
+                                      : "border border-slate-200 text-slate-700 hover:border-blue-300 hover:text-blue-700"
+                                  } disabled:cursor-not-allowed disabled:opacity-60`}
+                                  title={firstOfferCompared ? "Remove from compare" : "Add to compare"}
+                                >
+                                  {firstOfferCompared ? "Remove" : "Compare"}
+                                </button>
+
                                 <div className="shrink-0 rounded-full bg-emerald-100 px-3 py-1 text-xs font-semibold text-emerald-700">
                                   Best: {formatPrice(g.bestPrice, g.bestCurrency)}
                                 </div>
@@ -1371,6 +1506,8 @@ export default function PuttersPage() {
                       const variantStats = statsByModel[variantKey] ?? null;
                       const baseStats = statsByModel[baseKey] ?? null;
                       const stats = variantStats ?? baseStats;
+                      const offerId = getOfferId(o);
+                      const offerCompared = offerId ? compareIds.has(offerId) : false;
 
                       return (
                         <article
@@ -1440,14 +1577,30 @@ export default function PuttersPage() {
                                 })()}
                               </div>
 
-                              <a
-                                href={o.url}
-                                target="_blank"
-                                rel="noopener noreferrer"
-                                className="inline-flex items-center rounded-full bg-emerald-500 px-3 py-1.5 text-sm font-semibold text-slate-950 transition hover:bg-emerald-400"
-                              >
-                                View
-                              </a>
+                              <div className="flex items-center gap-2">
+                                <button
+                                  type="button"
+                                  disabled={!offerId}
+                                  onClick={() => handleToggleCompare(o)}
+                                  aria-pressed={offerCompared}
+                                  className={`inline-flex items-center gap-1 rounded-full px-3 py-1.5 text-xs font-semibold transition ${
+                                    offerCompared
+                                      ? "border border-blue-600 bg-blue-600 text-white hover:border-blue-700 hover:bg-blue-700"
+                                      : "border border-slate-200 text-slate-700 hover:border-blue-300 hover:text-blue-700"
+                                  } disabled:cursor-not-allowed disabled:opacity-60`}
+                                  title={offerCompared ? "Remove from compare" : "Add to compare"}
+                                >
+                                  {offerCompared ? "Remove" : "Compare"}
+                                </button>
+                                <a
+                                  href={o.url}
+                                  target="_blank"
+                                  rel="noopener noreferrer"
+                                  className="inline-flex items-center rounded-full bg-emerald-500 px-3 py-1.5 text-sm font-semibold text-slate-950 transition hover:bg-emerald-400"
+                                >
+                                  View
+                                </a>
+                              </div>
                             </div>
                           </div>
                         </article>
@@ -1481,5 +1634,19 @@ export default function PuttersPage() {
         </div>
       </SectionWrapper>
     </main>
+      <CompareTray
+        open={isCompareOpen}
+        items={compareItems}
+        onClose={handleCloseCompare}
+        onRemove={handleRemoveCompare}
+        onClear={handleClearCompare}
+      />
+      <CompareBar
+        items={compareItems}
+        onRemove={handleRemoveCompare}
+        onClear={handleClearCompare}
+        onOpen={handleOpenCompare}
+      />
+    </>
   );
 }
