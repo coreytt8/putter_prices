@@ -32,26 +32,38 @@ function iqrOverMedian(values) {
 async function main() {
   const client = await pool.connect();
   try {
-    // Pull recent solds with model, variant_key, condition_band
-    // Expect your ETL to fill variant_key ("" if none)
+    // Pull the latest live listing totals per item within the lookback window
     const res = await client.query(`
-      WITH recent AS (
-        SELECT model, COALESCE(variant_key, '') AS variant_key, COALESCE(condition_band, 'ANY') AS condition_band, price_cents
-        FROM sold_transactions
-        WHERE sale_date >= NOW() - INTERVAL '${WINDOW_DAYS} days'
-          AND price_cents > 0
+      WITH latest_totals AS (
+        SELECT DISTINCT ON (ip.item_id)
+          i.model_key AS model,
+          COALESCE(i.variant_key, '') AS variant_key,
+          COALESCE(i.condition_band, 'ANY') AS condition_band,
+          COALESCE(ip.total, ip.price + COALESCE(ip.shipping, 0)) AS total_cents
+        FROM item_prices ip
+        JOIN items i ON i.item_id = ip.item_id
+        WHERE ip.observed_at >= NOW() - INTERVAL '${WINDOW_DAYS} days'
+        ORDER BY ip.item_id, ip.observed_at DESC
+      ),
+      filtered AS (
+        SELECT model, variant_key, condition_band, total_cents
+        FROM latest_totals
+        WHERE model IS NOT NULL
+          AND model <> ''
+          AND total_cents IS NOT NULL
+          AND total_cents > 0
       ),
       grouped AS (
-        SELECT model, variant_key, condition_band, array_agg(price_cents ORDER BY price_cents) AS prices
-        FROM recent
+        SELECT model, variant_key, condition_band, array_agg(total_cents ORDER BY total_cents) AS totals
+        FROM filtered
         GROUP BY model, variant_key, condition_band
       )
-      SELECT model, variant_key, condition_band, prices FROM grouped
+      SELECT model, variant_key, condition_band, totals FROM grouped
     `);
 
     for (const row of res.rows) {
-      const prices = (row.prices || []).map(Number).filter(Number.isFinite).sort((a,b)=>a-b);
-      const n = prices.length;
+      const totals = (row.totals || []).map(Number).filter(Number.isFinite).sort((a,b)=>a-b);
+      const n = totals.length;
       if (n < MIN_N_FOR_STATS) {
         await client.query(`
           INSERT INTO aggregated_stats_variant (model, variant_key, condition_band, window_days, n, p10_cents, p50_cents, p90_cents, dispersion_ratio, updated_at)
@@ -62,7 +74,7 @@ async function main() {
         continue;
       }
       const trimN = Math.floor(n * TRIM_PCT);
-      const trimmed = prices.slice(trimN, prices.length - trimN);
+      const trimmed = totals.slice(trimN, totals.length - trimN);
       const p10 = percentile(trimmed, 0.10);
       const p50 = percentile(trimmed, 0.50);
       const p90 = percentile(trimmed, 0.90);
@@ -84,42 +96,47 @@ async function main() {
       WHERE window_days = $1
         AND variant_key <> ''
         AND n >= $2
+        AND p50_cents IS NOT NULL
     `, [WINDOW_DAYS, MIN_N_FOR_STATS]);
 
     const baseMap = new Map(); // key: model -> base median cents (variant_key='')
     const baseRows = await client.query(`
       SELECT model, p50_cents, n
       FROM aggregated_stats_variant
-      WHERE window_days = $1 AND variant_key = '' AND n >= $2
+      WHERE window_days = $1 AND variant_key = '' AND n >= $2 AND p50_cents IS NOT NULL
     `, [WINDOW_DAYS, MIN_N_FOR_STATS]);
     for (const b of baseRows.rows) {
       baseMap.set(b.model, Number(b.p50_cents || 0));
     }
 
-    // Collect ratios for each variant_key across models
-    const ratiosByVariant = new Map();
-    for (const v of varRows.rows) {
-      const baseMed = baseMap.get(v.model);
-      const varMed = Number(v.p50_cents || 0);
-      if (!baseMed || !varMed) continue;
-      const ratio = varMed / baseMed;
-      if (!isFinite(ratio) || ratio <= 0) continue;
-      const arr = ratiosByVariant.get(v.variant_key) || [];
-      arr.push(ratio);
-      ratiosByVariant.set(v.variant_key, arr);
-    }
+    if (!varRows.rows.length) {
+      console.log("No variant medians available; skipping uplift refresh.");
+    } else {
+      // Collect ratios for each variant_key across models
+      const ratiosByVariant = new Map();
+      for (const v of varRows.rows) {
+        const baseMed = baseMap.get(v.model);
+        const varMed = Number(v.p50_cents || 0);
+        if (!baseMed || !varMed) continue;
+        const ratio = varMed / baseMed;
+        if (!isFinite(ratio) || ratio <= 0) continue;
+        const arr = ratiosByVariant.get(v.variant_key) || [];
+        arr.push(ratio);
+        ratiosByVariant.set(v.variant_key, arr);
+      }
 
-    // Write aggregated uplifts
-    for (const [vk, arr] of ratiosByVariant.entries()) {
-      if (arr.length < MIN_N_FOR_UPLIFT) continue;
-      arr.sort((a,b)=>a-b);
-      const medRatio = arr.length % 2 ? arr[(arr.length-1)/2] : (arr[arr.length/2-1] + arr[arr.length/2]) / 2;
-      await client.query(`
-        INSERT INTO aggregated_variant_uplift (variant_key, uplift_ratio, support_n, updated_at)
-        VALUES ($1,$2,$3,NOW())
-        ON CONFLICT (variant_key)
-        DO UPDATE SET uplift_ratio = EXCLUDED.uplift_ratio, support_n = EXCLUDED.support_n, updated_at = NOW()
-      `, [vk, medRatio, arr.length]);
+      // Write aggregated uplifts
+      for (const [vk, arr] of ratiosByVariant.entries()) {
+        if (arr.length < MIN_N_FOR_UPLIFT) continue;
+        arr.sort((a,b)=>a-b);
+        const medRatio = arr.length % 2 ? arr[(arr.length-1)/2] : (arr[arr.length/2-1] + arr[arr.length/2]) / 2;
+        await client.query(`
+          INSERT INTO aggregated_variant_uplift (variant_key, uplift_ratio, support_n, updated_at)
+          VALUES ($1,$2,$3,NOW())
+          ON CONFLICT (variant_key)
+          DO UPDATE SET uplift_ratio = EXCLUDED.uplift_ratio, support_n = EXCLUDED.support_n, updated_at = NOW()
+        `, [vk, medRatio, arr.length]);
+      }
     }
 
     console.log("Aggregation complete.");
