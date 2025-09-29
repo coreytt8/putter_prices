@@ -86,8 +86,8 @@ function makeSmartBadge({ listingPrice, stats, windowDays = 60 }) {
                : "near";
   const nText = n ? `${n}` : "—";
   const tooltip = tier === "insufficient"
-    ? "Not enough comparable sales to estimate a fair market price confidently."
-    : `Based on ${nText} comparable sales in ~${windowDays} days. This listing is ${vsText} expected (median). Confidence: ${confidence}.`;
+    ? "Not enough live listing history to estimate a fair market baseline confidently."
+    : `Based on ${nText} live listings in ~${windowDays} days. This listing is ${vsText} the live median. Confidence: ${confidence}.`;
 
   return {
     tier,

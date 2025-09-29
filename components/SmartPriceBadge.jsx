@@ -91,7 +91,7 @@ function chooseBadge({ price, baseStats, variantStats, looksPremium }) {
       tone: "indigo",
       label: "Special variant",
       tooltip:
-        "Tour/Limited signals detected but variant comps are thin. Comparing to base would be misleading.",
+        "Tour/Limited signals detected but variant baselines are thin. Comparing to the broader model would be misleading.",
     };
   }
 

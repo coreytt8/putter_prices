@@ -57,7 +57,7 @@ export default function PriceComparisonTable({ deals = [] }) {
           <h2 className="text-3xl font-bold tracking-tight sm:text-4xl">Smart Price leaderboard</h2>
           <p className="mt-3 text-base text-slate-600">
             Compare today&apos;s top ranked putter deals at a glance. Smart Price monitors every live listing and
-            highlights the models with verified savings confirmed by recent comps.
+            highlights the models with verified savings confirmed by live percentile baselines.
           </p>
         </div>
 
@@ -73,7 +73,7 @@ export default function PriceComparisonTable({ deals = [] }) {
                     Best live ask
                   </th>
                   <th scope="col" className="px-6 py-3 text-xs font-semibold uppercase tracking-wide text-slate-500">
-                    Recent median
+                    Median live ask
                   </th>
                   <th scope="col" className="px-6 py-3 text-xs font-semibold uppercase tracking-wide text-slate-500">
                     Savings
@@ -169,7 +169,7 @@ export default function PriceComparisonTable({ deals = [] }) {
                       </dd>
                     </div>
                     <div>
-                      <dt className="text-xs font-semibold uppercase tracking-wide text-slate-500">Recent median</dt>
+                      <dt className="text-xs font-semibold uppercase tracking-wide text-slate-500">Median live ask</dt>
                       <dd className="mt-1 text-slate-700">
                         {Number.isFinite(median) ? formatCurrency(median, row.currency) : "—"}
                       </dd>
