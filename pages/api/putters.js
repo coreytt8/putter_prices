@@ -576,7 +576,15 @@ function buildLimitedRecallQueries(rawQ, normalizedQ) {
 }
 
 // -------------------- eBay fetch --------------------
-async function fetchEbayBrowse({ q, limit = 50, offset = 0, sort, forceCategory }) {
+async function fetchEbayBrowse({
+  q,
+  limit = 50,
+  offset = 0,
+  sort,
+  forceCategory,
+  buyingOptions = [],
+  hasBids = false,
+}) {
   const token = await getEbayToken();
 
   const url = new URL(EBAY_BROWSE_URL);
@@ -593,6 +601,22 @@ async function fetchEbayBrowse({ q, limit = 50, offset = 0, sort, forceCategory 
   const ebaySort = sortMap[normalizedSort];
   if (ebaySort) url.searchParams.set("sort", ebaySort);
   if (forceCategory) url.searchParams.set("category_ids", "115280"); // Golf Clubs (covers putters)
+
+  const filterParts = [];
+  if (Array.isArray(buyingOptions) && buyingOptions.length) {
+    const normalizedOptions = buyingOptions
+      .map((opt) => normalizeBuyingOption(opt))
+      .filter(Boolean);
+    if (normalizedOptions.length) {
+      filterParts.push(`buyingOptions:{${normalizedOptions.join("|")}}`);
+    }
+  }
+  if (hasBids) {
+    filterParts.push("bidCount:[1..]");
+  }
+  if (filterParts.length) {
+    url.searchParams.set("filter", filterParts.join(","));
+  }
 
   async function call(bearer) {
     return fetch(url.toString(), {
@@ -677,7 +701,17 @@ export default async function handler(req, res) {
     const recallQs = buildLimitedRecallQueries(rawQ, q);
     for (const qq of recallQs) {
       for (let i = 0; i < samplePages; i++) {
-        calls.push(fetchEbayBrowse({ q: qq, limit, offset: i * limit, sort, forceCategory }));
+        calls.push(
+          fetchEbayBrowse({
+            q: qq,
+            limit,
+            offset: i * limit,
+            sort,
+            forceCategory,
+            buyingOptions: normalizedBuyingOptionFilters,
+            hasBids,
+          })
+        );
       }
     }
 
@@ -698,7 +732,15 @@ export default async function handler(req, res) {
     if (items.length < 20) {
       const alt = normalizeSearchQ(rawQ.replace(/\bputters\b/gi, "").trim());
       if (alt && alt !== q) {
-        const extra = await fetchEbayBrowse({ q: alt, limit, offset: 0, sort, forceCategory });
+        const extra = await fetchEbayBrowse({
+          q: alt,
+          limit,
+          offset: 0,
+          sort,
+          forceCategory,
+          buyingOptions: normalizedBuyingOptionFilters,
+          hasBids,
+        });
         const arr = Array.isArray(extra?.itemSummaries) ? extra.itemSummaries : [];
         items.push(...arr);
         totalFromEbay = Math.max(totalFromEbay, Number(extra?.total || 0));

@@ -195,3 +195,62 @@ test("fetchEbayBrowse forwards supported sort options", async () => {
   assert.equal(browseCalls, scenarios.length);
   assert.ok(oauthCalls >= 1, "OAuth token should be requested at least once");
 });
+
+test("fetchEbayBrowse applies auction + hasBids filters", async () => {
+  const { fetchEbayBrowse } = await modulePromise;
+
+  const originalFetch = global.fetch;
+  const originalClientId = process.env.EBAY_CLIENT_ID;
+  const originalClientSecret = process.env.EBAY_CLIENT_SECRET;
+
+  process.env.EBAY_CLIENT_ID = "test-id";
+  process.env.EBAY_CLIENT_SECRET = "test-secret";
+
+  let browseCallUrl = null;
+
+  global.fetch = async (url, opts) => {
+    const str = typeof url === "string" ? url : url?.toString();
+    if (!str) throw new Error("Missing URL in fetch stub");
+
+    if (str.includes("/identity/")) {
+      return {
+        ok: true,
+        status: 200,
+        json: async () => ({ access_token: "fake-token", expires_in: 7200 }),
+        text: async () => "",
+      };
+    }
+
+    if (str.startsWith("https://api.ebay.com/buy/browse/v1/item_summary/search")) {
+      browseCallUrl = str;
+      return {
+        ok: true,
+        status: 200,
+        json: async () => ({ itemSummaries: [] }),
+        text: async () => "",
+      };
+    }
+
+    throw new Error(`Unexpected fetch URL: ${str}`);
+  };
+
+  try {
+    await fetchEbayBrowse({
+      q: "test",
+      buyingOptions: ["AUCTION"],
+      hasBids: true,
+    });
+  } finally {
+    global.fetch = originalFetch;
+    process.env.EBAY_CLIENT_ID = originalClientId;
+    process.env.EBAY_CLIENT_SECRET = originalClientSecret;
+  }
+
+  assert.ok(browseCallUrl, "Browse call should have been captured");
+  const params = new URL(browseCallUrl).searchParams;
+  const filterParam = params.get("filter");
+  assert.ok(filterParam, "filter parameter should be present");
+  const filters = filterParam.split(",");
+  assert.ok(filters.includes("buyingOptions:{AUCTION}"), "buyingOptions filter should be applied");
+  assert.ok(filters.includes("bidCount:[1..]"), "bidCount filter should be applied when hasBids=true");
+});
