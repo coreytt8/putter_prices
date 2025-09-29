@@ -1402,6 +1402,8 @@ export default function PuttersPage() {
                                   const baseKey = getStatsKey(modelKey, condParam);
                                   const variantStats = statsByModel[variantKey] ?? null;
                                   const baseStats = statsByModel[baseKey] ?? stats;
+                                  const offerId = getOfferId(o);
+                                  const offerCompared = offerId ? compareIds.has(offerId) : false;
 
                                   return (
                                     <li
@@ -1437,7 +1439,7 @@ export default function PuttersPage() {
                                         </div>
                                       </div>
 
-                                      <div className="flex items-center gap-3">
+                                      <div className="flex flex-wrap items-center gap-3 sm:flex-nowrap">
                                         <SmartPriceBadge
                                           price={Number(o.price)}
                                           baseStats={baseStats}
@@ -1449,6 +1451,20 @@ export default function PuttersPage() {
                                         <span className="text-sm font-semibold text-slate-900">
                                           {typeof o.price === "number" ? formatPrice(o.price, o.currency) : "—"}
                                         </span>
+                                        <button
+                                          type="button"
+                                          disabled={!offerId}
+                                          onClick={() => handleToggleCompare(o)}
+                                          aria-pressed={offerCompared}
+                                          className={`inline-flex items-center gap-1 rounded-full px-3 py-1.5 text-xs font-semibold transition ${
+                                            offerCompared
+                                              ? "border border-blue-600 bg-blue-600 text-white hover:border-blue-700 hover:bg-blue-700"
+                                              : "border border-slate-200 text-slate-700 hover:border-blue-300 hover:text-blue-700"
+                                          } disabled:cursor-not-allowed disabled:opacity-60`}
+                                          title={offerCompared ? "Remove from compare" : "Add to compare"}
+                                        >
+                                          {offerCompared ? "Remove" : "Compare"}
+                                        </button>
                                         <a
                                           href={o.url}
                                           target="_blank"
