@@ -78,6 +78,7 @@ async function queryTopDeals(sql, since) {
         FROM aggregated_stats_variant
         WHERE variant_key = ''
           AND condition_band = 'ANY'
+          AND n >= 5
         ORDER BY model, window_days DESC, updated_at DESC
       ),
       model_counts AS (
@@ -103,29 +104,65 @@ async function queryTopDeals(sql, since) {
         lp.total,
         lp.observed_at,
         lp.condition,
-        stats.n,
+        COALESCE(stats.n, live_stats.live_n) AS n,
         stats.window_days,
-        stats.p10_cents,
-        stats.p50_cents,
-        stats.p90_cents,
-        stats.dispersion_ratio,
-        stats.updated_at,
-        mc.listing_count
+        COALESCE(stats.p10_cents, live_stats.live_p10_cents) AS p10_cents,
+        COALESCE(stats.p50_cents, live_stats.live_p50_cents) AS p50_cents,
+        COALESCE(stats.p90_cents, live_stats.live_p90_cents) AS p90_cents,
+        COALESCE(stats.dispersion_ratio, live_stats.live_dispersion_ratio) AS dispersion_ratio,
+        COALESCE(stats.updated_at, live_stats.latest_observed_at) AS updated_at,
+        mc.listing_count,
+        CASE
+          WHEN stats.p50_cents IS NOT NULL THEN 'aggregated'
+          WHEN live_stats.live_p50_cents IS NOT NULL THEN 'live'
+          ELSE NULL
+        END AS stats_source,
+        stats.n AS aggregated_n,
+        stats.updated_at AS aggregated_updated_at,
+        live_stats.live_n,
+        live_stats.latest_observed_at AS live_updated_at
       FROM latest_prices lp
       JOIN items i ON i.item_id = lp.item_id
-      JOIN base_stats stats ON stats.model = i.model_key
+      LEFT JOIN base_stats stats ON stats.model = i.model_key
+      LEFT JOIN LATERAL (
+        SELECT
+          live_totals.live_n,
+          live_totals.live_p10_cents,
+          live_totals.live_p50_cents,
+          live_totals.live_p90_cents,
+          CASE
+            WHEN live_totals.live_p10_cents IS NOT NULL AND live_totals.live_p10_cents <> 0
+              THEN live_totals.live_p90_cents / NULLIF(live_totals.live_p10_cents, 0)
+            ELSE NULL
+          END AS live_dispersion_ratio,
+          live_totals.latest_observed_at
+        FROM (
+          SELECT
+            COUNT(*) AS live_n,
+            percentile_cont(0.1) WITHIN GROUP (ORDER BY lp2.total) * 100 AS live_p10_cents,
+            percentile_cont(0.5) WITHIN GROUP (ORDER BY lp2.total) * 100 AS live_p50_cents,
+            percentile_cont(0.9) WITHIN GROUP (ORDER BY lp2.total) * 100 AS live_p90_cents,
+            MAX(lp2.observed_at) AS latest_observed_at
+          FROM latest_prices lp2
+          JOIN items i2 ON i2.item_id = lp2.item_id
+          WHERE i2.model_key = i.model_key
+            AND lp2.total IS NOT NULL
+            AND lp2.total > 0
+        ) AS live_totals
+      ) AS live_stats ON TRUE
       LEFT JOIN model_counts mc ON mc.model_key = i.model_key
       WHERE i.model_key IS NOT NULL
         AND i.model_key <> ''
         AND lp.total IS NOT NULL
         AND lp.total > 0
-        AND stats.p50_cents IS NOT NULL
-        AND stats.n IS NOT NULL
-        AND stats.n >= 5
+        AND (
+          stats.p50_cents IS NOT NULL
+          OR live_stats.live_p50_cents IS NOT NULL
+        )
     `;
 }
 
-function buildDealsFromRows(rows, limit) {
+function buildDealsFromRows(rows, limit, lookbackHours = null) {
   const grouped = new Map();
 
   for (const row of rows) {
@@ -173,17 +210,30 @@ function buildDealsFromRows(rows, limit) {
     const { row, total, price, shipping, median, savingsAmount, savingsPercent } = entry;
     const label = formatModelLabel(row.model_key, row.brand, row.title);
     const currency = row.currency || "USD";
+    const statsSource = row.stats_source || null;
     const stats = {
       p10: centsToNumber(row.p10_cents),
       p50: median,
       p90: centsToNumber(row.p90_cents),
       n: toNumber(row.n),
       dispersionRatio: toNumber(row.dispersion_ratio),
+      source: statsSource,
     };
     const statsMeta = {
-      windowDays: toNumber(row.window_days),
-      updatedAt: row.updated_at || null,
+      source: statsSource,
+      windowDays: statsSource === "aggregated" ? toNumber(row.window_days) : null,
+      updatedAt:
+        statsSource === "aggregated"
+          ? row.aggregated_updated_at || row.updated_at || null
+          : row.live_updated_at || row.updated_at || null,
+      sampleSize:
+        statsSource === "aggregated"
+          ? toNumber(row.aggregated_n ?? row.n)
+          : toNumber(row.live_n ?? row.n),
     };
+    if (statsSource === "live" && lookbackHours != null) {
+      statsMeta.lookbackHours = lookbackHours;
+    }
     const bestOffer = {
       itemId: row.item_id,
       title: row.title,
@@ -232,7 +282,7 @@ export async function loadRankedDeals(sql, limit, lookbackWindows = DEFAULT_LOOK
   for (const hours of windows) {
     const since = new Date(Date.now() - hours * 60 * 60 * 1000);
     const rows = await queryTopDeals(sql, since);
-    const computed = buildDealsFromRows(rows, limit);
+    const computed = buildDealsFromRows(rows, limit, hours);
     deals = computed;
     windowHours = hours;
     if (computed.length > 0) {
