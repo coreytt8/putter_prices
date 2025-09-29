@@ -5,7 +5,6 @@ import MarketSnapshot from "@/components/MarketSnapshot";
 import HeroSection from "@/components/HeroSection";
 import SectionWrapper from "@/components/SectionWrapper";
 import HighlightCard from "@/components/HighlightCard";
-import HomepageCompareDemo from "@/components/HomepageCompareDemo";
 import PriceComparisonTable from "@/components/PriceComparisonTable";
 import TrendingSparkline from "@/components/TrendingSparkline";
 import { sanitizeModelKey } from "@/lib/sanitizeModelKey";
@@ -239,7 +238,6 @@ export default async function Home() {
           )}
         </div>
 
-        <HomepageCompareDemo deals={deals} />
 
         {heroSnapshot && (
           <div className="mt-16">
