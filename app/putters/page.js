@@ -309,6 +309,113 @@ export default function PuttersPage() {
   // recent models
   const { recent, push: pushRecent, clear: clearRecent } = useRecentModels();
 
+  const { list: sortedGroups, key: sortedGroupKey } = useMemo(() => {
+    const arr = [...groups];
+    if (sortBy === "best_price_asc") {
+      arr.sort((a, b) => (a.bestPrice ?? Infinity) - (b.bestPrice ?? Infinity));
+    } else if (sortBy === "best_price_desc") {
+      arr.sort((a, b) => (b.bestPrice ?? -Infinity) - (a.bestPrice ?? -Infinity));
+    } else if (sortBy === "count_desc") {
+      arr.sort((a, b) => (b.count ?? 0) - (a.count ?? 0));
+    } else if (sortBy === "model_asc") {
+      arr.sort((a, b) => (a.model || "").localeCompare(b.model || ""));
+    }
+    return { list: arr, key: arr.map((g) => g.model).join("|") };
+  }, [groups, sortBy]);
+
+  useEffect(() => {
+    const next = {};
+    sortedGroups.forEach((g) => {
+      next[g.model] = false;
+    });
+    setExpanded(next);
+  }, [sortedGroupKey]);
+
+  const toggleExpand = async (model) => {
+    setExpanded((prev) => ({ ...prev, [model]: !prev[model] }));
+    const willOpen = !expanded[model];
+    if (willOpen) {
+      pushRecent(model);
+
+      if (!lowsByModel[model]) {
+        try {
+          const r = await fetch(`/api/analytics/lows?model=${encodeURIComponent(model)}`, { cache: "no-store" });
+          const j = await r.json();
+          setLowsByModel((prev) => ({ ...prev, [model]: j?.lows || null }));
+        } catch {
+          setLowsByModel((prev) => ({ ...prev, [model]: { low1d: null, low7d: null, low30d: null } }));
+        }
+      }
+
+      if (!seriesByModel[model]) {
+        try {
+          const r = await fetch(`/api/analytics/series?model=${encodeURIComponent(model)}`, { cache: "no-store" });
+          const j = await r.json();
+          setSeriesByModel((prev) => ({ ...prev, [model]: j?.series || [] }));
+        } catch {
+          setSeriesByModel((prev) => ({ ...prev, [model]: [] }));
+        }
+      }
+
+      try {
+        const groupObj = groups.find((x) => x.model === model) || null;
+        const condParam = selectedConditionBand(conds) || inferConditionBandFromOffers(groupObj?.offers || []) || "";
+        const url = `/api/model-stats?model=${encodeURIComponent(model)}${
+          condParam ? `&condition=${encodeURIComponent(condParam)}` : ""
+        }`;
+        const statsKey = getStatsKey(model, condParam);
+        if (statsByModel[statsKey] === undefined) {
+          const r = await fetch(url, { cache: "no-store" });
+          const j = await r.json();
+          setStatsByModel((prev) => ({ ...prev, [statsKey]: j?.stats || null }));
+        }
+      } catch {
+        // ignore
+      }
+    }
+  };
+
+  const toggleShowAllOffers = (model) =>
+    setShowAllOffersByModel((prev) => ({ ...prev, [model]: !prev[model] }));
+
+  const canPrev = hasPrev && page > 1 && !loading;
+  const canNext = hasNext && !loading;
+
+  function summarizeDexHead(g) {
+    const dexCounts = { LEFT: 0, RIGHT: 0 };
+    const headCounts = { BLADE: 0, MALLET: 0 };
+    const lenCounts = { 33: 0, 34: 0, 35: 0, 36: 0 };
+    for (const o of g.offers || []) {
+      const d = (o?.specs?.dexterity || "").toUpperCase();
+      const h = (o?.specs?.headType || "").toUpperCase();
+      if (d === "LEFT" || d === "RIGHT") dexCounts[d] += 1;
+      if (h === "BLADE" || h === "MALLET") headCounts[h] += 1;
+      const L = Number(o?.specs?.length);
+      if (Number.isFinite(L)) {
+        const nearest = [33, 34, 35, 36].reduce(
+          (p, c) => (Math.abs(c - L) < Math.abs(p - L) ? c : p),
+          34
+        );
+        if (Math.abs(nearest - L) <= 0.5) lenCounts[nearest]++;
+      }
+    }
+    const domDex =
+      dexCounts.LEFT === 0 && dexCounts.RIGHT === 0
+        ? null
+        : dexCounts.LEFT >= dexCounts.RIGHT
+        ? "LEFT"
+        : "RIGHT";
+    const domHead =
+      headCounts.BLADE === 0 && headCounts.MALLET === 0
+        ? null
+        : headCounts.BLADE >= headCounts.MALLET
+        ? "BLADE"
+        : "MALLET";
+    const domLen = Object.entries(lenCounts).sort((a, b) => b[1] - a[1])[0];
+    const domLenVal = domLen && domLen[1] > 0 ? Number(domLen[0]) : null;
+    return { domDex, domHead, domLen: domLenVal };
+  }
+
   // --- read URL params on first load ---
   useEffect(() => {
     const sp = new URLSearchParams(window.location.search);
@@ -467,95 +574,7 @@ export default function PuttersPage() {
     return () => { ignore = true; clearTimeout(t); ctrl.abort(); };
   }, [apiUrl, groupMode, sortBy, q]);
 
-  const sortedGroups = useMemo(() => {
-    const arr = [...groups];
-    if (sortBy === "best_price_asc") {
-      arr.sort((a,b) => (a.bestPrice ?? Infinity) - (b.bestPrice ?? Infinity));
-    } else if (sortBy === "best_price_desc") {
-      arr.sort((a,b) => (b.bestPrice ?? -Infinity) - (a.bestPrice ?? -Infinity));
-    } else if (sortBy === "count_desc") {
-      arr.sort((a,b) => (b.count ?? 0) - (a.count ?? 0));
-    } else if (sortBy === "model_asc") {
-      arr.sort((a,b) => (a.model || "").localeCompare(b.model || ""));
-    }
-    return arr;
-  }, [groups, sortBy]);
-
-  useEffect(() => {
-    const next = {};
-    sortedGroups.forEach((g) => { next[g.model] = false; });
-    setExpanded(next);
-  }, [sortedGroups.map((g) => g.model).join("|")]);
-
-  const toggleExpand = async (model) => {
-    setExpanded((prev) => ({ ...prev, [model]: !prev[model] }));
-    // When opening, load per-model analytics and stats if missing
-    const willOpen = !expanded[model];
-    if (willOpen) {
-      // mark as recently viewed when opening
-      pushRecent(model);
-
-      // lazily load lows/series/stats for this group
-      if (!lowsByModel[model]) {
-        try {
-          const r = await fetch(`/api/analytics/lows?model=${encodeURIComponent(model)}`, { cache: "no-store" });
-          const j = await r.json();
-          setLowsByModel((prev) => ({ ...prev, [model]: j?.lows || null }));
-        } catch {
-          setLowsByModel((prev) => ({ ...prev, [model]: { low1d: null, low7d: null, low30d: null } }));
-        }
-      }
-      if (!seriesByModel[model]) {
-        try {
-          const r = await fetch(`/api/analytics/series?model=${encodeURIComponent(model)}`, { cache: "no-store" });
-          const j = await r.json();
-          setSeriesByModel((prev) => ({ ...prev, [model]: j?.series || [] }));
-        } catch {
-          setSeriesByModel((prev) => ({ ...prev, [model]: [] }));
-        }
-      }
-      // Stats (condition-aware)
-      try {
-        const groupObj = groups.find((x) => x.model === model) || null;
-        const condParam = selectedConditionBand(conds) || inferConditionBandFromOffers(groupObj?.offers || []) || "";
-        const url = `/api/model-stats?model=${encodeURIComponent(model)}${condParam ? `&condition=${encodeURIComponent(condParam)}` : ""}`;
-        const statsKey = getStatsKey(model, condParam);
-        if (statsByModel[statsKey] === undefined) {
-          const r = await fetch(url, { cache: "no-store" });
-          const j = await r.json();
-          setStatsByModel((prev) => ({ ...prev, [statsKey]: j?.stats || null }));
-        }
-      } catch {
-        // ignore
-      }
-    }
-  };
-
-  const toggleShowAllOffers = (model) => setShowAllOffersByModel(prev => ({ ...prev, [model]: !prev[model] }));
-  const canPrev = hasPrev && page > 1 && !loading;
-  const canNext = hasNext && !loading;
-
-  function summarizeDexHead(g) {
-    const dexCounts = { LEFT: 0, RIGHT: 0 };
-    const headCounts = { BLADE: 0, MALLET: 0 };
-    const lenCounts = { 33: 0, 34: 0, 35: 0, 36: 0 };
-    for (const o of g.offers || []) {
-      const d = (o?.specs?.dexterity || "").toUpperCase();
-      const h = (o?.specs?.headType || "").toUpperCase();
-      if (d === "LEFT" || d === "RIGHT") dexCounts[d] += 1;
-      if (h === "BLADE" || h === "MALLET") headCounts[h] += 1;
-      const L = Number(o?.specs?.length);
-      if (Number.isFinite(L)) {
-        const nearest = [33,34,35,36].reduce((p,c) => Math.abs(c - L) < Math.abs(p - L) ? c : p, 34);
-        if (Math.abs(nearest - L) <= 0.5) lenCounts[nearest]++;
-      }
-    }
-    const domDex = dexCounts.LEFT === 0 && dexCounts.RIGHT === 0 ? null : (dexCounts.LEFT >= dexCounts.RIGHT ? "LEFT" : "RIGHT");
-    const domHead = headCounts.BLADE === 0 && headCounts.MALLET === 0 ? null : (headCounts.BLADE >= headCounts.MALLET ? "BLADE" : "MALLET");
-    const domLen = Object.entries(lenCounts).sort((a,b)=>b[1]-a[1])[0];
-    const domLenVal = domLen && domLen[1] > 0 ? Number(domLen[0]) : null;
-    return { domDex, domHead, domLen: domLenVal };
-  }
+  
 
   // quick “Great deal/Good deal” chip (kept for the summary row)
   function fairPriceBadge(best, stats) {
