@@ -86,6 +86,46 @@ test("AUCTION_WITH_BIN offers survive auction + hasBids filters", async () => {
   assert.equal(afterHasBidsFilter.length, 1, "hasBids filter retains AUCTION_WITH_BIN offer");
 });
 
+test("bid-only auction price fallback passes onlyComplete + hasBids", async () => {
+  const { mapEbayItemToOffer, __testables__ } = await modulePromise;
+  const { normalizeBuyingOptions } = __testables__;
+
+  const item = {
+    title: "Bid Only Auction",
+    currentBidPrice: { value: "42.5", currency: "USD" },
+    buyingOptions: ["AUCTION"],
+    bidCount: "7",
+    image: { imageUrl: "https://example.com/putter.jpg" },
+    shippingOptions: [
+      {
+        shippingCost: { value: "5.50", currency: "USD" },
+      },
+    ],
+    itemSpecifics: [],
+    localizedAspects: [],
+    additionalProductIdentities: [],
+    seller: {},
+    returnTerms: {},
+    itemLocation: {},
+  };
+
+  const offer = mapEbayItemToOffer(item);
+  assert.ok(offer, "offer should be produced");
+  assert.equal(offer.price, 42.5, "currentBidPrice should populate price");
+  assert.equal(offer.currency, "USD", "currency should follow currentBidPrice currency");
+  assert.equal(offer.total, 48.0, "shipping should contribute to total");
+
+  const onlyCompleteFiltered = [offer].filter((o) => typeof o.price === "number" && o.image);
+  assert.equal(onlyCompleteFiltered.length, 1, "onlyComplete filter should keep bid-only auction");
+
+  const hasBidsFiltered = onlyCompleteFiltered.filter((o) => {
+    const types = normalizeBuyingOptions(o?.buying?.types);
+    const isAuction = types.includes("AUCTION");
+    return isAuction && Number(o?.buying?.bidCount) > 0;
+  });
+  assert.equal(hasBidsFiltered.length, 1, "hasBids filter should keep bid-only auction");
+});
+
 test("fetchEbayBrowse forwards supported sort options", async () => {
   const { fetchEbayBrowse } = await modulePromise;
 

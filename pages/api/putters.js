@@ -412,9 +412,12 @@ function mapEbayItemToOffer(item) {
   const specs = parseSpecsFromItem(item);
   const family = specs?.family || null;
 
-  const itemPrice = safeNum(item?.price?.value);
+  const directPrice = safeNum(item?.price?.value);
+  const bidPrice = safeNum(item?.currentBidPrice?.value);
+  const itemPrice = directPrice != null ? directPrice : bidPrice;
   const shippingValue = Number.isFinite(shipping?.cost) ? shipping.cost : null;
-  const total = itemPrice != null ? itemPrice + (shippingValue ?? 0) : itemPrice ?? null;
+  const total = itemPrice != null ? itemPrice + (shippingValue ?? 0) : null;
+  const currency = item?.price?.currency || item?.currentBidPrice?.currency || "USD";
 
   const rawUrl = item?.itemWebUrl || item?.itemHref;
   const url = decorateEbayUrl(rawUrl);
@@ -429,14 +432,14 @@ function mapEbayItemToOffer(item) {
     price: itemPrice,
     shipping: shippingValue,
     total,
-    currency: item?.price?.currency || "USD",
+    currency,
     condition: item?.condition || null,
     createdAt: item?.itemCreationDate || item?.itemEndDate || item?.estimatedAvailDate || null,
     image,
     shippingDetails: shipping
       ? {
           cost: shipping.cost,
-          currency: shipping.currency || item?.price?.currency || "USD",
+          currency: shipping.currency || currency,
           free: Boolean(shipping.free),
           type: shipping.type || null,
         }
