@@ -246,7 +246,7 @@ export default async function Home() {
   const baseUrl = await resolveBaseUrl();
 
   const topDealsRes = await fetchJson(`${baseUrl}/api/top-deals`, {
-    next: { revalidate: 300 },
+    cache: "no-store",
   });
 
   const dealsRaw = Array.isArray(topDealsRes?.deals) ? topDealsRes.deals : [];
@@ -283,7 +283,7 @@ export default async function Home() {
   });
 
   const trendingRes = await fetchJson(`${baseUrl}/api/models/search?q=putter`, {
-    next: { revalidate: 3600 },
+    cache: "no-store",
   });
 
   const trending = Array.isArray(trendingRes?.models)
@@ -302,7 +302,7 @@ export default async function Home() {
   const snapshotResponse = await fetchJson(
     `${baseUrl}/api/putters?q=${encodeURIComponent(DEFAULT_SNAPSHOT_QUERY)}`,
     {
-      next: { revalidate: 300 },
+      cache: "no-store",
     }
   );
 
