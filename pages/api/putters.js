@@ -364,6 +364,30 @@ function normalizeModelFromTitle(title = "", fallbackFamily = null) {
   return tokens.length ? tokens.join(" ") : (title || "unknown").slice(0, 50);
 }
 
+const BUYING_OPTION_NORMALIZATION = {
+  AUCTION_WITH_BIN: "AUCTION",
+};
+
+function normalizeBuyingOption(value) {
+  if (!value) return null;
+  const upper = String(value).toUpperCase();
+  return BUYING_OPTION_NORMALIZATION[upper] || upper;
+}
+
+function normalizeBuyingOptions(list) {
+  if (!Array.isArray(list)) return [];
+  const seen = new Set();
+  const normalized = [];
+  for (const entry of list) {
+    const normalizedEntry = normalizeBuyingOption(entry);
+    if (normalizedEntry && !seen.has(normalizedEntry)) {
+      seen.add(normalizedEntry);
+      normalized.push(normalizedEntry);
+    }
+  }
+  return normalized;
+}
+
 function mapEbayItemToOffer(item) {
   if (!item) return null;
 
@@ -381,7 +405,7 @@ function mapEbayItemToOffer(item) {
     : sellingStatus?.bidCount;
 
   const buying = {
-    types: Array.isArray(item?.buyingOptions) ? item.buyingOptions : [],
+    types: normalizeBuyingOptions(Array.isArray(item?.buyingOptions) ? item.buyingOptions : []),
     bidCount: normalizeBidCountValue(item?.bidCount ?? sellingBidCount),
   };
 
@@ -426,7 +450,9 @@ function mapEbayItemToOffer(item) {
   };
 }
 
-export { tokenize, mapEbayItemToOffer, fetchEbayBrowse };
+const __testables__ = { normalizeBuyingOptions };
+
+export { tokenize, mapEbayItemToOffer, fetchEbayBrowse, __testables__ };
 
 // -------------------- Limited / Collectible recall helpers --------------------
 const GLOBAL_LIMITED_TOKENS = [
@@ -606,6 +632,7 @@ export default async function handler(req, res) {
   const maxPrice = safeNum(sp.maxPrice);
   const conds = (sp.conditions || "").toString().split(",").map((s) => s.trim()).filter(Boolean);
   const buyingOptions = (sp.buyingOptions || "").toString().split(",").map((s) => s.trim()).filter(Boolean);
+  const normalizedBuyingOptionFilters = normalizeBuyingOptions(buyingOptions);
   const hasBids = (sp.hasBids || "").toString() === "true";
   const sort = (sp.sort || "").toString();
   const modelKeyParam = ((sp.modelKey ?? sp.model) || "").toString().trim();
@@ -790,11 +817,11 @@ export default async function handler(req, res) {
       mergedOffers = mergedOffers.filter((o) => o?.condition && set.has(String(o.condition).toUpperCase()));
     }
 
-    if (buyingOptions.length) {
-      const set = new Set(buyingOptions.map((s) => s.toUpperCase()));
+    if (normalizedBuyingOptionFilters.length) {
+      const set = new Set(normalizedBuyingOptionFilters);
       mergedOffers = mergedOffers.filter((o) => {
-        const types = Array.isArray(o?.buying?.types) ? o.buying.types : [];
-        return types.some((t) => set.has(String(t).toUpperCase()));
+        const types = normalizeBuyingOptions(o?.buying?.types);
+        return types.some((t) => set.has(t));
       });
     }
 
@@ -813,7 +840,11 @@ export default async function handler(req, res) {
     }
 
     if (hasBids) {
-      mergedOffers = mergedOffers.filter((o) => Number(o?.buying?.bidCount) > 0);
+      mergedOffers = mergedOffers.filter((o) => {
+        const types = normalizeBuyingOptions(o?.buying?.types);
+        const isAuction = types.includes("AUCTION");
+        return isAuction && Number(o?.buying?.bidCount) > 0;
+      });
     }
 
     // ----- server-side sort BEFORE slicing so other sources can appear on page 1 -----

@@ -46,6 +46,46 @@ test("mapEbayItemToOffer normalizes bid count variants", async () => {
   }
 });
 
+test("AUCTION_WITH_BIN offers survive auction + hasBids filters", async () => {
+  const { mapEbayItemToOffer, __testables__ } = await modulePromise;
+  assert.ok(__testables__, "__testables__ export should be available");
+  const { normalizeBuyingOptions } = __testables__;
+  assert.equal(typeof normalizeBuyingOptions, "function", "normalizeBuyingOptions should be a function");
+
+  const item = {
+    title: "Test Auction With BIN",
+    price: { value: "150", currency: "USD" },
+    buyingOptions: ["AUCTION_WITH_BIN"],
+    bidCount: "3",
+    shippingOptions: [],
+    itemSpecifics: [],
+    localizedAspects: [],
+    additionalProductIdentities: [],
+    seller: {},
+    returnTerms: {},
+    itemLocation: {},
+  };
+
+  const offer = mapEbayItemToOffer(item);
+  assert.ok(offer, "offer should be produced");
+  const offerTypes = normalizeBuyingOptions(offer?.buying?.types);
+  assert.ok(offerTypes.includes("AUCTION"), "normalized types should include AUCTION");
+
+  const auctionFilterSet = new Set(normalizeBuyingOptions(["auction"]));
+  const afterBuyingFilter = [offer].filter((o) => {
+    const types = normalizeBuyingOptions(o?.buying?.types);
+    return types.some((t) => auctionFilterSet.has(t));
+  });
+  assert.equal(afterBuyingFilter.length, 1, "auction filter retains AUCTION_WITH_BIN offer");
+
+  const afterHasBidsFilter = afterBuyingFilter.filter((o) => {
+    const types = normalizeBuyingOptions(o?.buying?.types);
+    const isAuction = types.includes("AUCTION");
+    return isAuction && Number(o?.buying?.bidCount) > 0;
+  });
+  assert.equal(afterHasBidsFilter.length, 1, "hasBids filter retains AUCTION_WITH_BIN offer");
+});
+
 test("fetchEbayBrowse forwards supported sort options", async () => {
   const { fetchEbayBrowse } = await modulePromise;
 
