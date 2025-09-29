@@ -18,6 +18,10 @@ function isAuthorized(req) {
 // Seed queries are derived from the shared catalog so everything stays in sync.
 const SEED_QUERIES = PUTTER_SEED_QUERIES;
 
+// TODO: A follow-on cron can iterate over existing items.updated_at and call the
+// Browse get_item endpoint to refresh stale listings so high-savings deals stay
+// aligned with the live ask.
+
 // Small helpers to read price/shipping safely
 function readNumber(n) {
   const x = Number(n);
@@ -58,28 +62,54 @@ function normalizeSpecsFromTitle(title = '') {
   return { length, headType, dexterity, shaft, hasHeadcover };
 }
 
-async function fetchEbayPage(token, q, offset = 0, limit = 50) {
-  const params = new URLSearchParams({
-    q,
-    limit: String(limit),
-    offset: String(offset),
-    sort: 'NEWLY_LISTED', // bring in fresh listings
-    fieldgroups: 'EXTENDED',
-  });
+async function fetchEbayPage(token, q, { offset = 0, limit = 50, includeRefreshSort = true } = {}) {
+  const sorts = ['NEWLY_LISTED'];
+  if (includeRefreshSort) sorts.push('BEST_MATCH');
 
-  const res = await fetch(`https://api.ebay.com/buy/browse/v1/item_summary/search?${params}`, {
-    headers: {
-      Authorization: `Bearer ${token}`,
-      'Content-Type': 'application/json',
-      'X-EBAY-C-MARKETPLACE-ID': 'EBAY_US',
-    },
-  });
+  const seen = new Set();
+  const merged = [];
+  let primaryCount = 0;
+  let callCount = 0;
 
-  if (!res.ok) {
-    const txt = await res.text().catch(() => '');
-    throw new Error(`eBay ${res.status} ${res.statusText}${txt ? `: ${txt}` : ''}`);
+  for (let i = 0; i < sorts.length; i++) {
+    const sort = sorts[i];
+    const params = new URLSearchParams({
+      q,
+      limit: String(limit),
+      offset: String(offset),
+      sort,
+      fieldgroups: 'EXTENDED',
+    });
+
+    const res = await fetch(`https://api.ebay.com/buy/browse/v1/item_summary/search?${params}`, {
+      headers: {
+        Authorization: `Bearer ${token}`,
+        'Content-Type': 'application/json',
+        'X-EBAY-C-MARKETPLACE-ID': 'EBAY_US',
+      },
+    });
+    callCount++;
+
+    if (!res.ok) {
+      const txt = await res.text().catch(() => '');
+      throw new Error(`eBay ${res.status} ${res.statusText}${txt ? `: ${txt}` : ''}`);
+    }
+
+    const data = await res.json();
+    const items = Array.isArray(data?.itemSummaries) ? data.itemSummaries : [];
+    if (i === 0) {
+      primaryCount = items.length;
+    }
+
+    for (const item of items) {
+      const itemId = item?.itemId || item?.item_id;
+      if (!itemId || seen.has(itemId)) continue;
+      seen.add(itemId);
+      merged.push(item);
+    }
   }
-  return res.json();
+
+  return { items: merged, callCount, primaryCount };
 }
 
 export default async function handler(req, res) {
@@ -108,13 +138,25 @@ export default async function handler(req, res) {
         const pages = [0, 50];
         let allItems = [];
 
+        const seenIds = new Set();
+
         for (const offset of pages) {
-          const data = await fetchEbayPage(token, q, offset, 50);
-          totalCalls++;
-          const items = Array.isArray(data?.itemSummaries) ? data.itemSummaries : [];
-          allItems = allItems.concat(items);
-          // stop early if < 50 returned
-          if (items.length < 50) break;
+          const { items, callCount, primaryCount } = await fetchEbayPage(token, q, {
+            offset,
+            limit: 50,
+            includeRefreshSort: offset === 0,
+          });
+          totalCalls += callCount;
+
+          for (const item of items) {
+            const itemId = item?.itemId || item?.item_id;
+            if (!itemId || seenIds.has(itemId)) continue;
+            seenIds.add(itemId);
+            allItems.push(item);
+          }
+
+          // stop early if the primary sort returns less than the requested page size
+          if (primaryCount < 50) break;
         }
 
         found = allItems.length;
@@ -189,6 +231,14 @@ export default async function handler(req, res) {
               ${condition},
               ${it?.itemLocation?.country || null}
             )
+            ON CONFLICT (item_id)
+            DO UPDATE
+              SET price = EXCLUDED.price,
+                  shipping = EXCLUDED.shipping,
+                  total = EXCLUDED.total,
+                  condition = EXCLUDED.condition,
+                  location_cc = EXCLUDED.location_cc,
+                  observed_at = NOW()
           `;
 
           inserted++;
