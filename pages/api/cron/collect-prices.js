@@ -4,6 +4,7 @@ export const runtime = 'nodejs';
 import { getSql } from '../../../lib/db';
 import { getEbayToken } from '../../../lib/ebayAuth';
 import { normalizeModelKey } from '../../../lib/normalize';
+import { detectCanonicalBrand } from '../../../lib/sanitizeModelKey';
 import { PUTTER_SEED_QUERIES } from '../../../lib/data/putterCatalog';
 
 // --- simple auth: header or query param must match CRON_SECRET ---
@@ -141,6 +142,7 @@ export default async function handler(req, res) {
 
           const specs = normalizeSpecsFromTitle(title || '');
           const model_key = normalizeModelKey(title || '');
+          const canonicalBrand = detectCanonicalBrand(title || '') || null;
 
           // 1) upsert into items (unique catalog of listings)
           await sql`
@@ -149,7 +151,7 @@ export default async function handler(req, res) {
             VALUES (
               ${itemId},
               ${title},
-              ${null},             -- brand (optional; can derive later)
+              ${canonicalBrand},
               ${model_key},
               ${specs.headType},
               ${specs.dexterity},
@@ -163,6 +165,7 @@ export default async function handler(req, res) {
             )
             ON CONFLICT (item_id) DO UPDATE
               SET title = EXCLUDED.title,
+                  brand = COALESCE(EXCLUDED.brand, items.brand),
                   model_key = EXCLUDED.model_key,
                   head_type = EXCLUDED.head_type,
                   dexterity = EXCLUDED.dexterity,
