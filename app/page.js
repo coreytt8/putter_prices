@@ -283,11 +283,18 @@ export default async function Home() {
                   Number.isFinite(median) && Number.isFinite(deal.bestPrice) && median > 0
                     ? Math.round(((median - deal.bestPrice) / median) * 100)
                     : null;
-                const ctaQuery =
+                const displayedLabel =
+                  typeof deal?.label === "string" ? deal.label.trim() : "";
+                const bestOfferTitle =
+                  typeof deal?.bestOffer?.title === "string"
+                    ? deal.bestOffer.title.trim()
+                    : "";
+                const sanitizedFallback =
                   deal?.queryVariants?.clean ||
                   deal?.query ||
                   deal?.queryVariants?.accessory ||
                   "";
+                const ctaQuery = displayedLabel || bestOfferTitle || sanitizedFallback;
                 return (
                   <HighlightCard key={deal.query}>
                     <div className="aspect-[3/2] w-full bg-slate-100">
