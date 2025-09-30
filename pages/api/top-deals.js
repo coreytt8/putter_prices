@@ -8,6 +8,7 @@ import {
   stripAccessoryTokens,
   containsAccessoryToken,
   HEAD_COVER_TOKEN_VARIANTS,
+  HEAD_COVER_TEXT_RX,
 } from "../../lib/sanitizeModelKey.js";
 import { decorateEbayUrl } from "../../lib/affiliate.js";
 
@@ -67,8 +68,6 @@ function ensurePutterQuery(text = "") {
 }
 
 const DEFAULT_LOOKBACK_WINDOWS_HOURS = [24, 72, 168];
-
-const HEAD_COVER_TEXT_RX = /\b(head\s*cover|headcover|with\s*cover|includes\s*cover|hc)\b/i;
 
 const CONNECTOR_TOKENS = new Set([
   "for",

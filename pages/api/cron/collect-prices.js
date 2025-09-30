@@ -9,6 +9,7 @@ import {
   containsAccessoryToken,
   stripAccessoryTokens,
   HEAD_COVER_TOKEN_VARIANTS,
+  HEAD_COVER_TEXT_RX,
 } from '../../../lib/sanitizeModelKey';
 import { PUTTER_SEED_QUERIES } from '../../../lib/data/putterCatalog';
 
@@ -26,8 +27,6 @@ const SEED_QUERIES = PUTTER_SEED_QUERIES;
 // TODO: A follow-on cron can iterate over existing items.updated_at and call the
 // Browse get_item endpoint to refresh stale listings so high-savings deals stay
 // aligned with the live ask.
-
-const HEAD_COVER_TEXT_RX = /\b(head\s*cover|headcover|with\s*cover|includes\s*cover|hc)\b/i;
 
 function shouldSkipAccessoryDominatedTitle(title = '') {
   if (!title) return false;
