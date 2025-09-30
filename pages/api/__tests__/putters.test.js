@@ -158,6 +158,22 @@ test("isLikelyPutter filters accessory-heavy titles but keeps headcovers", async
   );
 });
 
+test("tokenize + queryMentionsHeadcover handle punctuated head cover text", async () => {
+  const { tokenize, __testables__ } = await modulePromise;
+  const tokens = tokenize("Deluxe Putter Head-Cover");
+  assert.ok(tokens.includes("headcover"), "hyphenated head cover should produce headcover token");
+
+  const { queryMentionsHeadcover } = __testables__;
+  assert.ok(
+    typeof queryMentionsHeadcover === "function",
+    "queryMentionsHeadcover should be exposed via __testables__"
+  );
+  assert.ok(
+    queryMentionsHeadcover("Premium Head/Cover Protector"),
+    "queryMentionsHeadcover should treat punctuation like whitespace"
+  );
+});
+
 test("fetchEbayBrowse forwards supported sort options", async () => {
   const { fetchEbayBrowse } = await modulePromise;
 
@@ -513,7 +529,7 @@ test("head cover query matches combined headcover token", async () => {
   const browseItems = [
     {
       itemId: "ks1-headcover",
-      title: "Kirkland KS1 Putter Headcover",
+      title: "Kirkland KS-1 Putter Head-Cover",
       price: { value: "45", currency: "USD" },
       itemWebUrl: "https://example.com/ks1-headcover",
       seller: { username: "kirkland-seller" },
@@ -558,7 +574,7 @@ test("head cover query matches combined headcover token", async () => {
   const req = {
     method: "GET",
     query: {
-      q: "kirkland signature ks1 head cover",
+      q: "kirkland signature ks1 head cover putter",
       group: "false",
       forceCategory: "false",
     },
@@ -580,7 +596,7 @@ test("head cover query matches combined headcover token", async () => {
   assert.equal(res.jsonBody.offers.length, 1, "headcover listing should survive token filtering");
   assert.equal(
     res.jsonBody.offers[0]?.title,
-    "Kirkland KS1 Putter Headcover",
+    "Kirkland KS-1 Putter Head-Cover",
     "head cover query should match combined headcover token"
   );
 });
