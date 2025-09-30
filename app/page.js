@@ -7,7 +7,7 @@ import SectionWrapper from "@/components/SectionWrapper";
 import HighlightCard from "@/components/HighlightCard";
 import PriceComparisonTable from "@/components/PriceComparisonTable";
 import TrendingSparkline from "@/components/TrendingSparkline";
-import { sanitizeModelKey } from "@/lib/sanitizeModelKey";
+import { buildDealCtaHref, sanitizeModelKey } from "@/lib/sanitizeModelKey";
 
 const DEFAULT_SNAPSHOT_QUERY = "golf putter";
 
@@ -289,12 +289,16 @@ export default async function Home() {
                   typeof deal?.bestOffer?.title === "string"
                     ? deal.bestOffer.title.trim()
                     : "";
-                const sanitizedFallback =
-                  deal?.queryVariants?.clean ||
-                  deal?.query ||
-                  deal?.queryVariants?.accessory ||
-                  "";
-                const ctaQuery = displayedLabel || bestOfferTitle || sanitizedFallback;
+                const { href: ctaHref } = buildDealCtaHref({
+                  ...deal,
+                  label: displayedLabel || deal?.label || "",
+                  bestOffer: deal?.bestOffer
+                    ? {
+                        ...deal.bestOffer,
+                        title: bestOfferTitle,
+                      }
+                    : null,
+                });
                 const bestOfferUrl =
                   typeof deal?.bestOffer?.url === "string" && deal.bestOffer.url.trim().length > 0
                     ? deal.bestOffer.url
@@ -355,7 +359,7 @@ export default async function Home() {
                       <div className="mt-auto">
                         <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:gap-3">
                           <Link
-                            href={`/putters?q=${encodeURIComponent(ctaQuery)}`}
+                            href={ctaHref}
                             className="inline-flex items-center justify-center rounded-full bg-slate-900 px-5 py-2 text-sm font-semibold text-white shadow-sm transition hover:bg-slate-700"
                           >
                             See the latest listings
