@@ -3,7 +3,9 @@ const assert = require("node:assert/strict");
 const path = require("node:path");
 const { pathToFileURL } = require("node:url");
 
-const modulePromise = import(pathToFileURL(path.join(__dirname, "..", "top-deals.js")).href);
+const modulePath = path.join(__dirname, "..", "top-deals.js");
+const moduleHref = pathToFileURL(modulePath).href;
+const modulePromise = import(moduleHref);
 
 test("loadRankedDeals returns listings observed before midnight when window is rolling", async () => {
   const { loadRankedDeals } = await modulePromise;
@@ -104,4 +106,78 @@ test("loadRankedDeals surfaces refreshed totals for long-running listings", asyn
   assert.equal(deal.bestOffer.price, refreshedRow.price);
   assert.equal(deal.bestOffer.shipping, refreshedRow.shipping);
   assert.equal(Math.round(deal.savings.amount), Math.round((refreshedRow.p50_cents / 100) - refreshedRow.total));
+});
+
+test("buildDealsFromRows decorates URLs with affiliate params when configured", async () => {
+  const originalEnv = {
+    campid: process.env.EPN_CAMPID,
+    customid: process.env.EPN_CUSTOMID,
+    toolid: process.env.EPN_TOOLID,
+    mkcid: process.env.EPN_MKCID,
+    mkrid: process.env.EPN_MKRID,
+    siteid: process.env.EPN_SITEID,
+    mkevt: process.env.EPN_MKEVT,
+  };
+
+  process.env.EPN_CAMPID = "987654";
+  process.env.EPN_CUSTOMID = "putteriq-test";
+  process.env.EPN_TOOLID = "20001";
+  process.env.EPN_MKCID = "9";
+  process.env.EPN_MKRID = "711-99999-12345-0";
+  process.env.EPN_SITEID = "123";
+  process.env.EPN_MKEVT = "5";
+
+  try {
+    const freshModule = await import(`${moduleHref}?update=${Date.now()}`);
+    const { buildDealsFromRows } = freshModule;
+
+    const rows = [
+      {
+        model_key: "acme_racer",
+        brand: "Acme",
+        title: "Acme Racer Putter",
+        image_url: "https://example.com/putter.jpg",
+        url: "https://www.ebay.com/itm/123?foo=bar",
+        currency: "USD",
+        head_type: "Blade",
+        dexterity: "Right",
+        length_in: 34,
+        item_id: "123",
+        price: 80,
+        shipping: 10,
+        total: 90,
+        observed_at: "2024-01-02T18:00:00.000Z",
+        condition: "USED",
+        n: 8,
+        window_days: 30,
+        p10_cents: 10000,
+        p50_cents: 15000,
+        p90_cents: 20000,
+        dispersion_ratio: 0.4,
+        updated_at: "2024-01-02T17:00:00Z",
+        listing_count: 3,
+      },
+    ];
+
+    const [deal] = buildDealsFromRows(rows, 5);
+    const decorated = new URL(deal.bestOffer.url);
+
+    assert.equal(decorated.searchParams.get("campid"), process.env.EPN_CAMPID);
+    assert.equal(decorated.searchParams.get("customid"), process.env.EPN_CUSTOMID);
+    assert.equal(decorated.searchParams.get("toolid"), process.env.EPN_TOOLID);
+    assert.equal(decorated.searchParams.get("mkcid"), process.env.EPN_MKCID);
+    assert.equal(decorated.searchParams.get("mkrid"), process.env.EPN_MKRID);
+    assert.equal(decorated.searchParams.get("siteid"), process.env.EPN_SITEID);
+    assert.equal(decorated.searchParams.get("mkevt"), process.env.EPN_MKEVT);
+    assert.equal(decorated.searchParams.get("campid"), "987654");
+    assert.equal(decorated.searchParams.get("foo"), "bar");
+  } finally {
+    process.env.EPN_CAMPID = originalEnv.campid;
+    process.env.EPN_CUSTOMID = originalEnv.customid;
+    process.env.EPN_TOOLID = originalEnv.toolid;
+    process.env.EPN_MKCID = originalEnv.mkcid;
+    process.env.EPN_MKRID = originalEnv.mkrid;
+    process.env.EPN_SITEID = originalEnv.siteid;
+    process.env.EPN_MKEVT = originalEnv.mkevt;
+  }
 });
