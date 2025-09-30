@@ -25,7 +25,7 @@ const EBAY_SITE = process.env.EBAY_SITE || "EBAY_US";
 const CATEGORY_GOLF_CLUBS = "115280";
 const CATEGORY_PUTTER_HEADCOVERS = "36278";
 const HEAD_COVER_TOKEN_VARIANTS = new Set(["headcover", "headcovers"]);
-const HEAD_COVER_TEXT_RX = /\bhead\s*cover(s)?\b|headcover(s)?/i;
+const HEAD_COVER_TEXT_RX = /\bhead(?:[\s/_-]*?)cover(s)?\b|headcover(s)?/i;
 const ACCESSORY_BLOCK_PATTERN = /\b(shafts?|grips?|weights?)\b/i;
 
 // -------------------- Token --------------------
@@ -101,12 +101,12 @@ const tokenize = (s) => {
     tokenSet.add(match[0]);
   }
 
-  const letterDigitWithGap = /([a-z])\s+([0-9]+)/g;
+  const letterDigitWithGap = /([a-z]+)(?:[\s/_-]+)([0-9]+)/g;
   while ((match = letterDigitWithGap.exec(normalized))) {
     tokenSet.add(`${match[1]}${match[2]}`);
   }
 
-  const digitLetterWithGap = /([0-9]+)\s+([a-z])/g;
+  const digitLetterWithGap = /([0-9]+)(?:[\s/_-]+)([a-z]+)/g;
   while ((match = digitLetterWithGap.exec(normalized))) {
     tokenSet.add(`${match[1]}${match[2]}`);
   }
@@ -451,7 +451,7 @@ function mapEbayItemToOffer(item) {
   };
 }
 
-const __testables__ = { normalizeBuyingOptions, isLikelyPutter };
+const __testables__ = { normalizeBuyingOptions, isLikelyPutter, queryMentionsHeadcover };
 
 export { tokenize, mapEbayItemToOffer, fetchEbayBrowse, __testables__ };
 
@@ -884,7 +884,12 @@ export default async function handler(req, res) {
               if (t === "head" || t === "cover" || t === "covers" || t === "headcovers") {
                 return false;
               }
-              if (/^[0-9]+[hc]$/.test(t) || /^[hc][0-9]+$/.test(t)) {
+              if (
+                /^[0-9]+[hc]$/.test(t) ||
+                /^[hc][0-9]+$/.test(t) ||
+                /^[0-9]+(?:head|cover|covers)$/.test(t) ||
+                /^(?:head|cover|covers)[0-9]+$/.test(t)
+              ) {
                 return false;
               }
             }
