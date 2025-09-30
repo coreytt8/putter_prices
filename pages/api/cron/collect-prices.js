@@ -4,7 +4,12 @@ export const runtime = 'nodejs';
 import { getSql } from '../../../lib/db';
 import { getEbayToken } from '../../../lib/ebayAuth';
 import { normalizeModelKey } from '../../../lib/normalize';
-import { detectCanonicalBrand } from '../../../lib/sanitizeModelKey';
+import {
+  detectCanonicalBrand,
+  containsAccessoryToken,
+  stripAccessoryTokens,
+  HEAD_COVER_TOKEN_VARIANTS,
+} from '../../../lib/sanitizeModelKey';
 import { PUTTER_SEED_QUERIES } from '../../../lib/data/putterCatalog';
 
 // --- simple auth: header or query param must match CRON_SECRET ---
@@ -22,6 +27,69 @@ const SEED_QUERIES = PUTTER_SEED_QUERIES;
 // Browse get_item endpoint to refresh stale listings so high-savings deals stay
 // aligned with the live ask.
 
+const HEAD_COVER_TEXT_RX = /\b(head\s*cover|headcover|with\s*cover|includes\s*cover|hc)\b/i;
+
+function shouldSkipAccessoryDominatedTitle(title = '') {
+  if (!title) return false;
+
+  const raw = String(title);
+  let hasHeadcoverSignal = HEAD_COVER_TEXT_RX.test(raw);
+  const hasPutterToken = /\bputter\b/i.test(raw);
+  const tokens = raw.split(/\s+/).filter(Boolean);
+
+  let accessoryCount = 0;
+  let substantiveCount = 0;
+
+  for (const token of tokens) {
+    const normalizedToken = token.replace(/[^a-z0-9]/gi, '').toLowerCase();
+    if (!normalizedToken || normalizedToken === 'putter') continue;
+    if (HEAD_COVER_TOKEN_VARIANTS.has(normalizedToken)) {
+      hasHeadcoverSignal = true;
+      continue;
+    }
+    if (containsAccessoryToken(token)) {
+      accessoryCount++;
+    } else {
+      substantiveCount++;
+    }
+  }
+
+  const strippedTokens = stripAccessoryTokens(raw)
+    .split(/\s+/)
+    .map((token) => token.replace(/[^a-z0-9]/gi, '').toLowerCase())
+    .filter(
+      (token) =>
+        token &&
+        token !== 'putter' &&
+        !HEAD_COVER_TOKEN_VARIANTS.has(token)
+    );
+  const remainingCount = strippedTokens.length;
+
+  if (hasHeadcoverSignal) {
+    return false;
+  }
+
+  if (!remainingCount) {
+    return true;
+  }
+
+  if (!hasPutterToken && accessoryCount) {
+    if (accessoryCount >= remainingCount || accessoryCount >= 2) {
+      return true;
+    }
+  }
+
+  if (!accessoryCount) {
+    return false;
+  }
+
+  if (substantiveCount && accessoryCount < substantiveCount) {
+    return false;
+  }
+
+  return accessoryCount >= remainingCount;
+}
+
 // Small helpers to read price/shipping safely
 function readNumber(n) {
   const x = Number(n);
@@ -38,6 +106,9 @@ function extractListingSnapshot(raw) {
   if (!itemId) return null;
 
   const title = raw?.title || null;
+  if (title && shouldSkipAccessoryDominatedTitle(title)) {
+    return null;
+  }
   const currency = raw?.price?.currency || raw?.price?.convertedFromCurrency || 'USD';
   const price =
     readNumber(raw?.price?.value) ?? readNumber(raw?.price?.convertedFromValue);
