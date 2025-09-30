@@ -1,12 +1,15 @@
 /* eslint-disable no-console */
 
 import { decorateEbayUrl } from "../../lib/affiliate.js";
-import { detectDexterity, extractLengthInches } from "../../lib/specs-parse.js";
+import { detectDexterity } from "../../lib/specs-parse.js";
 import {
   containsAccessoryToken,
   stripAccessoryTokens,
   HEAD_COVER_TOKEN_VARIANTS,
   HEAD_COVER_TEXT_RX,
+  normalizeHeadcoverToken,
+  shouldDropHeadcoverSpecToken,
+  stripHeadcoverSpecTokens,
 } from "../../lib/sanitizeModelKey.js";
 
 /**
@@ -31,28 +34,6 @@ const EBAY_SITE = process.env.EBAY_SITE || "EBAY_US";
 const CATEGORY_GOLF_CLUBS = "115280";
 const CATEGORY_PUTTER_HEADCOVERS = "36278";
 const ACCESSORY_BLOCK_PATTERN = /\b(shafts?|grips?|weights?)\b/i;
-const HEAD_COVER_SPEC_DROP_TOKENS = new Set([
-  "lh",
-  "rh",
-  "left",
-  "right",
-  "lefty",
-  "righty",
-  "lefthand",
-  "righthand",
-  "lefthanded",
-  "righthanded",
-  "hand",
-  "handed",
-  "in",
-  "inch",
-  "inches",
-]);
-
-const HEAD_COVER_LENGTH_TOKEN_RX = /^3[3-6](?:\.\d+)?$/;
-const HEAD_COVER_LENGTH_SUFFIX_RX = /^3[3-6](?:in|inch|inches|"|”|“)?$/;
-const DEX_SUFFIX_RX = /(lh|rh)$/i;
-
 // -------------------- Token --------------------
 let _tok = { val: null, exp: 0 };
 
@@ -148,73 +129,6 @@ const tokenize = (s) => {
 
   return Array.from(tokenSet);
 };
-
-const normalizeHeadcoverToken = (token) => String(token || "").trim().toLowerCase();
-
-function isDexterityTokenForHeadcover(token) {
-  const normalized = normalizeHeadcoverToken(token);
-  if (!normalized) return false;
-  if (HEAD_COVER_TOKEN_VARIANTS.has(normalized)) return false;
-  if (HEAD_COVER_SPEC_DROP_TOKENS.has(normalized)) return true;
-  if (/^(?:lh|rh)[0-9]+$/.test(normalized)) return true;
-  if (/^[0-9]+(?:lh|rh)$/.test(normalized)) return true;
-  if (detectDexterity(normalized)) return true;
-  if (detectDexterity(`${normalized} hand`)) return true;
-  return false;
-}
-
-function isLengthTokenForHeadcover(token) {
-  const normalized = normalizeHeadcoverToken(token).replace(/[“”]/g, '"');
-  if (!normalized) return false;
-  if (HEAD_COVER_TOKEN_VARIANTS.has(normalized)) return false;
-
-  if (HEAD_COVER_LENGTH_TOKEN_RX.test(normalized)) {
-    const numeric = Number(normalized);
-    if (Number.isFinite(numeric) && numeric >= 30 && numeric <= 40) return true;
-    if (/\d/.test(normalized)) return true;
-  }
-
-  if (HEAD_COVER_LENGTH_SUFFIX_RX.test(normalized)) {
-    return true;
-  }
-
-  const normalizedForExtract = normalized.replace(/inches$/, "inch");
-  const lengthVal = extractLengthInches(normalizedForExtract);
-  return Number.isFinite(lengthVal);
-}
-
-function shouldDropHeadcoverSpecToken(token) {
-  const normalized = normalizeHeadcoverToken(token);
-  if (!normalized) return false;
-  if (HEAD_COVER_TOKEN_VARIANTS.has(normalized)) return false;
-
-  if (isDexterityTokenForHeadcover(normalized) || isLengthTokenForHeadcover(normalized)) {
-    return true;
-  }
-
-  const suffixMatch = normalized.match(DEX_SUFFIX_RX);
-  if (suffixMatch) {
-    const base = normalized.slice(0, -suffixMatch[0].length);
-    if (isLengthTokenForHeadcover(base) || isDexterityTokenForHeadcover(base)) {
-      return true;
-    }
-  }
-
-  const prefixMatch = normalized.match(/^(lh|rh)/);
-  if (prefixMatch) {
-    const base = normalized.slice(prefixMatch[0].length);
-    if (isLengthTokenForHeadcover(base)) {
-      return true;
-    }
-  }
-
-  return false;
-}
-
-function stripHeadcoverSpecTokens(tokens = []) {
-  if (!Array.isArray(tokens) || tokens.length === 0) return [];
-  return tokens.filter((token) => !shouldDropHeadcoverSpecToken(token));
-}
 
 function pickCheapestShipping(shippingOptions) {
   if (!Array.isArray(shippingOptions) || shippingOptions.length === 0) return null;
