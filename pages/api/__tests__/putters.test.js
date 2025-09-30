@@ -141,6 +141,23 @@ test("bid-only auction price fallback passes onlyComplete + hasBids", async () =
   assert.equal(hasBidsFiltered.length, 1, "hasBids filter should keep bid-only auction");
 });
 
+test("isLikelyPutter filters accessory-heavy titles but keeps headcovers", async () => {
+  const { __testables__ } = await modulePromise;
+  const { isLikelyPutter } = __testables__;
+
+  assert.equal(
+    isLikelyPutter({ title: "Scotty Cameron Putter Weight Kit" }),
+    false,
+    "weight kit title should be filtered"
+  );
+
+  assert.equal(
+    isLikelyPutter({ title: "Scotty Cameron Putter Headcover" }),
+    true,
+    "headcover title should still pass"
+  );
+});
+
 test("fetchEbayBrowse forwards supported sort options", async () => {
   const { fetchEbayBrowse } = await modulePromise;
 
