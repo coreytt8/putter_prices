@@ -243,6 +243,8 @@ test("tokenize + queryMentionsHeadcover handle punctuated head cover text", asyn
     queryMentionsHeadcover("Premium Head/Cover Protector"),
     "queryMentionsHeadcover should treat punctuation like whitespace"
   );
+  assert.ok(queryMentionsHeadcover("KS1 HC"), "queryMentionsHeadcover should match HC abbreviation");
+  assert.ok(queryMentionsHeadcover("hc"), "queryMentionsHeadcover should detect standalone HC tokens");
 });
 
 test("normalizeSearchQ + recall helpers avoid putter for headcover intent", async () => {
@@ -263,6 +265,21 @@ test("normalizeSearchQ + recall helpers avoid putter for headcover intent", asyn
     assert.ok(!/\bputter\b/i.test(variant), `headcover recall variant should not include putter: ${variant}`);
   }
 
+  const spacedHeadcoverRaw = "Scotty Cameron Head Cover";
+  const spacedHeadcoverNormalized = normalizeSearchQ(spacedHeadcoverRaw);
+  assert.match(spacedHeadcoverNormalized, /\bheadcover\b/i, "spaced head cover should canonicalize to headcover");
+  assert.ok(!/\bputter\b/i.test(spacedHeadcoverNormalized), "spaced head cover should not append putter");
+
+  const hcRaw = "HC";
+  const hcNormalized = normalizeSearchQ(hcRaw);
+  assert.match(hcNormalized, /\bheadcover\b/i, "HC query should normalize to headcover");
+  assert.ok(!/\bputter\b/i.test(hcNormalized), "HC query should not add putter");
+
+  const hcRecall = buildLimitedRecallQueries(hcRaw, hcNormalized);
+  for (const variant of hcRecall) {
+    assert.ok(!/\bputter\b/i.test(variant), `HC recall variant should not include putter: ${variant}`);
+  }
+
   const putterRaw = "Bettinardi BB8";
   const putterNormalized = normalizeSearchQ(putterRaw);
   assert.ok(/\bputter\b/i.test(putterNormalized), "regular putter search should include putter");
@@ -272,11 +289,39 @@ test("normalizeSearchQ + recall helpers avoid putter for headcover intent", asyn
 });
 
 test("handler eBay calls omit putter for headcover queries", async () => {
-  const browseUrls = await collectBrowseQueriesFor("Scotty Cameron headcover");
-  assert.ok(browseUrls.length > 0, "headcover query should trigger eBay browse calls");
-  for (const url of browseUrls) {
-    const qParam = url.searchParams.get("q") || "";
-    assert.ok(!/\bputter\b/i.test(qParam), `headcover query should not include putter (saw: ${qParam})`);
+  const scenarios = [
+    {
+      label: "headcover",
+      query: "Scotty Cameron headcover",
+      expectations(qParam) {
+        assert.match(qParam, /\bheadcover\b/i, "expected canonical headcover token");
+      },
+    },
+    {
+      label: "head cover",
+      query: "Scotty Cameron head cover",
+      expectations(qParam) {
+        assert.match(qParam, /\bheadcover\b/i, "expected spaced head cover to canonicalize");
+      },
+    },
+    {
+      label: "HC abbreviation",
+      query: "Scotty Cameron HC",
+      expectations(qParam) {
+        assert.match(qParam, /\bheadcover\b/i, "expected HC to normalize to headcover");
+        assert.ok(!/\bhc\b/i.test(qParam), "expected raw HC token to be dropped");
+      },
+    },
+  ];
+
+  for (const scenario of scenarios) {
+    const browseUrls = await collectBrowseQueriesFor(scenario.query);
+    assert.ok(browseUrls.length > 0, `${scenario.label} query should trigger eBay browse calls`);
+    for (const url of browseUrls) {
+      const qParam = url.searchParams.get("q") || "";
+      assert.ok(!/\bputter\b/i.test(qParam), `${scenario.label} query should not include putter (saw: ${qParam})`);
+      scenario.expectations(qParam);
+    }
   }
 });
 
@@ -287,6 +332,19 @@ test("handler eBay calls retain putter for standard putter searches", async () =
     browseUrls.some((url) => /\bputter\b/i.test(url.searchParams.get("q") || "")),
     "standard query should include putter term"
   );
+});
+
+test("headcover queries drop spec tokens from browse q", async () => {
+  const browseUrls = await collectBrowseQueriesFor("Kirkland Signature KS1 HC 35in RH");
+  assert.ok(browseUrls.length > 0, "HC query should trigger browse calls");
+  for (const url of browseUrls) {
+    const qParam = url.searchParams.get("q") || "";
+    assert.match(qParam, /\bheadcover\b/i, "expected headcover token to be present");
+    assert.ok(!/\bhc\b/i.test(qParam), "expected HC abbreviation to be normalized");
+    assert.ok(!/\b35(\.\d+)?\b/.test(qParam), `length token should be removed from q (${qParam})`);
+    assert.ok(!/\b35in\b/i.test(qParam), `unit-bearing length token should be removed from q (${qParam})`);
+    assert.ok(!/\brh\b/i.test(qParam), `dexterity token should be removed from q (${qParam})`);
+  }
 });
 
 test("fetchEbayBrowse forwards supported sort options", async () => {
@@ -817,6 +875,110 @@ test("head cover query matches combined headcover token", async () => {
     res.jsonBody.offers[0]?.title,
     "Kirkland KS-1 Putter Head-Cover",
     "head cover query should match combined headcover token"
+  );
+});
+
+test("HC queries keep headcover listings without spec tokens", async () => {
+  const mod = await modulePromise;
+  const handler = mod.default;
+  assert.equal(typeof handler, "function", "default export should be a function");
+
+  const originalFetch = global.fetch;
+  const originalClientId = process.env.EBAY_CLIENT_ID;
+  const originalClientSecret = process.env.EBAY_CLIENT_SECRET;
+
+  process.env.EBAY_CLIENT_ID = "test-id";
+  process.env.EBAY_CLIENT_SECRET = "test-secret";
+
+  const browseItems = [
+    {
+      itemId: "ks1-headcover",
+      title: "Kirkland Signature KS1 Head Cover",
+      price: { value: "35", currency: "USD" },
+      itemWebUrl: "https://example.com/ks1-headcover",
+      seller: { username: "ks1-seller" },
+      image: { imageUrl: "https://example.com/ks1-headcover.jpg" },
+      shippingOptions: [
+        { shippingCost: { value: "0", currency: "USD" } },
+      ],
+      buyingOptions: ["FIXED_PRICE"],
+      itemSpecifics: [],
+      localizedAspects: [],
+      additionalProductIdentities: [],
+      returnTerms: {},
+      itemLocation: {},
+    },
+    {
+      itemId: "ks1-putter",
+      title: "Kirkland Signature KS1 Putter RH 35in",
+      price: { value: "170", currency: "USD" },
+      itemWebUrl: "https://example.com/ks1-putter",
+      seller: { username: "ks1-putter" },
+      image: { imageUrl: "https://example.com/ks1-putter.jpg" },
+      shippingOptions: [
+        { shippingCost: { value: "15", currency: "USD" } },
+      ],
+      buyingOptions: ["FIXED_PRICE"],
+      itemSpecifics: [],
+      localizedAspects: [],
+      additionalProductIdentities: [],
+      returnTerms: {},
+      itemLocation: {},
+    },
+  ];
+
+  global.fetch = async (input) => {
+    const url = typeof input === "string" ? input : input?.toString();
+    if (!url) throw new Error("Missing URL in fetch stub");
+
+    if (url.includes("/identity/")) {
+      return {
+        ok: true,
+        status: 200,
+        json: async () => ({ access_token: "fake-token", expires_in: 7200 }),
+        text: async () => "",
+      };
+    }
+
+    if (url.startsWith("https://api.ebay.com/buy/browse/v1/item_summary/search")) {
+      return {
+        ok: true,
+        status: 200,
+        json: async () => ({ itemSummaries: browseItems, total: browseItems.length }),
+        text: async () => "",
+      };
+    }
+
+    throw new Error(`Unexpected fetch URL: ${url}`);
+  };
+
+  const req = {
+    method: "GET",
+    query: {
+      q: "Kirkland Signature KS1 HC 35in RH",
+      group: "false",
+      forceCategory: "false",
+    },
+    headers: { host: "test.local", "user-agent": "node" },
+  };
+  const res = createMockRes();
+
+  try {
+    await handler(req, res);
+  } finally {
+    global.fetch = originalFetch;
+    process.env.EBAY_CLIENT_ID = originalClientId;
+    process.env.EBAY_CLIENT_SECRET = originalClientSecret;
+  }
+
+  assert.equal(res.statusCode, 200, "handler should respond with 200");
+  assert.ok(res.jsonBody, "response body should be captured");
+  assert.ok(Array.isArray(res.jsonBody.offers), "offers array should be present");
+  assert.equal(res.jsonBody.offers.length, 1, "only headcover listing should remain");
+  assert.equal(
+    res.jsonBody.offers[0]?.title,
+    "Kirkland Signature KS1 Head Cover",
+    "headcover listing without spec tokens should survive HC query",
   );
 });
 
