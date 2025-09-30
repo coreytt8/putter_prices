@@ -5,6 +5,21 @@ const { pathToFileURL } = require("node:url");
 
 const modulePromise = import(pathToFileURL(path.join(__dirname, "..", "putters.js")).href);
 
+function createMockRes() {
+  return {
+    statusCode: 200,
+    jsonBody: null,
+    status(code) {
+      this.statusCode = code;
+      return this;
+    },
+    json(body) {
+      this.jsonBody = body;
+      return this;
+    },
+  };
+}
+
 test("mapEbayItemToOffer normalizes bid count variants", async () => {
   const { mapEbayItemToOffer } = await modulePromise;
 
@@ -253,4 +268,111 @@ test("fetchEbayBrowse applies auction + hasBids filters", async () => {
   const filters = filterParam.split(",");
   assert.ok(filters.includes("buyingOptions:{AUCTION}"), "buyingOptions filter should be applied");
   assert.ok(filters.includes("bidCount:[1..]"), "bidCount filter should be applied when hasBids=true");
+});
+
+test("API handler sorts offers by total when shipping differs", async () => {
+  const mod = await modulePromise;
+  const handler = mod.default;
+  assert.equal(typeof handler, "function", "default export should be a function");
+
+  const originalFetch = global.fetch;
+  const originalClientId = process.env.EBAY_CLIENT_ID;
+  const originalClientSecret = process.env.EBAY_CLIENT_SECRET;
+
+  process.env.EBAY_CLIENT_ID = "test-id";
+  process.env.EBAY_CLIENT_SECRET = "test-secret";
+
+  const browseItems = [
+    {
+      itemId: "1",
+      title: "Test Free Ship Putter",
+      price: { value: "100", currency: "USD" },
+      itemWebUrl: "https://example.com/free",
+      seller: { username: "seller1" },
+      image: { imageUrl: "https://example.com/free.jpg" },
+      shippingOptions: [
+        { shippingCost: { value: "0", currency: "USD" } },
+      ],
+      buyingOptions: ["FIXED_PRICE"],
+      itemSpecifics: [],
+      localizedAspects: [],
+      additionalProductIdentities: [],
+      returnTerms: {},
+      itemLocation: {},
+    },
+    {
+      itemId: "2",
+      title: "Test Paid Ship Putter",
+      price: { value: "90", currency: "USD" },
+      itemWebUrl: "https://example.com/paid",
+      seller: { username: "seller2" },
+      image: { imageUrl: "https://example.com/paid.jpg" },
+      shippingOptions: [
+        { shippingCost: { value: "25", currency: "USD" } },
+      ],
+      buyingOptions: ["FIXED_PRICE"],
+      itemSpecifics: [],
+      localizedAspects: [],
+      additionalProductIdentities: [],
+      returnTerms: {},
+      itemLocation: {},
+    },
+  ];
+
+  global.fetch = async (input) => {
+    const url = typeof input === "string" ? input : input?.toString();
+    if (!url) throw new Error("Missing URL in fetch stub");
+
+    if (url.includes("/identity/")) {
+      return {
+        ok: true,
+        status: 200,
+        json: async () => ({ access_token: "fake-token", expires_in: 7200 }),
+        text: async () => "",
+      };
+    }
+
+    if (url.startsWith("https://api.ebay.com/buy/browse/v1/item_summary/search")) {
+      return {
+        ok: true,
+        status: 200,
+        json: async () => ({ itemSummaries: browseItems, total: browseItems.length }),
+        text: async () => "",
+      };
+    }
+
+    throw new Error(`Unexpected fetch URL: ${url}`);
+  };
+
+  const req = {
+    method: "GET",
+    query: {
+      q: "Test Putter",
+      group: "false",
+      samplePages: "1",
+      sort: "best_price_asc",
+      forceCategory: "false",
+    },
+    headers: { host: "test.local", "user-agent": "node" },
+  };
+  const res = createMockRes();
+
+  try {
+    await handler(req, res);
+  } finally {
+    global.fetch = originalFetch;
+    process.env.EBAY_CLIENT_ID = originalClientId;
+    process.env.EBAY_CLIENT_SECRET = originalClientSecret;
+  }
+
+  assert.equal(res.statusCode, 200, "handler should respond with 200");
+  assert.ok(res.jsonBody, "response body should be captured");
+  assert.ok(Array.isArray(res.jsonBody.offers), "offers array should be present");
+  assert.equal(res.jsonBody.offers.length, browseItems.length, "all offers should be returned");
+
+  const [first, second] = res.jsonBody.offers;
+  assert.ok(first.total < second.total, "lowest total should surface first");
+  assert.ok(first.price > second.price, "higher item price with free shipping should beat cheaper item with costly shipping");
+  assert.equal(first.title, "Test Free Ship Putter");
+  assert.equal(second.title, "Test Paid Ship Putter");
 });
