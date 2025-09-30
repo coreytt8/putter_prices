@@ -2,7 +2,12 @@
 
 import { decorateEbayUrl } from "../../lib/affiliate.js";
 import { detectDexterity, extractLengthInches } from "../../lib/specs-parse.js";
-import { containsAccessoryToken, stripAccessoryTokens } from "../../lib/sanitizeModelKey.js";
+import {
+  containsAccessoryToken,
+  stripAccessoryTokens,
+  HEAD_COVER_TOKEN_VARIANTS,
+  HEAD_COVER_TEXT_RX,
+} from "../../lib/sanitizeModelKey.js";
 
 /**
  * Required ENV (Vercel + .env.local):
@@ -25,8 +30,6 @@ const EBAY_SITE = process.env.EBAY_SITE || "EBAY_US";
 
 const CATEGORY_GOLF_CLUBS = "115280";
 const CATEGORY_PUTTER_HEADCOVERS = "36278";
-const HEAD_COVER_TOKEN_VARIANTS = new Set(["headcover", "headcovers", "hc"]);
-const HEAD_COVER_TEXT_RX = /\bhead(?:[\s/_-]*?)cover(s)?\b|headcover(s)?|\bhc\b/i;
 const ACCESSORY_BLOCK_PATTERN = /\b(shafts?|grips?|weights?)\b/i;
 const HEAD_COVER_SPEC_DROP_TOKENS = new Set([
   "lh",
@@ -304,6 +307,54 @@ function normalizeSearchQ(q = "") {
     s = canonicalizeHeadcoverPhrases(s);
     // strip any lingering putter tokens when intent is clearly headcovers
     s = s.replace(/\bputter\b/gi, " ");
+
+    const rawWords = s
+      .replace(/[“”]/g, '"')
+      .replace(/[^a-z0-9]+/gi, " ")
+      .split(/\s+/)
+      .map((word) => word.trim())
+      .filter(Boolean);
+
+    const cleanedTokens = [];
+    const seenTokens = new Set();
+    let hasHeadcoverToken = false;
+
+    for (const word of rawWords) {
+      const normalized = normalizeHeadcoverToken(word);
+      if (!normalized) continue;
+      if (normalized === "putter") continue;
+
+      if (
+        normalized === "head" ||
+        normalized === "cover" ||
+        normalized === "covers"
+      ) {
+        continue;
+      }
+
+      if (HEAD_COVER_TOKEN_VARIANTS.has(normalized)) {
+        if (!hasHeadcoverToken && !seenTokens.has("headcover")) {
+          cleanedTokens.push("headcover");
+          seenTokens.add("headcover");
+        }
+        hasHeadcoverToken = true;
+        continue;
+      }
+
+      if (shouldDropHeadcoverSpecToken(normalized)) continue;
+
+      if (!seenTokens.has(normalized)) {
+        cleanedTokens.push(normalized);
+        seenTokens.add(normalized);
+      }
+    }
+
+    if (!hasHeadcoverToken && !seenTokens.has("headcover")) {
+      cleanedTokens.unshift("headcover");
+      seenTokens.add("headcover");
+    }
+
+    s = cleanedTokens.join(" ");
     s = canonicalizeHeadcoverPhrases(s);
   } else {
     // guarantee exactly one "putter"
