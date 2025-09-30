@@ -111,6 +111,12 @@ const tokenize = (s) => {
     tokenSet.add(`${match[1]}${match[2]}`);
   }
 
+  if (HEAD_COVER_TEXT_RX.test(normalized)) {
+    for (const variant of HEAD_COVER_TOKEN_VARIANTS) {
+      tokenSet.add(variant);
+    }
+  }
+
   return Array.from(tokenSet);
 };
 
@@ -511,7 +517,7 @@ const BRAND_ASSIST_ALIASES = [
 ];
 
 const TRIVIAL_QUERY_TOKENS = (() => {
-  const trivial = new Set(["putter", "putters", "golf", "club", "clubs"]);
+  const trivial = new Set(["putter", "putters", "golf", "club", "clubs", "signature"]);
   for (const alias of BRAND_ASSIST_ALIASES) {
     for (const token of tokenize(alias)) {
       if (token.length > 1) trivial.add(token);
@@ -856,18 +862,34 @@ export default async function handler(req, res) {
       return true;
     });
 
-    const normalizedQuery = norm(q);
     const sanitizedForTokens = sanitizeQueryForTokens(q);
     const baseTokenList = tokenize(sanitizedForTokens);
-    if (/\bheadcovers?\b/.test(normalizedQuery)) {
-      baseTokenList.push("headcover");
+    const rawTokenList = tokenize(q);
+
+    if (rawTokenList.some((token) => HEAD_COVER_TOKEN_VARIANTS.has(token))) {
+      for (const variant of HEAD_COVER_TOKEN_VARIANTS) {
+        baseTokenList.push(variant);
+      }
     }
+
+    const hasHeadcoverToken = baseTokenList.some((token) => HEAD_COVER_TOKEN_VARIANTS.has(token));
 
     const queryTokens = Array.from(
       new Set(
         baseTokenList
           .map((t) => t.trim())
-          .filter((t) => (t.length > 1 || /\d/.test(t)) && !TRIVIAL_QUERY_TOKENS.has(t))
+          .filter((t) => {
+            if (!t) return false;
+            if (hasHeadcoverToken) {
+              if (t === "head" || t === "cover" || t === "covers" || t === "headcovers") {
+                return false;
+              }
+              if (/^[0-9]+[hc]$/.test(t) || /^[hc][0-9]+$/.test(t)) {
+                return false;
+              }
+            }
+            return (t.length > 1 || /\d/.test(t)) && !TRIVIAL_QUERY_TOKENS.has(t);
+          })
       )
     );
 
