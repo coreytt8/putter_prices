@@ -1,5 +1,6 @@
 /* eslint-disable no-console */
 
+import { decorateEbayUrl } from "../../lib/affiliate.js";
 import { containsAccessoryToken, stripAccessoryTokens } from "../../lib/sanitizeModelKey.js";
 
 /**
@@ -26,53 +27,6 @@ const CATEGORY_PUTTER_HEADCOVERS = "36278";
 const HEAD_COVER_TOKEN_VARIANTS = new Set(["headcover", "headcovers"]);
 const HEAD_COVER_TEXT_RX = /\bhead\s*cover(s)?\b|headcover(s)?/i;
 const ACCESSORY_BLOCK_PATTERN = /\b(shafts?|grips?|weights?)\b/i;
-
-// -------------------- EPN affiliate decorator --------------------
-const EPN = {
-  campid: process.env.EPN_CAMPID || "",
-  customid: process.env.EPN_CUSTOMID || "",
-  toolid: process.env.EPN_TOOLID || "10001",
-  mkcid: process.env.EPN_MKCID || "1",
-  mkrid: process.env.EPN_MKRID || "711-53200-19255-0",
-  siteid: process.env.EPN_SITEID || "0",
-  mkevt: process.env.EPN_MKEVT || "1",
-};
-
-function isEbayHost(hostname) {
-  if (!hostname) return false;
-  const h = hostname.toLowerCase();
-  if (h.includes("rover.ebay.")) return false; // let your direct ebay links remain direct
-  return h.includes(".ebay.");
-}
-
-function decorateEbayUrl(raw, overrides = {}) {
-  if (!raw) return raw;
-  try {
-    const u = new URL(raw);
-    if (!isEbayHost(u.hostname)) return raw;
-
-    const campid = overrides.campid ?? EPN.campid;
-    if (!campid) return raw;
-
-    const params = {
-      mkcid: overrides.mkcid ?? EPN.mkcid,
-      mkrid: overrides.mkrid ?? EPN.mkrid,
-      siteid: overrides.siteid ?? EPN.siteid,
-      campid,
-      customid: overrides.customid ?? EPN.customid,
-      toolid: overrides.toolid ?? EPN.toolid,
-      mkevt: overrides.mkevt ?? EPN.mkevt,
-    };
-    for (const [k, v] of Object.entries(params)) {
-      if (v !== undefined && v !== null && String(v).length) {
-        u.searchParams.set(k, String(v));
-      }
-    }
-    return u.toString();
-  } catch {
-    return raw;
-  }
-}
 
 // -------------------- Token --------------------
 let _tok = { val: null, exp: 0 };

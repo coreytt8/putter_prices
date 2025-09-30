@@ -9,6 +9,7 @@ import {
   containsAccessoryToken,
   HEAD_COVER_TOKEN_VARIANTS,
 } from "../../lib/sanitizeModelKey.js";
+import { decorateEbayUrl } from "../../lib/affiliate.js";
 
 const CATALOG_LOOKUP = (() => {
   const map = new Map();
@@ -384,7 +385,7 @@ export function buildDealsFromRows(rows, limit, lookbackHours = null) {
     const bestOffer = {
       itemId: row.item_id,
       title: row.title,
-      url: row.url,
+      url: decorateEbayUrl(row.url),
       price,
       total,
       shipping,
