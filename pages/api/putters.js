@@ -107,6 +107,13 @@ const safeNum = (n) => {
   return Number.isFinite(x) ? x : null;
 };
 
+const offerCost = (offer) => {
+  if (!offer || typeof offer !== "object") return null;
+  const total = safeNum(offer?.total);
+  if (total != null) return total;
+  return safeNum(offer?.price);
+};
+
 const norm = (s) => String(s || "").trim().toLowerCase();
 
 const tokenize = (s) => {
@@ -900,9 +907,17 @@ if (sort === "newlylisted") {
     return tb - ta;
   });
 } else if (sort === "best_price_desc") {
-  mergedOffers.sort((a, b) => (b.price ?? -Infinity) - (a.price ?? -Infinity));
+  mergedOffers.sort((a, b) => {
+    const ac = offerCost(a);
+    const bc = offerCost(b);
+    return (bc ?? -Infinity) - (ac ?? -Infinity);
+  });
 } else if (sort === "best_price_asc") {
-  mergedOffers.sort((a, b) => (a.price ?? Infinity) - (b.price ?? Infinity));
+  mergedOffers.sort((a, b) => {
+    const ac = offerCost(a);
+    const bc = offerCost(b);
+    return (ac ?? Infinity) - (bc ?? Infinity);
+  });
 } else if (sort === "model_asc") {
   // Use title as a proxy for model in flat view
   mergedOffers.sort((a, b) => (a.title || "").localeCompare(b.title || ""));
@@ -910,7 +925,11 @@ if (sort === "newlylisted") {
   // Not meaningful in flat view; keep as no-op
 } else {
   // default = best_price_asc to match UI default
-  mergedOffers.sort((a, b) => (a.price ?? Infinity) - (b.price ?? Infinity));
+  mergedOffers.sort((a, b) => {
+    const ac = offerCost(a);
+    const bc = offerCost(b);
+    return (ac ?? Infinity) - (bc ?? Infinity);
+  });
 }
 
 
@@ -970,7 +989,7 @@ if (sort === "newlylisted") {
         groupsMap.set(key, {
           model: key,
           image: o.image || null,
-          bestPrice: o.price ?? null,
+          bestPrice: offerCost(o),
           bestCurrency: o.currency || "USD",
           count: 0,
           retailers: new Set(),
@@ -981,8 +1000,9 @@ if (sort === "newlylisted") {
       g.count += 1;
       g.retailers.add(o.retailer || "eBay");
       g.offers.push(o);
-      if (typeof o.price === "number" && (g.bestPrice == null || o.price < g.bestPrice)) {
-        g.bestPrice = o.price;
+      const cost = offerCost(o);
+      if (typeof cost === "number" && (g.bestPrice == null || cost < g.bestPrice)) {
+        g.bestPrice = cost;
         g.bestCurrency = o.currency || g.bestCurrency || "USD";
         if (o.image) g.image = o.image;
       }
@@ -991,7 +1011,11 @@ if (sort === "newlylisted") {
     let groups = Array.from(groupsMap.values()).map((g) => ({
       ...g,
       retailers: Array.from(g.retailers),
-      offers: g.offers.sort((a, b) => (a.price ?? Infinity) - (b.price ?? Infinity)),
+      offers: g.offers.sort((a, b) => {
+        const ac = offerCost(a);
+        const bc = offerCost(b);
+        return (ac ?? Infinity) - (bc ?? Infinity);
+      }),
     }));
 
     if (sort === "newlylisted") {

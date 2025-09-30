@@ -121,6 +121,14 @@ function formatPrice(value, currency = "USD") {
     return `$${value.toFixed(2)}`;
   }
 }
+
+function offerCost(offer) {
+  if (!offer || typeof offer !== "object") return null;
+  const total = Number(offer.total);
+  if (Number.isFinite(total)) return total;
+  const price = Number(offer.price);
+  return Number.isFinite(price) ? price : null;
+}
 function timeAgo(ts) {
   if (!ts) return "";
   const mins = Math.floor((Date.now() - ts) / 60000);
@@ -1187,11 +1195,19 @@ export default function PuttersPage() {
 
                       const ordered =
                         sortBy === "best_price_desc"
-                          ? [...g.offers].sort((a, b) => (b.price ?? -Infinity) - (a.price ?? -Infinity))
-                          : [...g.offers].sort((a, b) => (a.price ?? Infinity) - (b.price ?? Infinity));
+                          ? [...g.offers].sort((a, b) => {
+                              const ac = offerCost(a);
+                              const bc = offerCost(b);
+                              return (bc ?? -Infinity) - (ac ?? -Infinity);
+                            })
+                          : [...g.offers].sort((a, b) => {
+                              const ac = offerCost(a);
+                              const bc = offerCost(b);
+                              return (ac ?? Infinity) - (bc ?? Infinity);
+                            });
 
                       const nums = ordered
-                        .map((o) => o?.price)
+                        .map((o) => offerCost(o))
                         .filter((x) => typeof x === "number")
                         .sort((a, b) => a - b);
                       const nNums = nums.length;
