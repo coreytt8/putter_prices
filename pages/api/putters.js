@@ -283,6 +283,13 @@ function normalizeBidCountValue(value, seen = new Set()) {
   return null;
 }
 
+function canonicalizeHeadcoverPhrases(text = "") {
+  if (!text) return "";
+  return String(text)
+    .replace(/\bhead(?:[\s/_-]*?)cover(?:s)?\b/gi, "headcover")
+    .replace(/\bhc\b/gi, "headcover");
+}
+
 /** Ensure every query is about putters (and improve recall) */
 function normalizeSearchQ(q = "") {
   let s = String(q || "").trim();
@@ -294,8 +301,10 @@ function normalizeSearchQ(q = "") {
   s = s.replace(/\bputters\b/gi, "putter");
 
   if (headcoverIntent) {
+    s = canonicalizeHeadcoverPhrases(s);
     // strip any lingering putter tokens when intent is clearly headcovers
     s = s.replace(/\bputter\b/gi, " ");
+    s = canonicalizeHeadcoverPhrases(s);
   } else {
     // guarantee exactly one "putter"
     if (!/\bputter\b/i.test(s)) s = `${s} putter`;
