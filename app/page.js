@@ -295,6 +295,10 @@ export default async function Home() {
                   deal?.queryVariants?.accessory ||
                   "";
                 const ctaQuery = displayedLabel || bestOfferTitle || sanitizedFallback;
+                const bestOfferUrl =
+                  typeof deal?.bestOffer?.url === "string" && deal.bestOffer.url.trim().length > 0
+                    ? deal.bestOffer.url
+                    : "";
                 return (
                   <HighlightCard key={deal.query}>
                     <div className="aspect-[3/2] w-full bg-slate-100">
@@ -349,12 +353,24 @@ export default async function Home() {
                         )}
                       </div>
                       <div className="mt-auto">
-                        <Link
-                          href={`/putters?q=${encodeURIComponent(ctaQuery)}`}
-                          className="inline-flex items-center rounded-full bg-slate-900 px-5 py-2 text-sm font-semibold text-white shadow-sm transition hover:bg-slate-700"
-                        >
-                          See the latest listings
-                        </Link>
+                        <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:gap-3">
+                          <Link
+                            href={`/putters?q=${encodeURIComponent(ctaQuery)}`}
+                            className="inline-flex items-center justify-center rounded-full bg-slate-900 px-5 py-2 text-sm font-semibold text-white shadow-sm transition hover:bg-slate-700"
+                          >
+                            See the latest listings
+                          </Link>
+                          {bestOfferUrl ? (
+                            <a
+                              href={bestOfferUrl}
+                              target="_blank"
+                              rel="noopener noreferrer"
+                              className="inline-flex items-center justify-center rounded-full border border-slate-300 px-5 py-2 text-sm font-semibold text-slate-900 transition hover:border-slate-400 hover:bg-slate-100"
+                            >
+                              Open this eBay listing
+                            </a>
+                          ) : null}
+                        </div>
                         <p className="mt-2 text-xs text-emerald-600">
                           We send you to the best eBay listing with verified savings.
                         </p>
