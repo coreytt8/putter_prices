@@ -1,6 +1,6 @@
 /* eslint-disable no-console */
 
-import { stripAccessoryTokens } from "../../lib/sanitizeModelKey.js";
+import { containsAccessoryToken, stripAccessoryTokens } from "../../lib/sanitizeModelKey.js";
 
 /**
  * Required ENV (Vercel + .env.local):
@@ -248,7 +248,30 @@ function normalizeSearchQ(q = "") {
 // Recognize putter items (title, aspects, or category path)
 function isLikelyPutter(item) {
   const title = norm(item?.title);
-  if (/\bputter\b/.test(title)) return true;
+  if (/\bputter\b/.test(title)) {
+    const tokens = title.split(/\s+/).filter(Boolean);
+    const hasHeadcoverSignal = HEAD_COVER_TEXT_RX.test(title);
+    if (!hasHeadcoverSignal) {
+      const accessoryTokens = tokens.filter((token) => {
+        const normalized = token.replace(/[^a-z0-9]/g, "").toLowerCase();
+        if (!normalized || normalized === "putter") return false;
+        if (HEAD_COVER_TOKEN_VARIANTS.has(normalized)) return false;
+        return containsAccessoryToken(token);
+      });
+
+      const substantiveTokens = tokens.filter((token) => {
+        const normalized = token.replace(/[^a-z0-9]/g, "").toLowerCase();
+        if (!normalized || normalized === "putter") return false;
+        if (HEAD_COVER_TOKEN_VARIANTS.has(normalized)) return false;
+        return !containsAccessoryToken(token);
+      });
+
+      if (accessoryTokens.length && accessoryTokens.length >= substantiveTokens.length) {
+        return false;
+      }
+    }
+    return true;
+  }
 
   const aspects = [
     ...(Array.isArray(item?.itemSpecifics) ? item.itemSpecifics : []),
@@ -468,7 +491,7 @@ function mapEbayItemToOffer(item) {
   };
 }
 
-const __testables__ = { normalizeBuyingOptions };
+const __testables__ = { normalizeBuyingOptions, isLikelyPutter };
 
 export { tokenize, mapEbayItemToOffer, fetchEbayBrowse, __testables__ };
 
