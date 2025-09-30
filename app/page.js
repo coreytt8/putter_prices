@@ -64,9 +64,26 @@ async function fetchJson(url, init) {
 export default async function Home() {
   const baseUrl = await resolveBaseUrl();
 
-  const topDealsRes = await fetchJson(`${baseUrl}/api/top-deals`, {
-    cache: "no-store",
+  const topDealsPromise = fetchJson(`${baseUrl}/api/top-deals`, {
+    next: { revalidate: 60 },
   });
+
+  const trendingPromise = fetchJson(`${baseUrl}/api/models/search?q=putter`, {
+    next: { revalidate: 300 },
+  });
+
+  const snapshotPromise = fetchJson(
+    `${baseUrl}/api/putters?q=${encodeURIComponent(DEFAULT_SNAPSHOT_QUERY)}`,
+    {
+      next: { revalidate: 300 },
+    }
+  );
+
+  const [topDealsRes, trendingRes, snapshotResponse] = await Promise.all([
+    topDealsPromise,
+    trendingPromise,
+    snapshotPromise,
+  ]);
 
   const dealsRaw = Array.isArray(topDealsRes?.deals) ? topDealsRes.deals : [];
 
@@ -101,10 +118,6 @@ export default async function Home() {
     };
   });
 
-  const trendingRes = await fetchJson(`${baseUrl}/api/models/search?q=putter`, {
-    cache: "no-store",
-  });
-
   const trending = Array.isArray(trendingRes?.models)
     ? trendingRes.models.slice(0, 6).map((m) => {
         const modelKey = m?.model_key || "";
@@ -117,13 +130,6 @@ export default async function Home() {
         };
       })
     : [];
-
-  const snapshotResponse = await fetchJson(
-    `${baseUrl}/api/putters?q=${encodeURIComponent(DEFAULT_SNAPSHOT_QUERY)}`,
-    {
-      cache: "no-store",
-    }
-  );
 
   const heroSnapshot = snapshotResponse?.analytics?.snapshot || null;
   const snapshotMeta = snapshotResponse?.meta || null;
