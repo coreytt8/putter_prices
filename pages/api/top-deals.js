@@ -70,6 +70,48 @@ const DEFAULT_LOOKBACK_WINDOWS_HOURS = [24, 72, 168];
 
 const HEAD_COVER_TEXT_RX = /\b(head\s*cover|headcover|with\s*cover|includes\s*cover|hc)\b/i;
 
+const CONNECTOR_TOKENS = new Set([
+  "for",
+  "with",
+  "and",
+  "the",
+  "a",
+  "to",
+  "of",
+  "by",
+  "from",
+  "in",
+  "on",
+  "at",
+  "&",
+  "+",
+  "plus",
+  "or",
+]);
+
+const NUMERIC_TOKEN_PATTERN = /^\d+(?:\.\d+)?$/;
+const MEASUREMENT_TOKEN_PATTERN = /^\d+(?:\.\d+)?(?:in|cm|mm|g|gram|grams)$/;
+const PACK_TOKEN_PATTERN = /^(?:\d+(?:\/\d+)?(?:pc|pcs|pack)s?|\d+(?:pcs?)|pcs?|pack)$/;
+const ACCESSORY_COMBO_TOKENS = new Set([
+  "weight",
+  "weights",
+  "counterweight",
+  "counterweights",
+  "fit",
+  "fits",
+  "fitting",
+  "compatible",
+  "compatibility",
+  "adapter",
+  "adapters",
+  "kit",
+  "kits",
+  "wrench",
+  "wrenches",
+  "tool",
+  "tools",
+]);
+
 function isAccessoryDominatedTitle(title = "") {
   if (!title) return false;
 
@@ -80,19 +122,32 @@ function isAccessoryDominatedTitle(title = "") {
 
   let accessoryCount = 0;
   let substantiveCount = 0;
+  const analysisTokens = [];
 
   for (const token of tokens) {
     const normalizedToken = token.replace(/[^a-z0-9]/gi, "").toLowerCase();
-    if (!normalizedToken || normalizedToken === "putter") continue;
+    if (!normalizedToken) continue;
     if (HEAD_COVER_TOKEN_VARIANTS.has(normalizedToken)) {
       hasHeadcoverSignal = true;
       continue;
     }
-    if (containsAccessoryToken(token)) {
+    const isNumeric = NUMERIC_TOKEN_PATTERN.test(normalizedToken);
+    const isMeasurement = MEASUREMENT_TOKEN_PATTERN.test(normalizedToken);
+    const isConnector = CONNECTOR_TOKENS.has(normalizedToken);
+    const isPutter = normalizedToken === "putter";
+    const isFiller =
+      isPutter || isConnector || isNumeric || isMeasurement;
+    const isAccessory = !isPutter && containsAccessoryToken(token);
+    if (isAccessory) {
       accessoryCount++;
-    } else {
+    } else if (!isFiller) {
       substantiveCount++;
     }
+    analysisTokens.push({
+      normalized: normalizedToken,
+      isAccessory,
+      isFiller,
+    });
   }
 
   const strippedTokens = stripAccessoryTokens(raw)
@@ -102,12 +157,62 @@ function isAccessoryDominatedTitle(title = "") {
       (token) =>
         token &&
         token !== "putter" &&
-        !HEAD_COVER_TOKEN_VARIANTS.has(token)
+        !HEAD_COVER_TOKEN_VARIANTS.has(token) &&
+        !CONNECTOR_TOKENS.has(token) &&
+        !NUMERIC_TOKEN_PATTERN.test(token) &&
+        !MEASUREMENT_TOKEN_PATTERN.test(token)
     );
   const remainingCount = strippedTokens.length;
 
+  let leadingAccessoryCount = 0;
+  let seenSubstantive = false;
+  for (const token of analysisTokens) {
+    if (token.isFiller) continue;
+    if (token.isAccessory) {
+      if (seenSubstantive) {
+        break;
+      }
+      leadingAccessoryCount++;
+    } else {
+      seenSubstantive = true;
+    }
+  }
+
+  let hasFitToken = false;
+  let hasWeightToken = false;
+  let packTokenCount = 0;
+  let accessoryCueTokenCount = 0;
+  for (const token of analysisTokens) {
+    const normalized = token.normalized;
+    if (!normalized) continue;
+    if (!hasFitToken && (normalized === "fit" || normalized === "fits" || normalized === "fitting" || normalized.startsWith("compat"))) {
+      hasFitToken = true;
+    }
+    if (!hasWeightToken && /weight/.test(normalized)) {
+      hasWeightToken = true;
+    }
+    const isPackToken = PACK_TOKEN_PATTERN.test(normalized);
+    if (isPackToken) {
+      packTokenCount++;
+    }
+    if (ACCESSORY_COMBO_TOKENS.has(normalized) || isPackToken) {
+      accessoryCueTokenCount++;
+    }
+  }
+
+  const strongAccessoryCombo =
+    accessoryCount >= 2 &&
+    (leadingAccessoryCount >= 2 ||
+      (packTokenCount > 0 && (hasWeightToken || hasFitToken)) ||
+      (hasWeightToken && hasFitToken) ||
+      accessoryCueTokenCount >= 3);
+
   if (hasHeadcoverSignal) {
     return false;
+  }
+
+  if (strongAccessoryCombo) {
+    return true;
   }
 
   if (!remainingCount) {
