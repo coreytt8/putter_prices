@@ -277,7 +277,11 @@ export default async function Home() {
                   Number.isFinite(median) && Number.isFinite(deal.bestPrice) && median > 0
                     ? Math.round(((median - deal.bestPrice) / median) * 100)
                     : null;
-                const accessoryCtaQuery = deal?.queryVariants?.accessory || deal.query;
+                const ctaQuery =
+                  deal?.queryVariants?.clean ||
+                  deal?.query ||
+                  deal?.queryVariants?.accessory ||
+                  "";
                 return (
                   <HighlightCard key={deal.query}>
                     <div className="aspect-[3/2] w-full bg-slate-100">
@@ -333,7 +337,7 @@ export default async function Home() {
                       </div>
                       <div className="mt-auto">
                         <Link
-                          href={`/putters?q=${encodeURIComponent(accessoryCtaQuery || "")}`}
+                          href={`/putters?q=${encodeURIComponent(ctaQuery)}`}
                           className="inline-flex items-center rounded-full bg-slate-900 px-5 py-2 text-sm font-semibold text-white shadow-sm transition hover:bg-slate-700"
                         >
                           See the latest listings
