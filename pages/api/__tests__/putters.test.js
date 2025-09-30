@@ -20,6 +20,77 @@ function createMockRes() {
   };
 }
 
+async function collectBrowseQueriesFor(searchQuery) {
+  const mod = await modulePromise;
+  const handler = mod.default;
+  assert.equal(typeof handler, "function", "default export should be a function");
+  const { __testables__ } = mod;
+
+  if (__testables__?.resetTokenCache) {
+    __testables__.resetTokenCache();
+  }
+
+  const originalFetch = global.fetch;
+  const originalClientId = process.env.EBAY_CLIENT_ID;
+  const originalClientSecret = process.env.EBAY_CLIENT_SECRET;
+
+  process.env.EBAY_CLIENT_ID = "test-id";
+  process.env.EBAY_CLIENT_SECRET = "test-secret";
+
+  const browseUrls = [];
+
+  global.fetch = async (input) => {
+    const url = typeof input === "string" ? input : input?.toString();
+    if (!url) throw new Error("Missing URL in fetch stub");
+
+    if (url.includes("/identity/")) {
+      return {
+        ok: true,
+        status: 200,
+        json: async () => ({ access_token: "fake-token", expires_in: 7200 }),
+        text: async () => "",
+      };
+    }
+
+    if (url.startsWith("https://api.ebay.com/buy/browse/v1/item_summary/search")) {
+      browseUrls.push(new URL(url));
+      return {
+        ok: true,
+        status: 200,
+        json: async () => ({ itemSummaries: [], total: 0 }),
+        text: async () => "",
+      };
+    }
+
+    throw new Error(`Unexpected fetch URL: ${url}`);
+  };
+
+  const req = {
+    method: "GET",
+    query: {
+      q: searchQuery,
+      group: "false",
+      samplePages: "1",
+    },
+    headers: { host: "test.local", "user-agent": "node" },
+  };
+  const res = createMockRes();
+
+  try {
+    await handler(req, res);
+  } finally {
+    global.fetch = originalFetch;
+    process.env.EBAY_CLIENT_ID = originalClientId;
+    process.env.EBAY_CLIENT_SECRET = originalClientSecret;
+    if (__testables__?.resetTokenCache) {
+      __testables__.resetTokenCache();
+    }
+  }
+
+  assert.equal(res.statusCode, 200, "handler should respond with 200");
+  return browseUrls;
+}
+
 test("mapEbayItemToOffer normalizes bid count variants", async () => {
   const { mapEbayItemToOffer } = await modulePromise;
 
@@ -171,6 +242,50 @@ test("tokenize + queryMentionsHeadcover handle punctuated head cover text", asyn
   assert.ok(
     queryMentionsHeadcover("Premium Head/Cover Protector"),
     "queryMentionsHeadcover should treat punctuation like whitespace"
+  );
+});
+
+test("normalizeSearchQ + recall helpers avoid putter for headcover intent", async () => {
+  const { __testables__ } = await modulePromise;
+  const { normalizeSearchQ, buildLimitedRecallQueries } = __testables__;
+
+  assert.equal(typeof normalizeSearchQ, "function", "normalizeSearchQ should be exposed");
+  assert.equal(typeof buildLimitedRecallQueries, "function", "buildLimitedRecallQueries should be exposed");
+
+  const headcoverRaw = "Scotty Cameron Putter Headcover";
+  const headcoverNormalized = normalizeSearchQ(headcoverRaw);
+  assert.ok(/headcover/i.test(headcoverNormalized), "headcover token should remain");
+  assert.ok(!/\bputter\b/i.test(headcoverNormalized), "putter should be stripped for headcover intent");
+
+  const headcoverRecall = buildLimitedRecallQueries(headcoverRaw, headcoverNormalized);
+  assert.ok(headcoverRecall.length > 0, "headcover recall variants should be produced");
+  for (const variant of headcoverRecall) {
+    assert.ok(!/\bputter\b/i.test(variant), `headcover recall variant should not include putter: ${variant}`);
+  }
+
+  const putterRaw = "Bettinardi BB8";
+  const putterNormalized = normalizeSearchQ(putterRaw);
+  assert.ok(/\bputter\b/i.test(putterNormalized), "regular putter search should include putter");
+
+  const putterRecall = buildLimitedRecallQueries(putterRaw, putterNormalized);
+  assert.ok(putterRecall.some((variant) => /\bputter\b/i.test(variant)), "putter recall variants should retain putter");
+});
+
+test("handler eBay calls omit putter for headcover queries", async () => {
+  const browseUrls = await collectBrowseQueriesFor("Scotty Cameron headcover");
+  assert.ok(browseUrls.length > 0, "headcover query should trigger eBay browse calls");
+  for (const url of browseUrls) {
+    const qParam = url.searchParams.get("q") || "";
+    assert.ok(!/\bputter\b/i.test(qParam), `headcover query should not include putter (saw: ${qParam})`);
+  }
+});
+
+test("handler eBay calls retain putter for standard putter searches", async () => {
+  const browseUrls = await collectBrowseQueriesFor("Scotty Cameron Newport 2");
+  assert.ok(browseUrls.length > 0, "standard query should trigger eBay browse calls");
+  assert.ok(
+    browseUrls.some((url) => /\bputter\b/i.test(url.searchParams.get("q") || "")),
+    "standard query should include putter term"
   );
 });
 

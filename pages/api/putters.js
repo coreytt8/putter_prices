@@ -63,6 +63,10 @@ async function getEbayToken() {
   return _tok.val;
 }
 
+function resetTokenCache() {
+  _tok = { val: null, exp: 0 };
+}
+
 // -------------------- Helpers --------------------
 const safeNum = (n) => {
   const x = Number(n);
@@ -195,12 +199,19 @@ function normalizeSearchQ(q = "") {
   let s = String(q || "").trim();
   if (!s) return s;
 
+  const headcoverIntent = queryMentionsHeadcover(s);
+
   // singularize "putters" → "putter"
   s = s.replace(/\bputters\b/gi, "putter");
 
-  // guarantee exactly one "putter"
-  if (!/\bputter\b/i.test(s)) s = `${s} putter`;
-  s = s.replace(/\b(putter)(\s+\1)+\b/gi, "putter");
+  if (headcoverIntent) {
+    // strip any lingering putter tokens when intent is clearly headcovers
+    s = s.replace(/\bputter\b/gi, " ");
+  } else {
+    // guarantee exactly one "putter"
+    if (!/\bputter\b/i.test(s)) s = `${s} putter`;
+    s = s.replace(/\b(putter)(\s+\1)+\b/gi, "putter");
+  }
 
   return s.replace(/\s+/g, " ").trim();
 }
@@ -451,7 +462,14 @@ function mapEbayItemToOffer(item) {
   };
 }
 
-const __testables__ = { normalizeBuyingOptions, isLikelyPutter, queryMentionsHeadcover };
+const __testables__ = {
+  normalizeBuyingOptions,
+  isLikelyPutter,
+  queryMentionsHeadcover,
+  normalizeSearchQ,
+  buildLimitedRecallQueries,
+  resetTokenCache,
+};
 
 export { tokenize, mapEbayItemToOffer, fetchEbayBrowse, __testables__ };
 
@@ -592,6 +610,7 @@ function buildLimitedRecallQueries(rawQ, normalizedQ) {
 
   const brandInQ = detectBrandInText(rawQ);
   const n = norm(rawQ);
+  const headcoverIntent = queryMentionsHeadcover(rawQ);
 
   // Brand-specific assists
   for (const [brand, tokens] of Object.entries(BRAND_LIMITED_TOKENS)) {
@@ -599,7 +618,7 @@ function buildLimitedRecallQueries(rawQ, normalizedQ) {
     const tokensPresent = hasAnyToken(n, tokens);
     if (brandMentioned || tokensPresent) {
       qset.add(normalizeSearchQ(`${brand} ${rawQ}`));
-      if (!/\bputter\b/i.test(rawQ)) qset.add(normalizeSearchQ(`${brand} ${rawQ} putter`));
+      if (!headcoverIntent && !/\bputter\b/i.test(rawQ)) qset.add(normalizeSearchQ(`${brand} ${rawQ} putter`));
     }
   }
 
