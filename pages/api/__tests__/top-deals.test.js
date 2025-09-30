@@ -181,3 +181,39 @@ test("buildDealsFromRows decorates URLs with affiliate params when configured", 
     process.env.EPN_MKEVT = originalEnv.mkevt;
   }
 });
+
+test("buildDealsFromRows omits compatibility accessory listings", async () => {
+  const { buildDealsFromRows } = await modulePromise;
+
+  const rows = [
+    {
+      model_key: "titleist_scotty_cameron_super_select",
+      brand: "Titleist",
+      title: "2/10pcs Weight Fit for Scotty Cameron Putter",
+      image_url: "https://example.com/accessory.jpg",
+      url: "https://example.com/listing",
+      currency: "USD",
+      head_type: "Blade",
+      dexterity: "Right",
+      length_in: null,
+      item_id: "456",
+      price: 25,
+      shipping: 5,
+      total: 30,
+      observed_at: "2024-01-02T18:00:00.000Z",
+      condition: "NEW",
+      n: 10,
+      window_days: 30,
+      p10_cents: 9000,
+      p50_cents: 15000,
+      p90_cents: 21000,
+      dispersion_ratio: 0.3,
+      updated_at: "2024-01-02T17:00:00Z",
+      listing_count: 4,
+    },
+  ];
+
+  const deals = buildDealsFromRows(rows, 5);
+
+  assert.equal(deals.length, 0);
+});
