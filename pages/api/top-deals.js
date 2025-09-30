@@ -3,11 +3,7 @@ export const runtime = "nodejs";
 import { getSql } from "../../lib/db.js";
 import { PUTTER_CATALOG } from "../../lib/data/putterCatalog.js";
 import { normalizeModelKey } from "../../lib/normalize.js";
-import {
-  sanitizeModelKey,
-  stripAccessoryTokens,
-  containsAccessoryToken,
-} from "../../lib/sanitizeModelKey.js";
+import { sanitizeModelKey, stripAccessoryTokens } from "../../lib/sanitizeModelKey.js";
 
 const CATALOG_LOOKUP = (() => {
   const map = new Map();
@@ -177,7 +173,7 @@ async function queryTopDeals(sql, since) {
     `;
 }
 
-function buildDealsFromRows(rows, limit, lookbackHours = null) {
+export function buildDealsFromRows(rows, limit, lookbackHours = null) {
   const grouped = new Map();
 
   for (const row of rows) {
@@ -280,11 +276,12 @@ function buildDealsFromRows(rows, limit, lookbackHours = null) {
     }
 
     const labelWasAccessoryOnly = Boolean(rawLabelWithAccessories) && !cleanLabelWithoutAccessories;
-    const titleIncludesAccessoryTokens = containsAccessoryToken(row.title);
-    const shouldPreserveAccessories =
-      Boolean(accessoryQuery) && (labelWasAccessoryOnly || titleIncludesAccessoryTokens);
-    if (shouldPreserveAccessories) {
+    const shouldPromoteAccessoryQuery =
+      Boolean(accessoryQuery) && labelWasAccessoryOnly && !cleanQuery;
+    if (shouldPromoteAccessoryQuery) {
       query = accessoryQuery;
+    } else if (cleanQuery) {
+      query = cleanQuery;
     }
 
     const currency = row.currency || "USD";
