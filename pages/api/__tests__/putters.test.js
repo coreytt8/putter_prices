@@ -377,6 +377,16 @@ test("handler eBay calls retain putter for standard putter searches", async () =
   );
 });
 
+test("handler passes decimal search terms through to eBay", async () => {
+  const search = "Scotty Cameron Studio Style Newport 2.5";
+  const browseUrls = await collectBrowseQueriesFor(search);
+  assert.ok(browseUrls.length > 0, "decimal query should trigger eBay browse calls");
+  for (const url of browseUrls) {
+    const qParam = url.searchParams.get("q") || "";
+    assert.ok(qParam.includes("2.5"), `expected decimal to persist in browse URL (saw: ${qParam})`);
+  }
+});
+
 test("fetchEbayBrowse forwards supported sort options", async () => {
   const { fetchEbayBrowse } = await modulePromise;
 
