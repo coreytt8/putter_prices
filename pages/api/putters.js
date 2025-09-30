@@ -21,6 +21,12 @@ import { stripAccessoryTokens } from "../../lib/sanitizeModelKey.js";
 const EBAY_BROWSE_URL = "https://api.ebay.com/buy/browse/v1/item_summary/search";
 const EBAY_SITE = process.env.EBAY_SITE || "EBAY_US";
 
+const CATEGORY_GOLF_CLUBS = "115280";
+const CATEGORY_PUTTER_HEADCOVERS = "36278";
+const HEAD_COVER_TOKEN_VARIANTS = new Set(["headcover", "headcovers"]);
+const HEAD_COVER_TEXT_RX = /\bhead\s*cover(s)?\b|headcover(s)?/i;
+const ACCESSORY_BLOCK_PATTERN = /\b(shafts?|grips?|weights?)\b/i;
+
 // -------------------- EPN affiliate decorator --------------------
 const EPN = {
   campid: process.env.EPN_CAMPID || "",
@@ -557,6 +563,32 @@ function sanitizeQueryForTokens(raw = "") {
   return sanitized.replace(/\s+/g, " ").trim();
 }
 
+function queryMentionsHeadcover(raw = "") {
+  if (!raw) return false;
+
+  const normalized = norm(raw);
+  if (!normalized) return false;
+  if (HEAD_COVER_TEXT_RX.test(normalized)) return true;
+
+  const rawTokens = tokenize(raw)
+    .map((token) => norm(token))
+    .filter(Boolean);
+  if (rawTokens.some((token) => HEAD_COVER_TOKEN_VARIANTS.has(token))) {
+    return true;
+  }
+
+  const sanitized = sanitizeQueryForTokens(raw);
+  if (!sanitized) return false;
+
+  const sanitizedNormalized = norm(sanitized);
+  if (HEAD_COVER_TEXT_RX.test(sanitizedNormalized)) return true;
+
+  const sanitizedTokens = tokenize(sanitized)
+    .map((token) => norm(token))
+    .filter(Boolean);
+  return sanitizedTokens.some((token) => HEAD_COVER_TOKEN_VARIANTS.has(token));
+}
+
 function hasAnyToken(text, tokens) {
   const n = norm(text);
   return tokens.some(t => n.includes(norm(t)));
@@ -629,7 +661,13 @@ async function fetchEbayBrowse({
   };
   const ebaySort = sortMap[normalizedSort];
   if (ebaySort) url.searchParams.set("sort", ebaySort);
-  if (forceCategory) url.searchParams.set("category_ids", "115280"); // Golf Clubs (covers putters)
+  if (forceCategory) {
+    const categoryIds = new Set([CATEGORY_GOLF_CLUBS]);
+    if (queryMentionsHeadcover(q)) {
+      categoryIds.add(CATEGORY_PUTTER_HEADCOVERS);
+    }
+    url.searchParams.set("category_ids", Array.from(categoryIds).join(","));
+  }
 
   const filterParts = [];
   if (Array.isArray(buyingOptions) && buyingOptions.length) {
@@ -778,6 +816,16 @@ export default async function handler(req, res) {
 
     // Strict "putter only" filter
     items = items.filter(isLikelyPutter);
+
+    const headcoverQuery = queryMentionsHeadcover(rawQ);
+    if (headcoverQuery) {
+      items = items.filter((item) => {
+        const title = norm(item?.title);
+        if (!title) return false;
+        if (ACCESSORY_BLOCK_PATTERN.test(title)) return false;
+        return true;
+      });
+    }
 
     const fetchedCount = items.length;
 
