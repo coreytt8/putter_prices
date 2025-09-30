@@ -3,7 +3,12 @@ export const runtime = "nodejs";
 import { getSql } from "../../lib/db.js";
 import { PUTTER_CATALOG } from "../../lib/data/putterCatalog.js";
 import { normalizeModelKey } from "../../lib/normalize.js";
-import { sanitizeModelKey, stripAccessoryTokens } from "../../lib/sanitizeModelKey.js";
+import {
+  sanitizeModelKey,
+  stripAccessoryTokens,
+  containsAccessoryToken,
+  HEAD_COVER_TOKEN_VARIANTS,
+} from "../../lib/sanitizeModelKey.js";
 
 const CATALOG_LOOKUP = (() => {
   const map = new Map();
@@ -61,6 +66,69 @@ function ensurePutterQuery(text = "") {
 }
 
 const DEFAULT_LOOKBACK_WINDOWS_HOURS = [24, 72, 168];
+
+const HEAD_COVER_TEXT_RX = /\b(head\s*cover|headcover|with\s*cover|includes\s*cover|hc)\b/i;
+
+function isAccessoryDominatedTitle(title = "") {
+  if (!title) return false;
+
+  const raw = String(title);
+  let hasHeadcoverSignal = HEAD_COVER_TEXT_RX.test(raw);
+  const hasPutterToken = /\bputter\b/i.test(raw);
+  const tokens = raw.split(/\s+/).filter(Boolean);
+
+  let accessoryCount = 0;
+  let substantiveCount = 0;
+
+  for (const token of tokens) {
+    const normalizedToken = token.replace(/[^a-z0-9]/gi, "").toLowerCase();
+    if (!normalizedToken || normalizedToken === "putter") continue;
+    if (HEAD_COVER_TOKEN_VARIANTS.has(normalizedToken)) {
+      hasHeadcoverSignal = true;
+      continue;
+    }
+    if (containsAccessoryToken(token)) {
+      accessoryCount++;
+    } else {
+      substantiveCount++;
+    }
+  }
+
+  const strippedTokens = stripAccessoryTokens(raw)
+    .split(/\s+/)
+    .map((token) => token.replace(/[^a-z0-9]/gi, "").toLowerCase())
+    .filter(
+      (token) =>
+        token &&
+        token !== "putter" &&
+        !HEAD_COVER_TOKEN_VARIANTS.has(token)
+    );
+  const remainingCount = strippedTokens.length;
+
+  if (hasHeadcoverSignal) {
+    return false;
+  }
+
+  if (!remainingCount) {
+    return true;
+  }
+
+  if (!hasPutterToken && accessoryCount) {
+    if (accessoryCount >= remainingCount || accessoryCount >= 2) {
+      return true;
+    }
+  }
+
+  if (!accessoryCount) {
+    return false;
+  }
+
+  if (substantiveCount && accessoryCount < substantiveCount) {
+    return false;
+  }
+
+  return accessoryCount >= remainingCount;
+}
 
 async function queryTopDeals(sql, since) {
   return sql`
@@ -179,6 +247,10 @@ export function buildDealsFromRows(rows, limit, lookbackHours = null) {
   for (const row of rows) {
     const modelKey = row.model_key || "";
     if (!modelKey) continue;
+
+    if (isAccessoryDominatedTitle(row?.title || "")) {
+      continue;
+    }
 
     const total = toNumber(row.total);
     const price = toNumber(row.price);

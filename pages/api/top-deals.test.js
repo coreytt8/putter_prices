@@ -56,3 +56,37 @@ test("buildDealsFromRows keeps clean putter query primary when accessories appea
     "Expected the exported query to remain on the clean variant"
   );
 });
+
+test("buildDealsFromRows filters out accessory dominated weight kit rows", () => {
+  const rows = [
+    createRow({
+      item_id: "weight-kit",
+      model_key: "Scotty Cameron|Phantom X 5|Weight Kit",
+      title: "Scotty Cameron Phantom X 5 weight kit 2pcs 10g",
+      total: 150,
+      price: 150,
+      p50_cents: 40000,
+    }),
+  ];
+
+  const deals = buildDealsFromRows(rows, 5);
+
+  assert.equal(deals.length, 0, "weight kit rows should be ignored");
+});
+
+test("buildDealsFromRows keeps headcover rows even with accessory tokens", () => {
+  const rows = [
+    createRow({
+      item_id: "headcover-kit",
+      title: "Scotty Cameron Phantom X 5 headcover weight kit bundle",
+      total: 150,
+      price: 150,
+      p50_cents: 40000,
+    }),
+  ];
+
+  const deals = buildDealsFromRows(rows, 5);
+
+  assert.equal(deals.length, 1, "headcover listings should remain");
+  assert.equal(deals[0].bestOffer.itemId, "headcover-kit");
+});
