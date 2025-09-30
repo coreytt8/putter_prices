@@ -1,7 +1,14 @@
 /* eslint-disable no-console */
 
 import { decorateEbayUrl } from "../../lib/affiliate.js";
-import { containsAccessoryToken, stripAccessoryTokens } from "../../lib/sanitizeModelKey.js";
+import {
+  containsAccessoryToken,
+  stripAccessoryTokens,
+  HEAD_COVER_CANONICAL_TOKEN,
+  HEAD_COVER_TOKEN_VARIANTS,
+  HEAD_COVER_TEXT_RX,
+  canonicalizeHeadcoverText,
+} from "../../lib/sanitizeModelKey.js";
 
 /**
  * Required ENV (Vercel + .env.local):
@@ -24,9 +31,48 @@ const EBAY_SITE = process.env.EBAY_SITE || "EBAY_US";
 
 const CATEGORY_GOLF_CLUBS = "115280";
 const CATEGORY_PUTTER_HEADCOVERS = "36278";
-const HEAD_COVER_TOKEN_VARIANTS = new Set(["headcover", "headcovers"]);
-const HEAD_COVER_TEXT_RX = /\bhead(?:[\s/_-]*?)cover(s)?\b|headcover(s)?/i;
 const ACCESSORY_BLOCK_PATTERN = /\b(shafts?|grips?|weights?)\b/i;
+const HEAD_COVER_TEXT_GLOBAL_RX = new RegExp(HEAD_COVER_TEXT_RX.source, "gi");
+
+const DEXTERITY_TOKENS = new Set([
+  "rh",
+  "lh",
+  "right",
+  "left",
+  "righty",
+  "lefty",
+  "righthand",
+  "lefthand",
+  "right-hand",
+  "left-hand",
+  "right-handed",
+  "left-handed",
+  "hand",
+  "handed",
+  "dex",
+  "dexterity",
+]);
+const LENGTH_TOKEN_WITH_UNITS_RX = /^(?:\d+(?:\.\d+)?)(?:in|inch|inches|"|”)?$/i;
+
+function isLengthToken(token = "") {
+  if (!token) return false;
+  const normalized = token.toLowerCase();
+  if (/^(?:in|inch|inches)$/i.test(token)) return true;
+  if (LENGTH_TOKEN_WITH_UNITS_RX.test(normalized)) {
+    const numericPortion = normalized.replace(/[^0-9.]/g, "");
+    const numericValue = Number(numericPortion);
+    if (Number.isFinite(numericValue) && numericValue >= 30 && numericValue <= 50) {
+      return true;
+    }
+  }
+  if (/^\d+(?:\.\d+)?$/.test(normalized)) {
+    const numericValue = Number(normalized);
+    if (Number.isFinite(numericValue) && numericValue >= 30 && numericValue <= 50) {
+      return true;
+    }
+  }
+  return false;
+}
 
 // -------------------- Token --------------------
 let _tok = { val: null, exp: 0 };
@@ -85,7 +131,7 @@ const norm = (s) => String(s || "").trim().toLowerCase();
 const tokenize = (s) => {
   if (!s) return [];
 
-  const normalized = norm(s);
+  const normalized = canonicalizeHeadcoverText(norm(s));
   const tokenSet = new Set();
 
   const spaced = normalized
@@ -116,9 +162,8 @@ const tokenize = (s) => {
   }
 
   if (HEAD_COVER_TEXT_RX.test(normalized)) {
-    for (const variant of HEAD_COVER_TOKEN_VARIANTS) {
-      tokenSet.add(variant);
-    }
+    tokenSet.add(HEAD_COVER_CANONICAL_TOKEN);
+    tokenSet.add("headcovers");
   }
 
   return Array.from(tokenSet);
@@ -207,6 +252,36 @@ function normalizeSearchQ(q = "") {
   if (headcoverIntent) {
     // strip any lingering putter tokens when intent is clearly headcovers
     s = s.replace(/\bputter\b/gi, " ");
+    HEAD_COVER_TEXT_GLOBAL_RX.lastIndex = 0;
+    s = canonicalizeHeadcoverText(s.replace(HEAD_COVER_TEXT_GLOBAL_RX, HEAD_COVER_CANONICAL_TOKEN));
+
+    const tokens = s.split(/\s+/).filter(Boolean);
+    const filteredTokens = [];
+    let hasHeadcover = false;
+
+    for (const token of tokens) {
+      const normalizedToken = token.toLowerCase();
+      if (normalizedToken === HEAD_COVER_CANONICAL_TOKEN) {
+        if (!hasHeadcover) {
+          filteredTokens.push(HEAD_COVER_CANONICAL_TOKEN);
+          hasHeadcover = true;
+        }
+        continue;
+      }
+      if (DEXTERITY_TOKENS.has(normalizedToken)) {
+        continue;
+      }
+      if (isLengthToken(normalizedToken)) {
+        continue;
+      }
+      filteredTokens.push(token);
+    }
+
+    if (!hasHeadcover) {
+      filteredTokens.push(HEAD_COVER_CANONICAL_TOKEN);
+    }
+
+    s = filteredTokens.join(" ");
   } else {
     // guarantee exactly one "putter"
     if (!/\bputter\b/i.test(s)) s = `${s} putter`;
@@ -557,9 +632,12 @@ function sanitizeQueryForTokens(raw = "") {
   if (!normalized) return "";
 
   let sanitized = stripAccessoryTokens(normalized);
+  sanitized = canonicalizeHeadcoverText(sanitized);
   for (const pattern of QUERY_TOKEN_SANITIZE_PATTERNS) {
     sanitized = sanitized.replace(pattern, " ");
   }
+
+  sanitized = canonicalizeHeadcoverText(sanitized);
 
   return sanitized.replace(/\s+/g, " ").trim();
 }
@@ -664,11 +742,11 @@ async function fetchEbayBrowse({
   const ebaySort = sortMap[normalizedSort];
   if (ebaySort) url.searchParams.set("sort", ebaySort);
   if (forceCategory) {
-    const categoryIds = new Set([CATEGORY_GOLF_CLUBS]);
     if (queryMentionsHeadcover(q)) {
-      categoryIds.add(CATEGORY_PUTTER_HEADCOVERS);
+      url.searchParams.set("category_ids", CATEGORY_PUTTER_HEADCOVERS);
+    } else {
+      url.searchParams.set("category_ids", CATEGORY_GOLF_CLUBS);
     }
-    url.searchParams.set("category_ids", Array.from(categoryIds).join(","));
   }
 
   const filterParts = [];
@@ -891,35 +969,39 @@ export default async function handler(req, res) {
     const baseTokenList = tokenize(sanitizedForTokens);
     const rawTokenList = tokenize(q);
 
-    if (rawTokenList.some((token) => HEAD_COVER_TOKEN_VARIANTS.has(token))) {
-      for (const variant of HEAD_COVER_TOKEN_VARIANTS) {
-        baseTokenList.push(variant);
-      }
+    const normalizedQuery = norm(q);
+    const augmentedTokenList = [...baseTokenList];
+    const headcoverInRaw =
+      HEAD_COVER_TEXT_RX.test(normalizedQuery) ||
+      rawTokenList.some((token) => HEAD_COVER_TOKEN_VARIANTS.has(token));
+
+    if (headcoverInRaw) {
+      augmentedTokenList.push(HEAD_COVER_CANONICAL_TOKEN);
     }
 
-    const hasHeadcoverToken = baseTokenList.some((token) => HEAD_COVER_TOKEN_VARIANTS.has(token));
+    const canonicalTokenList = augmentedTokenList
+      .map((t) => String(t || "").trim().toLowerCase())
+      .filter(Boolean)
+      .map((token) =>
+        HEAD_COVER_TOKEN_VARIANTS.has(token) ? HEAD_COVER_CANONICAL_TOKEN : token
+      );
+
+    const hasHeadcoverToken = canonicalTokenList.includes(HEAD_COVER_CANONICAL_TOKEN);
 
     const queryTokens = Array.from(
       new Set(
-        baseTokenList
-          .map((t) => t.trim())
-          .filter((t) => {
-            if (!t) return false;
-            if (hasHeadcoverToken) {
-              if (t === "head" || t === "cover" || t === "covers" || t === "headcovers") {
-                return false;
-              }
-              if (
-                /^[0-9]+[hc]$/.test(t) ||
-                /^[hc][0-9]+$/.test(t) ||
-                /^[0-9]+(?:head|cover|covers)$/.test(t) ||
-                /^(?:head|cover|covers)[0-9]+$/.test(t)
-              ) {
-                return false;
-              }
+        canonicalTokenList.filter((token) => {
+          if (!token) return false;
+          if (hasHeadcoverToken) {
+            if (token === HEAD_COVER_CANONICAL_TOKEN) return true;
+            if (token === "head" || token === "cover" || token === "covers") {
+              return false;
             }
-            return (t.length > 1 || /\d/.test(t)) && !TRIVIAL_QUERY_TOKENS.has(t);
-          })
+            if (DEXTERITY_TOKENS.has(token)) return false;
+            if (isLengthToken(token)) return false;
+          }
+          return (token.length > 1 || /\d/.test(token)) && !TRIVIAL_QUERY_TOKENS.has(token);
+        })
       )
     );
 
