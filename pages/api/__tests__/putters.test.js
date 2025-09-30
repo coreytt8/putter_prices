@@ -514,6 +514,110 @@ test("API handler keeps offers when titles omit filler descriptors", async () =>
   );
 });
 
+test("headcover-only listings survive strict putter filter when requested", async () => {
+  const mod = await modulePromise;
+  const handler = mod.default;
+  assert.equal(typeof handler, "function", "default export should be a function");
+
+  const originalFetch = global.fetch;
+  const originalClientId = process.env.EBAY_CLIENT_ID;
+  const originalClientSecret = process.env.EBAY_CLIENT_SECRET;
+
+  process.env.EBAY_CLIENT_ID = "test-id";
+  process.env.EBAY_CLIENT_SECRET = "test-secret";
+
+  const browseItems = [
+    {
+      itemId: "headcover-only",
+      title: "Scotty Cameron Studio Style Headcover",
+      price: { value: "120", currency: "USD" },
+      itemWebUrl: "https://example.com/headcover-only",
+      seller: { username: "studio-style" },
+      image: { imageUrl: "https://example.com/headcover-only.jpg" },
+      shippingOptions: [
+        { shippingCost: { value: "0", currency: "USD" } },
+      ],
+      buyingOptions: ["FIXED_PRICE"],
+      itemSpecifics: [],
+      localizedAspects: [],
+      additionalProductIdentities: [],
+      returnTerms: {},
+      itemLocation: {},
+    },
+    {
+      itemId: "shaft-accessory",
+      title: "Scotty Cameron Putter Shaft Replacement",
+      price: { value: "80", currency: "USD" },
+      itemWebUrl: "https://example.com/shaft-accessory",
+      seller: { username: "shaft-seller" },
+      image: { imageUrl: "https://example.com/shaft-accessory.jpg" },
+      shippingOptions: [
+        { shippingCost: { value: "8", currency: "USD" } },
+      ],
+      buyingOptions: ["FIXED_PRICE"],
+      itemSpecifics: [],
+      localizedAspects: [],
+      additionalProductIdentities: [],
+      returnTerms: {},
+      itemLocation: {},
+    },
+  ];
+
+  global.fetch = async (input) => {
+    const url = typeof input === "string" ? input : input?.toString();
+    if (!url) throw new Error("Missing URL in fetch stub");
+
+    if (url.includes("/identity/")) {
+      return {
+        ok: true,
+        status: 200,
+        json: async () => ({ access_token: "fake-token", expires_in: 7200 }),
+        text: async () => "",
+      };
+    }
+
+    if (url.startsWith("https://api.ebay.com/buy/browse/v1/item_summary/search")) {
+      return {
+        ok: true,
+        status: 200,
+        json: async () => ({ itemSummaries: browseItems, total: browseItems.length }),
+        text: async () => "",
+      };
+    }
+
+    throw new Error(`Unexpected fetch URL: ${url}`);
+  };
+
+  const req = {
+    method: "GET",
+    query: {
+      q: "Scotty Cameron studio style headcover",
+      group: "false",
+      forceCategory: "false",
+    },
+    headers: { host: "test.local", "user-agent": "node" },
+  };
+  const res = createMockRes();
+
+  try {
+    await handler(req, res);
+  } finally {
+    global.fetch = originalFetch;
+    process.env.EBAY_CLIENT_ID = originalClientId;
+    process.env.EBAY_CLIENT_SECRET = originalClientSecret;
+  }
+
+  assert.equal(res.statusCode, 200, "handler should respond with 200");
+  assert.ok(res.jsonBody, "response body should be captured");
+  assert.ok(Array.isArray(res.jsonBody.offers), "offers array should be present");
+  assert.equal(res.jsonBody.offers.length, 1, "headcover-only listing should survive filtering");
+  assert.equal(
+    res.jsonBody.offers[0]?.title,
+    "Scotty Cameron Studio Style Headcover",
+    "headcover listing without 'putter' should be retained when query mentions headcovers"
+  );
+});
+
 test("head cover query matches combined headcover token", async () => {
   const mod = await modulePromise;
   const handler = mod.default;

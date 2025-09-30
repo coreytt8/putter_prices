@@ -797,10 +797,16 @@ export default async function handler(req, res) {
       }
     }
 
-    // Strict "putter only" filter
-    items = items.filter(isLikelyPutter);
-
     const headcoverQuery = queryMentionsHeadcover(rawQ);
+
+    // Strict "putter only" filter
+    items = items.filter((item) => {
+      if (isLikelyPutter(item)) return true;
+      if (!headcoverQuery) return false;
+      const title = norm(item?.title);
+      return Boolean(title && HEAD_COVER_TEXT_RX.test(title));
+    });
+
     if (headcoverQuery) {
       items = items.filter((item) => {
         const title = norm(item?.title);
