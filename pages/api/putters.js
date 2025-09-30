@@ -24,8 +24,8 @@ const EBAY_SITE = process.env.EBAY_SITE || "EBAY_US";
 
 const CATEGORY_GOLF_CLUBS = "115280";
 const CATEGORY_PUTTER_HEADCOVERS = "36278";
-const HEAD_COVER_TOKEN_VARIANTS = new Set(["headcover", "headcovers"]);
-const HEAD_COVER_TEXT_RX = /\bhead(?:[\s/_-]*?)cover(s)?\b|headcover(s)?/i;
+const HEAD_COVER_TOKEN_VARIANTS = new Set(["headcover", "headcovers", "hc"]);
+const HEAD_COVER_TEXT_RX = /\bhead(?:[\s/_-]*?)cover(s)?\b|headcover(s)?|\bhc\b/i;
 const ACCESSORY_BLOCK_PATTERN = /\b(shafts?|grips?|weights?)\b/i;
 
 // -------------------- Token --------------------
@@ -907,6 +907,9 @@ export default async function handler(req, res) {
             if (!t) return false;
             if (hasHeadcoverToken) {
               if (t === "head" || t === "cover" || t === "covers" || t === "headcovers") {
+                return false;
+              }
+              if (t === "hc") {
                 return false;
               }
               if (
