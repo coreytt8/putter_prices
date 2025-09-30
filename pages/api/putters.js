@@ -1,5 +1,7 @@
 /* eslint-disable no-console */
 
+import { stripAccessoryTokens } from "../../lib/sanitizeModelKey.js";
+
 /**
  * Required ENV (Vercel + .env.local):
  * EBAY_CLIENT_ID
@@ -535,6 +537,26 @@ const TRIVIAL_QUERY_TOKENS = (() => {
   return trivial;
 })();
 
+const QUERY_TOKEN_SANITIZE_PATTERNS = [
+  /\bcomes?\s+with\b/g,
+  /\binclude[sd]?\b/g,
+  /\bincluding\b/g,
+  /\bwith\b/g,
+  /\bsmall\s+batch\b/g,
+];
+
+function sanitizeQueryForTokens(raw = "") {
+  const normalized = norm(raw);
+  if (!normalized) return "";
+
+  let sanitized = stripAccessoryTokens(normalized);
+  for (const pattern of QUERY_TOKEN_SANITIZE_PATTERNS) {
+    sanitized = sanitized.replace(pattern, " ");
+  }
+
+  return sanitized.replace(/\s+/g, " ").trim();
+}
+
 function hasAnyToken(text, tokens) {
   const n = norm(text);
   return tokens.some(t => n.includes(norm(t)));
@@ -809,9 +831,16 @@ export default async function handler(req, res) {
       return true;
     });
 
+    const normalizedQuery = norm(q);
+    const sanitizedForTokens = sanitizeQueryForTokens(q);
+    const baseTokenList = tokenize(sanitizedForTokens);
+    if (/\bheadcovers?\b/.test(normalizedQuery)) {
+      baseTokenList.push("headcover");
+    }
+
     const queryTokens = Array.from(
       new Set(
-        tokenize(rawQ)
+        baseTokenList
           .map((t) => t.trim())
           .filter((t) => (t.length > 1 || /\d/.test(t)) && !TRIVIAL_QUERY_TOKENS.has(t))
       )

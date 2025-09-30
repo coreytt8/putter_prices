@@ -376,3 +376,107 @@ test("API handler sorts offers by total when shipping differs", async () => {
   assert.equal(first.title, "Test Free Ship Putter");
   assert.equal(second.title, "Test Paid Ship Putter");
 });
+
+test("API handler keeps offers when titles omit filler descriptors", async () => {
+  const mod = await modulePromise;
+  const handler = mod.default;
+  assert.equal(typeof handler, "function", "default export should be a function");
+
+  const originalFetch = global.fetch;
+  const originalClientId = process.env.EBAY_CLIENT_ID;
+  const originalClientSecret = process.env.EBAY_CLIENT_SECRET;
+
+  process.env.EBAY_CLIENT_ID = "test-id";
+  process.env.EBAY_CLIENT_SECRET = "test-secret";
+
+  const browseItems = [
+    {
+      itemId: "1",
+      title: "Scotty Cameron Newport 2 Putter Headcover Included",
+      price: { value: "450", currency: "USD" },
+      itemWebUrl: "https://example.com/headcover",
+      seller: { username: "seller1" },
+      image: { imageUrl: "https://example.com/headcover.jpg" },
+      shippingOptions: [
+        { shippingCost: { value: "0", currency: "USD" } },
+      ],
+      buyingOptions: ["FIXED_PRICE"],
+      itemSpecifics: [],
+      localizedAspects: [],
+      additionalProductIdentities: [],
+      returnTerms: {},
+      itemLocation: {},
+    },
+    {
+      itemId: "2",
+      title: "Scotty Cameron Newport 2 Putter",
+      price: { value: "425", currency: "USD" },
+      itemWebUrl: "https://example.com/plain",
+      seller: { username: "seller2" },
+      image: { imageUrl: "https://example.com/plain.jpg" },
+      shippingOptions: [
+        { shippingCost: { value: "15", currency: "USD" } },
+      ],
+      buyingOptions: ["FIXED_PRICE"],
+      itemSpecifics: [],
+      localizedAspects: [],
+      additionalProductIdentities: [],
+      returnTerms: {},
+      itemLocation: {},
+    },
+  ];
+
+  global.fetch = async (input) => {
+    const url = typeof input === "string" ? input : input?.toString();
+    if (!url) throw new Error("Missing URL in fetch stub");
+
+    if (url.includes("/identity/")) {
+      return {
+        ok: true,
+        status: 200,
+        json: async () => ({ access_token: "fake-token", expires_in: 7200 }),
+        text: async () => "",
+      };
+    }
+
+    if (url.startsWith("https://api.ebay.com/buy/browse/v1/item_summary/search")) {
+      return {
+        ok: true,
+        status: 200,
+        json: async () => ({ itemSummaries: browseItems, total: browseItems.length }),
+        text: async () => "",
+      };
+    }
+
+    throw new Error(`Unexpected fetch URL: ${url}`);
+  };
+
+  const req = {
+    method: "GET",
+    query: {
+      q: "Scotty Cameron Newport 2 headcover with small batch putter",
+      group: "false",
+      forceCategory: "false",
+    },
+    headers: { host: "test.local", "user-agent": "node" },
+  };
+  const res = createMockRes();
+
+  try {
+    await handler(req, res);
+  } finally {
+    global.fetch = originalFetch;
+    process.env.EBAY_CLIENT_ID = originalClientId;
+    process.env.EBAY_CLIENT_SECRET = originalClientSecret;
+  }
+
+  assert.equal(res.statusCode, 200, "handler should respond with 200");
+  assert.ok(res.jsonBody, "response body should be captured");
+  assert.ok(Array.isArray(res.jsonBody.offers), "offers array should be present");
+  assert.equal(res.jsonBody.offers.length, 1, "only headcover-matching offer should remain");
+  assert.equal(
+    res.jsonBody.offers[0]?.title,
+    "Scotty Cameron Newport 2 Putter Headcover Included",
+    "headcover listing should survive query token filter"
+  );
+});
