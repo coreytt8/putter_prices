@@ -3,7 +3,7 @@ export const runtime = "nodejs";
 
 import { NextResponse } from "next/server";
 import { getSql } from "@/lib/db";
-import { normalizeModelKey } from "@/lib/normalize";
+import { normalizeModelKey } from "../../../../lib/normalize";
 
 const ADMIN_KEY = process.env.ADMIN_KEY || ""; // set in Vercel > Env
 
