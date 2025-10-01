@@ -122,7 +122,10 @@ export default async function handler(req, res) {
     const raw = String(base || '').trim();
     if (!raw) return res.status(400).json({ ok:false, error:'Missing model' });
 
-    const modelKey = normalizeModelKey(raw);
+    const modelKeyRaw = raw;
+const modelKeyNorm = normalizeModelKey(raw);
+// Try exact key first (what UI/crawler may already have in DB), then normalized fallback
+const modelKeyCandidates = Array.from(new Set([modelKeyRaw, modelKeyNorm].filter(Boolean)));
 
     const conditionParam = getFirst(req.query.condition);
     const variantParam = getFirst(req.query.variant);
@@ -159,15 +162,20 @@ export default async function handler(req, res) {
     if (hadCondition && requestedCondition !== 'ANY') addCombo(requestedVariant, 'ANY', 'drop_condition');
     addCombo('', 'ANY', 'base_any');
 
-    let aggregateResult = null;
-    try {
-      aggregateResult = await fetchAggregateStats(sql, modelKey, combos);
-    } catch (err) {
-      aggregateResult = null;
-    }
+    
+let aggregateResult = null;
+let chosenModelKey = modelKeyCandidates[0] || '';
+for (const key of modelKeyCandidates) {
+  try {
+    const res = await fetchAggregateStats(sql, key, combos);
+    if (res) { aggregateResult = res; chosenModelKey = key; break; }
+  } catch {}
+}
+
+    // aggregate tried via candidates loop above
 
     if (aggregateResult) {
-      return res.status(200).json({ ok: true, modelKey, stats: aggregateResult.stats, segment: aggregateResult.meta });
+      return res.status(200).json({ ok: true, modelKey: chosenModelKey, stats: aggregateResult.stats, segment: aggregateResult.meta });
     }
 
     const [row] = await sql`
@@ -196,7 +204,7 @@ export default async function handler(req, res) {
       sampleSize: stats.n !== undefined && stats.n !== null ? Number(stats.n) : null,
     };
 
-    return res.status(200).json({ ok: true, modelKey, stats, segment: { requested: requestedSegment, actual } });
+    return res.status(200).json({ ok: true, modelKey: chosenModelKey || (modelKeyCandidates[0] || ''), stats, segment: { requested: requestedSegment, actual } });
   } catch (e) {
     return res.status(500).json({ ok:false, error:e.message });
   }
