@@ -1232,6 +1232,111 @@ test("head cover query matches combined headcover token", async () => {
   );
 });
 
+test("head cover intent survives without signature token and filters accessories", async () => {
+  const mod = await modulePromise;
+  const handler = mod.default;
+  assert.equal(typeof handler, "function", "default export should be a function");
+
+  const originalFetch = global.fetch;
+  const originalClientId = process.env.EBAY_CLIENT_ID;
+  const originalClientSecret = process.env.EBAY_CLIENT_SECRET;
+
+  process.env.EBAY_CLIENT_ID = "test-id";
+  process.env.EBAY_CLIENT_SECRET = "test-secret";
+
+  const browseItems = [
+    {
+      itemId: "ks1-headcover",
+      title: "Kirkland KS1 Putter Head Cover",
+      price: { value: "45", currency: "USD" },
+      itemWebUrl: "https://example.com/ks1-headcover",
+      seller: { username: "kirkland-seller" },
+      image: { imageUrl: "https://example.com/ks1-headcover.jpg" },
+      shippingOptions: [
+        { shippingCost: { value: "0", currency: "USD" } },
+      ],
+      buyingOptions: ["FIXED_PRICE"],
+      itemSpecifics: [],
+      localizedAspects: [],
+      additionalProductIdentities: [],
+      returnTerms: {},
+      itemLocation: {},
+    },
+    {
+      itemId: "ks1-weight",
+      title: "Kirkland KS1 Putter Weight Kit",
+      price: { value: "25", currency: "USD" },
+      itemWebUrl: "https://example.com/ks1-weight",
+      seller: { username: "ks1-weight-seller" },
+      image: { imageUrl: "https://example.com/ks1-weight.jpg" },
+      shippingOptions: [
+        { shippingCost: { value: "5", currency: "USD" } },
+      ],
+      buyingOptions: ["FIXED_PRICE"],
+      itemSpecifics: [],
+      localizedAspects: [],
+      additionalProductIdentities: [],
+      returnTerms: {},
+      itemLocation: {},
+    },
+  ];
+
+  global.fetch = async (input) => {
+    const url = typeof input === "string" ? input : input?.toString();
+    if (!url) throw new Error("Missing URL in fetch stub");
+
+    if (url.includes("/identity/")) {
+      return {
+        ok: true,
+        status: 200,
+        json: async () => ({ access_token: "fake-token", expires_in: 7200 }),
+        text: async () => "",
+      };
+    }
+
+    if (url.startsWith("https://api.ebay.com/buy/browse/v1/item_summary/search")) {
+      return {
+        ok: true,
+        status: 200,
+        json: async () => ({ itemSummaries: browseItems, total: browseItems.length }),
+        text: async () => "",
+      };
+    }
+
+    throw new Error(`Unexpected fetch URL: ${url}`);
+  };
+
+  const req = {
+    method: "GET",
+    query: {
+      q: "Kirkland KS1 head cover putter",
+      group: "false",
+      forceCategory: "false",
+    },
+    headers: { host: "test.local", "user-agent": "node" },
+  };
+  const res = createMockRes();
+
+  try {
+    await handler(req, res);
+  } finally {
+    global.fetch = originalFetch;
+    process.env.EBAY_CLIENT_ID = originalClientId;
+    process.env.EBAY_CLIENT_SECRET = originalClientSecret;
+  }
+
+  assert.equal(res.statusCode, 200, "handler should respond with 200");
+  assert.ok(res.jsonBody, "response body should be captured");
+  assert.ok(Array.isArray(res.jsonBody.offers), "offers array should be present");
+  assert.equal(res.jsonBody.offers.length, 1, "only the headcover listing should survive filtering");
+  const [offer] = res.jsonBody.offers;
+  assert.equal(
+    offer?.title,
+    "Kirkland KS1 Putter Head Cover",
+    "head cover intent should match combined headcover token even without signature"
+  );
+});
+
 test("headcover query tolerates missing non-essential tokens", async () => {
   const mod = await modulePromise;
   const handler = mod.default;

@@ -1013,17 +1013,17 @@ export default async function handler(req, res) {
       }
     }
 
-    const headcoverQuery = queryMentionsHeadcover(rawQ);
+    const headcoverIntent = queryMentionsHeadcover(rawQ);
 
     // Strict "putter only" filter
     items = items.filter((item) => {
       if (isLikelyPutter(item)) return true;
-      if (!headcoverQuery) return false;
+      if (!headcoverIntent) return false;
       const title = norm(item?.title);
       return Boolean(title && HEAD_COVER_TEXT_RX.test(title));
     });
 
-    if (headcoverQuery) {
+    if (headcoverIntent) {
       items = items.filter((item) => {
         const title = norm(item?.title);
         if (!title) return false;
@@ -1088,13 +1088,22 @@ export default async function handler(req, res) {
     let baseTokenList = tokenize(sanitizedForTokens);
     const rawTokenList = tokenize(q);
 
-    if (rawTokenList.some((token) => HEAD_COVER_TOKEN_VARIANTS.has(token))) {
+    if (headcoverIntent || rawTokenList.some((token) => HEAD_COVER_TOKEN_VARIANTS.has(token))) {
       for (const variant of HEAD_COVER_TOKEN_VARIANTS) {
         baseTokenList.push(variant);
       }
     }
 
-    const hasHeadcoverToken = baseTokenList.some((token) => HEAD_COVER_TOKEN_VARIANTS.has(token));
+    if (
+      headcoverIntent &&
+      !baseTokenList.some((token) => HEAD_COVER_TOKEN_VARIANTS.has(token)) &&
+      baseTokenList.some((token) => token === "head" || token === "cover" || token === "covers")
+    ) {
+      baseTokenList.push("headcover");
+    }
+
+    const hasHeadcoverToken =
+      headcoverIntent || baseTokenList.some((token) => HEAD_COVER_TOKEN_VARIANTS.has(token));
 
     if (hasHeadcoverToken) {
       baseTokenList = stripHeadcoverSpecTokens(baseTokenList);
