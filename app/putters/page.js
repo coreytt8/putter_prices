@@ -10,6 +10,7 @@ import HighlightCard from "@/components/HighlightCard";
 import CompareBar from "@/components/CompareBar";
 import CompareTray from "@/components/CompareTray";
 import { detectVariant } from "@/lib/variantMap";
+import { normalizeModelKey } from "@/lib/normalize";
 
 /* ============================
    SMART FAIR-PRICE BADGE (inline, JS/JSX)
@@ -246,14 +247,14 @@ function useRecentModels() {
    EXTRA HELPERS
    ============================ */
 function getModelKey(o) {
+  // 1) If the record already has a DB model key, use it EXACTLY (matches current aggregates)
   if (typeof o?.model === "string" && o.model.trim()) return o.model.trim();
-  if (typeof o?.groupModel === "string" && o.groupModel.trim()) return o.groupModel.trim();
-  if (typeof o?.title === "string" && o.title.trim()) {
-    const t = o.title.replace(/\s+/g, " ").trim();
-    const first = t.split(" - ")[0] || t;
-    return first.slice(0, 120);
-  }
-  return "";
+  // 2) Otherwise fall back to normalized title (for fresh eBay-only items)
+  const raw =
+    (typeof o?.groupModel === "string" && o.groupModel.trim()) ||
+    (typeof o?.title === "string" && o.title.trim()) ||
+    "";
+   return normalizeModelKey(raw);
 }
 function selectedConditionBand(conds) {
   return Array.isArray(conds) && conds.length === 1 ? conds[0] : "";
