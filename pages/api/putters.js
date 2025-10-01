@@ -618,6 +618,92 @@ const TRIVIAL_QUERY_TOKENS = (() => {
   return trivial;
 })();
 
+const OPTIONAL_DESCRIPTOR_TOKENS = new Set([
+  "black",
+  "blackout",
+  "white",
+  "silver",
+  "chrome",
+  "platinum",
+  "gold",
+  "bronze",
+  "copper",
+  "blue",
+  "navy",
+  "teal",
+  "turquoise",
+  "aqua",
+  "red",
+  "crimson",
+  "maroon",
+  "burgundy",
+  "pink",
+  "purple",
+  "violet",
+  "green",
+  "lime",
+  "olive",
+  "yellow",
+  "orange",
+  "brown",
+  "tan",
+  "beige",
+  "cream",
+  "ivory",
+  "grey",
+  "gray",
+  "charcoal",
+  "graphite",
+  "gunmetal",
+  "raw",
+  "rust",
+  "rusty",
+  "oil",
+  "rainbow",
+  "camo",
+  "finish",
+  "condition",
+  "new",
+  "brand",
+  "used",
+  "preowned",
+  "mint",
+  "minty",
+  "excellent",
+  "great",
+  "good",
+  "fair",
+  "poor",
+  "nice",
+  "like",
+  "lightly",
+  "gently",
+  "clean",
+]);
+
+function isOptionalDescriptorToken(token = "") {
+  if (!token) return false;
+  return OPTIONAL_DESCRIPTOR_TOKENS.has(token);
+}
+
+function isDescriptorAlphanumericCombo(token = "") {
+  if (!token) return false;
+  if (!/[a-z]/.test(token) || !/\d/.test(token)) return false;
+  const alphaPortion = token.replace(/[^a-z]/g, "");
+  if (!alphaPortion) return false;
+  return isOptionalDescriptorToken(alphaPortion);
+}
+
+function isHighSignalToken(token = "") {
+  if (!token) return false;
+  if (HEAD_COVER_TOKEN_VARIANTS.has(token)) return false;
+  if (isDescriptorAlphanumericCombo(token)) return false;
+  if (/\d/.test(token)) return true;
+  if (token.length === 1) return false;
+  if (isOptionalDescriptorToken(token)) return false;
+  return true;
+}
+
 const QUERY_TOKEN_SANITIZE_PATTERNS = [
   /\bcomes?\s+with\b/g,
   /\binclude[sd]?\b/g,
@@ -1034,7 +1120,9 @@ export default async function handler(req, res) {
         }
 
         if (!hasHeadcoverToken) {
-          return queryTokens.every((tok) => matchesToken(tok));
+          const highSignalTokens = queryTokens.filter((tok) => isHighSignalToken(tok));
+          const requiredTokens = highSignalTokens.length ? highSignalTokens : queryTokens;
+          return requiredTokens.every((tok) => matchesToken(tok));
         }
 
         let headcoverMatch = false;
@@ -1052,6 +1140,15 @@ export default async function handler(req, res) {
         const nonHeadcoverTokens = queryTokens.filter((tok) => !HEAD_COVER_TOKEN_VARIANTS.has(tok));
         if (!nonHeadcoverTokens.length) {
           return true;
+        }
+
+        const highSignalTokens = nonHeadcoverTokens.filter((tok) => isHighSignalToken(tok));
+        if (highSignalTokens.length) {
+          const matchedHighSignalCount = highSignalTokens.filter((tok) => matchesToken(tok)).length;
+          if (matchedHighSignalCount > 0) {
+            return true;
+          }
+          return false;
         }
 
         return nonHeadcoverTokens.some((tok) => matchesToken(tok));
