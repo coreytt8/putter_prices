@@ -20,14 +20,6 @@ function toConditionBand(raw) {
   if (s.includes("LIKE NEW") || s.includes("MINT")) return "LIKE_NEW";
   return "ANY"; // keep it broad; your sanitizer can make this more granular
 }
-function buildVariantKey(title) {
-  const t = String(title || "").toLowerCase();
-  const keys = [];
-  if (/\bcircle\s*t\b|\bct\b/.test(t)) keys.push("ct");
-  if (/\bleft\b|\blh\b/.test(t)) keys.push("lh");
-  if (/\barm\s*lock\b/.test(t)) keys.push("arm-lock");
-  return keys.join("+"); // '' for base
-}
 
 // You likely already have a canonicalizer; call it here instead of this stub
 
