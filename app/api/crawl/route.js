@@ -3,7 +3,10 @@ import { getSql } from "@/lib/db";
 
 // If you already have a token helper, import it; otherwise this fallback uses client-credentials.
 import { getEbayToken } from "@/lib/ebayAuth"; // tweak if your export name differs
+import { buildVariantKey } from "@/lib/variant-detect";
+import { normalizeModelKey } from "@/lib/normalize";
 
+export const runtime = "nodejs"; // <= here (module scope)
 // Minimal normalize helpers (reuse your existing ones if available)
 function cents(value) { return Math.round(Number(value || 0) * 100); }
 function totalCents(item) {
@@ -27,8 +30,6 @@ function buildVariantKey(title) {
 }
 
 // You likely already have a canonicalizer; call it here instead of this stub
-import { buildVariantKey } from "@/lib/variant-detect;
-import { normalizeModelKey } from "@/lib/normalize"; // already in your repo
 
 async function fetchBrowse(token, params) {
   const q = new URLSearchParams({
