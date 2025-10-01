@@ -628,6 +628,8 @@ const OPTIONAL_DESCRIPTOR_TOKENS = new Set([
   "gold",
   "bronze",
   "copper",
+  "brass",
+  "nickel",
   "blue",
   "navy",
   "teal",
@@ -655,6 +657,14 @@ const OPTIONAL_DESCRIPTOR_TOKENS = new Set([
   "charcoal",
   "graphite",
   "gunmetal",
+  "midnight",
+  "champagne",
+  "slate",
+  "smoke",
+  "smoked",
+  "satin",
+  "matte",
+  "rose",
   "raw",
   "rust",
   "rusty",
@@ -662,6 +672,12 @@ const OPTIONAL_DESCRIPTOR_TOKENS = new Set([
   "rainbow",
   "camo",
   "finish",
+  "color",
+  "colors",
+  "colour",
+  "colours",
+  "badge",
+  "badges",
   "condition",
   "new",
   "brand",
@@ -679,6 +695,12 @@ const OPTIONAL_DESCRIPTOR_TOKENS = new Set([
   "lightly",
   "gently",
   "clean",
+  "limited",
+  "edition",
+  "editions",
+  "signature",
+  "collector",
+  "collectors",
 ]);
 
 function isOptionalDescriptorToken(token = "") {
@@ -689,9 +711,23 @@ function isOptionalDescriptorToken(token = "") {
 function isDescriptorAlphanumericCombo(token = "") {
   if (!token) return false;
   if (!/[a-z]/.test(token) || !/\d/.test(token)) return false;
-  const alphaPortion = token.replace(/[^a-z]/g, "");
-  if (!alphaPortion) return false;
-  return isOptionalDescriptorToken(alphaPortion);
+  const letterSequences = token.match(/[a-z]+/g);
+  if (!letterSequences || letterSequences.length === 0) return false;
+  return letterSequences.some((segment) => isOptionalDescriptorToken(segment));
+}
+
+const OPTIONAL_DESCRIPTOR_MATCH_THRESHOLD = 0.6;
+
+function isOptionalDescriptorLikeToken(token = "") {
+  if (!token) return false;
+  return isOptionalDescriptorToken(token) || isDescriptorAlphanumericCombo(token);
+}
+
+function requiredOptionalDescriptorMatches(count) {
+  if (!count || count <= 0) return 0;
+  const raw = Math.ceil(count * OPTIONAL_DESCRIPTOR_MATCH_THRESHOLD);
+  const adjusted = Math.max(0, raw - 1);
+  return Math.min(count, adjusted);
 }
 
 function isHighSignalToken(token = "") {
@@ -1119,9 +1155,29 @@ export default async function handler(req, res) {
         }
 
         if (!hasHeadcoverToken) {
+          const optionalDescriptorTokens = queryTokens.filter((tok) =>
+            isOptionalDescriptorLikeToken(tok)
+          );
           const highSignalTokens = queryTokens.filter((tok) => isHighSignalToken(tok));
-          const requiredTokens = highSignalTokens.length ? highSignalTokens : queryTokens;
-          return requiredTokens.every((tok) => matchesToken(tok));
+
+          if (!highSignalTokens.length) {
+            if (optionalDescriptorTokens.length === queryTokens.length) {
+              const matchedOptional = optionalDescriptorTokens.filter((tok) => matchesToken(tok)).length;
+              return matchedOptional >= requiredOptionalDescriptorMatches(optionalDescriptorTokens.length);
+            }
+            return queryTokens.every((tok) => matchesToken(tok));
+          }
+
+          if (!highSignalTokens.every((tok) => matchesToken(tok))) {
+            return false;
+          }
+
+          if (!optionalDescriptorTokens.length) {
+            return true;
+          }
+
+          const matchedOptional = optionalDescriptorTokens.filter((tok) => matchesToken(tok)).length;
+          return matchedOptional >= requiredOptionalDescriptorMatches(optionalDescriptorTokens.length);
         }
 
         let headcoverMatch = false;

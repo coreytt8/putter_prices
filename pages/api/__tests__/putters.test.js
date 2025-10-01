@@ -844,7 +844,7 @@ test("Jet Set listings survive missing descriptor tokens while accessories drop"
   const browseItems = [
     {
       itemId: "jet-set-putter",
-      title: "Scotty Cameron Special Select Jet Set Newport 2 Putter",
+      title: "Scotty Cameron Special Select Jet Set Newport 2 Black Putter",
       price: { value: "850", currency: "USD" },
       itemWebUrl: "https://example.com/jet-set-putter",
       seller: { username: "jet-set-seller" },
@@ -923,7 +923,7 @@ test("Jet Set listings survive missing descriptor tokens while accessories drop"
   const req = {
     method: "GET",
     query: {
-      q: "Scotty Cameron Jet Set Newport 2 Black",
+      q: "Scotty Cameron Jet Set Newport 2 Limited Black",
       group: "false",
       forceCategory: "false",
     },
@@ -945,8 +945,12 @@ test("Jet Set listings survive missing descriptor tokens while accessories drop"
   assert.equal(res.jsonBody.offers.length, 1, "only the putter should remain after filtering");
   assert.equal(
     res.jsonBody.offers[0]?.title,
-    "Scotty Cameron Special Select Jet Set Newport 2 Putter",
+    "Scotty Cameron Special Select Jet Set Newport 2 Black Putter",
     "Jet Set putter should survive missing descriptor tokens"
+  );
+  assert.ok(
+    !res.jsonBody.offers.some((offer) => /weight kit/i.test(offer?.title || "")),
+    "accessory listings without core model tokens should be filtered out"
   );
 });
 
