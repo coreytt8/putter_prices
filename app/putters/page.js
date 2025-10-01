@@ -247,17 +247,14 @@ function useRecentModels() {
    EXTRA HELPERS
    ============================ */
 function getModelKey(o) {
-  // Prefer explicit model/groupModel if present, else fall back to title.
+  // 1) If the record already has a DB model key, use it EXACTLY (matches current aggregates)
+  if (typeof o?.model === "string" && o.model.trim()) return o.model.trim();
+  // 2) Otherwise fall back to normalized title (for fresh eBay-only items)
   const raw =
-    (typeof o?.model === "string" && o.model.trim()) ||
     (typeof o?.groupModel === "string" && o.groupModel.trim()) ||
     (typeof o?.title === "string" && o.title.trim()) ||
     "";
-
-  // Normalize to the same key used by the crawler/aggregator so stats match.
-  // This strips brand/length/noise but keeps core model tokens.
-  const key = normalizeModelKey(raw);
-  return key || "";
+   return normalizeModelKey(raw);
 }
 function selectedConditionBand(conds) {
   return Array.isArray(conds) && conds.length === 1 ? conds[0] : "";
