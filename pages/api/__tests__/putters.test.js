@@ -276,12 +276,45 @@ test("normalizeSearchQ + recall helpers avoid putter for headcover intent", asyn
   assert.ok(putterRecall.some((variant) => /\bputter\b/i.test(variant)), "putter recall variants should retain putter");
 });
 
+test("headcover qualifiers keep putter intent", async () => {
+  const { __testables__ } = await modulePromise;
+  const { normalizeSearchQ, queryMentionsHeadcover } = __testables__;
+
+  const qualifierRaw = "Scotty Cameron Classics Catalina 35in Putter RH with Headcover";
+  assert.equal(
+    queryMentionsHeadcover(qualifierRaw),
+    false,
+    "with headcover qualifier should not force headcover intent"
+  );
+  const qualifierNormalized = normalizeSearchQ(qualifierRaw);
+  assert.ok(
+    /\bputter\b/i.test(qualifierNormalized),
+    "qualifier query should retain putter token"
+  );
+});
+
 test("handler eBay calls omit putter for headcover queries", async () => {
   const browseUrls = await collectBrowseQueriesFor("Scotty Cameron headcover");
   assert.ok(browseUrls.length > 0, "headcover query should trigger eBay browse calls");
   for (const url of browseUrls) {
     const qParam = url.searchParams.get("q") || "";
     assert.ok(!/\bputter\b/i.test(qParam), `headcover query should not include putter (saw: ${qParam})`);
+  }
+});
+
+test("handler keeps putter focus for headcover qualifier queries", async () => {
+  const qualifierQuery = "Scotty Cameron Classics Catalina 35in Putter RH with Headcover";
+  const browseUrls = await collectBrowseQueriesFor(qualifierQuery);
+  assert.ok(browseUrls.length > 0, "qualifier query should trigger eBay browse calls");
+  for (const url of browseUrls) {
+    const qParam = url.searchParams.get("q") || "";
+    assert.ok(/\bputter\b/i.test(qParam), `qualifier query should retain putter (saw: ${qParam})`);
+    const categoryIds = url.searchParams.get("category_ids") || "";
+    assert.equal(
+      categoryIds,
+      "115280",
+      "qualifier query should not add headcover category id"
+    );
   }
 });
 
@@ -1002,6 +1035,228 @@ test("head cover query matches combined headcover token", async () => {
     res.jsonBody.offers[0]?.title,
     "Kirkland KS-1 Putter Head-Cover",
     "head cover query should match combined headcover token"
+  );
+});
+
+test("headcover query tolerates missing non-essential tokens", async () => {
+  const mod = await modulePromise;
+  const handler = mod.default;
+  assert.equal(typeof handler, "function", "default export should be a function");
+
+  const originalFetch = global.fetch;
+  const originalClientId = process.env.EBAY_CLIENT_ID;
+  const originalClientSecret = process.env.EBAY_CLIENT_SECRET;
+
+  process.env.EBAY_CLIENT_ID = "test-id";
+  process.env.EBAY_CLIENT_SECRET = "test-secret";
+
+  const browseItems = [
+    {
+      itemId: "catalina-headcover",
+      title: "Scotty Cameron Catalina Headcover",
+      price: { value: "150", currency: "USD" },
+      itemWebUrl: "https://example.com/catalina-headcover",
+      seller: { username: "catalina-seller" },
+      image: { imageUrl: "https://example.com/catalina-headcover.jpg" },
+      shippingOptions: [
+        { shippingCost: { value: "0", currency: "USD" } },
+      ],
+      buyingOptions: ["FIXED_PRICE"],
+      itemSpecifics: [],
+      localizedAspects: [],
+      additionalProductIdentities: [],
+      returnTerms: {},
+      itemLocation: {},
+    },
+    {
+      itemId: "generic-headcover",
+      title: "Blade Putter Headcover",
+      price: { value: "60", currency: "USD" },
+      itemWebUrl: "https://example.com/generic-headcover",
+      seller: { username: "generic-seller" },
+      image: { imageUrl: "https://example.com/generic-headcover.jpg" },
+      shippingOptions: [
+        { shippingCost: { value: "5", currency: "USD" } },
+      ],
+      buyingOptions: ["FIXED_PRICE"],
+      itemSpecifics: [],
+      localizedAspects: [],
+      additionalProductIdentities: [],
+      returnTerms: {},
+      itemLocation: {},
+    },
+  ];
+
+  global.fetch = async (input) => {
+    const url = typeof input === "string" ? input : input?.toString();
+    if (!url) throw new Error("Missing URL in fetch stub");
+
+    if (url.includes("/identity/")) {
+      return {
+        ok: true,
+        status: 200,
+        json: async () => ({ access_token: "fake-token", expires_in: 7200 }),
+        text: async () => "",
+      };
+    }
+
+    if (url.startsWith("https://api.ebay.com/buy/browse/v1/item_summary/search")) {
+      return {
+        ok: true,
+        status: 200,
+        json: async () => ({ itemSummaries: browseItems, total: browseItems.length }),
+        text: async () => "",
+      };
+    }
+
+    throw new Error(`Unexpected fetch URL: ${url}`);
+  };
+
+  const req = {
+    method: "GET",
+    query: {
+      q: "Scotty Cameron Classics Catalina 35in putter head cover",
+      group: "false",
+      forceCategory: "false",
+    },
+    headers: { host: "test.local", "user-agent": "node" },
+  };
+  const res = createMockRes();
+
+  try {
+    await handler(req, res);
+  } finally {
+    global.fetch = originalFetch;
+    process.env.EBAY_CLIENT_ID = originalClientId;
+    process.env.EBAY_CLIENT_SECRET = originalClientSecret;
+  }
+
+  assert.equal(res.statusCode, 200, "handler should respond with 200");
+  assert.ok(res.jsonBody, "response body should be captured");
+  assert.ok(Array.isArray(res.jsonBody.offers), "offers array should be present");
+  assert.equal(
+    res.jsonBody.offers.length,
+    1,
+    "only listings sharing relevant non-headcover tokens should remain"
+  );
+  assert.equal(
+    res.jsonBody.offers[0]?.title,
+    "Scotty Cameron Catalina Headcover",
+    "headcover listing missing some query tokens should survive filtering"
+  );
+});
+
+test("headcover qualifier queries retain putter listings without headcover mention", async () => {
+  const mod = await modulePromise;
+  const handler = mod.default;
+  assert.equal(typeof handler, "function", "default export should be a function");
+
+  const originalFetch = global.fetch;
+  const originalClientId = process.env.EBAY_CLIENT_ID;
+  const originalClientSecret = process.env.EBAY_CLIENT_SECRET;
+
+  process.env.EBAY_CLIENT_ID = "test-id";
+  process.env.EBAY_CLIENT_SECRET = "test-secret";
+
+  mod.__testables__?.resetTokenCache?.();
+
+  const browseItems = [
+    {
+      itemId: "catalina-no-hc",
+      title: "Scotty Cameron Classics Catalina 35in Putter RH",
+      price: { value: "299", currency: "USD" },
+      itemWebUrl: "https://example.com/catalina-no-hc",
+      seller: { username: "catalina-seller" },
+      image: { imageUrl: "https://example.com/catalina-no-hc.jpg" },
+      shippingOptions: [
+        { shippingCost: { value: "0", currency: "USD" } },
+      ],
+      buyingOptions: ["FIXED_PRICE"],
+      itemSpecifics: [],
+      localizedAspects: [],
+      additionalProductIdentities: [],
+      returnTerms: {},
+      itemLocation: {},
+    },
+    {
+      itemId: "catalina-with-hc",
+      title: "Scotty Cameron Classics Catalina 35in Putter RH with Headcover",
+      price: { value: "315", currency: "USD" },
+      itemWebUrl: "https://example.com/catalina-with-hc",
+      seller: { username: "catalina-seller-2" },
+      image: { imageUrl: "https://example.com/catalina-with-hc.jpg" },
+      shippingOptions: [
+        { shippingCost: { value: "0", currency: "USD" } },
+      ],
+      buyingOptions: ["FIXED_PRICE"],
+      itemSpecifics: [],
+      localizedAspects: [],
+      additionalProductIdentities: [],
+      returnTerms: {},
+      itemLocation: {},
+    },
+  ];
+
+  global.fetch = async (input) => {
+    const url = typeof input === "string" ? input : input?.toString();
+    if (!url) throw new Error("Missing URL in fetch stub");
+
+    if (url.includes("/identity/")) {
+      return {
+        ok: true,
+        status: 200,
+        json: async () => ({ access_token: "fake-token", expires_in: 7200 }),
+        text: async () => "",
+      };
+    }
+
+    if (url.startsWith("https://api.ebay.com/buy/browse/v1/item_summary/search")) {
+      return {
+        ok: true,
+        status: 200,
+        json: async () => ({ itemSummaries: browseItems, total: browseItems.length }),
+        text: async () => "",
+      };
+    }
+
+    throw new Error(`Unexpected fetch URL: ${url}`);
+  };
+
+  const req = {
+    method: "GET",
+    query: {
+      q: "Scotty Cameron Classics Catalina 35in Putter RH with Headcover",
+      group: "false",
+      forceCategory: "false",
+    },
+    headers: { host: "test.local", "user-agent": "node" },
+  };
+  const res = createMockRes();
+
+  try {
+    await handler(req, res);
+  } finally {
+    global.fetch = originalFetch;
+    process.env.EBAY_CLIENT_ID = originalClientId;
+    process.env.EBAY_CLIENT_SECRET = originalClientSecret;
+  }
+
+  assert.equal(res.statusCode, 200, "handler should respond with 200");
+  assert.ok(res.jsonBody, "response body should be captured");
+  assert.ok(Array.isArray(res.jsonBody.offers), "offers array should be present");
+  assert.equal(
+    res.jsonBody.offers.length,
+    2,
+    "qualifier query should retain putter listings regardless of headcover mention"
+  );
+  const titles = res.jsonBody.offers.map((offer) => offer?.title).sort();
+  assert.deepEqual(
+    titles,
+    [
+      "Scotty Cameron Classics Catalina 35in Putter RH",
+      "Scotty Cameron Classics Catalina 35in Putter RH with Headcover",
+    ].sort(),
+    "both putter listings should be returned"
   );
 });
 

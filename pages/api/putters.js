@@ -34,6 +34,20 @@ const EBAY_SITE = process.env.EBAY_SITE || "EBAY_US";
 const CATEGORY_GOLF_CLUBS = "115280";
 const CATEGORY_PUTTER_HEADCOVERS = "36278";
 const ACCESSORY_BLOCK_PATTERN = /\b(shafts?|grips?|weights?)\b/i;
+const HEAD_COVER_QUALIFIER_PATTERNS = [
+  /\bwith\s+(?:a\s+)?(?:matching\s+)?head(?:[\s/_-]*?)cover(?:s)?\b/i,
+  /\bcomes?\s+with\s+(?:a\s+)?(?:matching\s+)?head(?:[\s/_-]*?)cover(?:s)?\b/i,
+  /\binclud(?:es|ing|ed)\s+(?:a\s+)?(?:matching\s+)?head(?:[\s/_-]*?)cover(?:s)?\b/i,
+  /\bhead(?:[\s/_-]*?)cover(?:s)?\s+(?:included|incl\.?)/i,
+  /\bw\/\s*(?:a\s+)?(?:matching\s+)?head(?:[\s/_-]*?)cover(?:s)?\b/i,
+  /\bw\s+(?:a\s+)?(?:matching\s+)?head(?:[\s/_-]*?)cover(?:s)?\b/i,
+  /\bwith\s+hc\b/i,
+  /\bw\/\s*hc\b/i,
+  /\bw\s+hc\b/i,
+  /\bcomes?\s+with\s+hc\b/i,
+  /\binclud(?:es|ing|ed)\s+hc\b/i,
+  /\bhc\s+(?:included|incl\.?)/i,
+];
 // -------------------- Token --------------------
 let _tok = { val: null, exp: 0 };
 
@@ -632,25 +646,54 @@ function queryMentionsHeadcover(raw = "") {
 
   const normalized = norm(raw);
   if (!normalized) return false;
-  if (HEAD_COVER_TEXT_RX.test(normalized)) return true;
+
+  const canonicalNormalized = canonicalizeHeadcoverPhrases(normalized);
+  const putterContext = /\bputter\b/.test(canonicalNormalized) || /\bgolf\b/.test(canonicalNormalized);
+  if (putterContext) {
+    const hasQualifier = HEAD_COVER_QUALIFIER_PATTERNS.some((pattern) => pattern.test(canonicalNormalized));
+    if (hasQualifier) {
+      return false;
+    }
+  }
+
+  if (HEAD_COVER_TEXT_RX.test(canonicalNormalized)) return true;
 
   const rawTokens = tokenize(raw)
     .map((token) => norm(token))
     .filter(Boolean);
   if (rawTokens.some((token) => HEAD_COVER_TOKEN_VARIANTS.has(token))) {
+    if (putterContext) {
+      const hasQualifier = HEAD_COVER_QUALIFIER_PATTERNS.some((pattern) => pattern.test(canonicalNormalized));
+      if (hasQualifier) {
+        return false;
+      }
+    }
     return true;
   }
 
   const sanitized = sanitizeQueryForTokens(raw);
   if (!sanitized) return false;
 
-  const sanitizedNormalized = norm(sanitized);
+  const sanitizedNormalized = canonicalizeHeadcoverPhrases(norm(sanitized));
+  if (putterContext && HEAD_COVER_QUALIFIER_PATTERNS.some((pattern) => pattern.test(sanitizedNormalized))) {
+    return false;
+  }
+
   if (HEAD_COVER_TEXT_RX.test(sanitizedNormalized)) return true;
 
   const sanitizedTokens = tokenize(sanitized)
     .map((token) => norm(token))
     .filter(Boolean);
-  return sanitizedTokens.some((token) => HEAD_COVER_TOKEN_VARIANTS.has(token));
+  if (sanitizedTokens.some((token) => HEAD_COVER_TOKEN_VARIANTS.has(token))) {
+    if (putterContext) {
+      const hasQualifier = HEAD_COVER_QUALIFIER_PATTERNS.some((pattern) => pattern.test(sanitizedNormalized));
+      if (hasQualifier) {
+        return false;
+      }
+    }
+    return true;
+  }
+  return false;
 }
 
 function hasAnyToken(text, tokens) {
@@ -954,15 +997,16 @@ export default async function handler(req, res) {
     let baseTokenList = tokenize(sanitizedForTokens);
     const rawTokenList = tokenize(q);
 
-    if (rawTokenList.some((token) => HEAD_COVER_TOKEN_VARIANTS.has(token))) {
+    if (headcoverQuery && rawTokenList.some((token) => HEAD_COVER_TOKEN_VARIANTS.has(token))) {
       for (const variant of HEAD_COVER_TOKEN_VARIANTS) {
         baseTokenList.push(variant);
       }
     }
 
     const hasHeadcoverToken = baseTokenList.some((token) => HEAD_COVER_TOKEN_VARIANTS.has(token));
+    const treatAsHeadcover = headcoverQuery && hasHeadcoverToken;
 
-    if (hasHeadcoverToken) {
+    if (treatAsHeadcover) {
       baseTokenList = stripHeadcoverSpecTokens(baseTokenList);
     }
 
@@ -972,7 +1016,10 @@ export default async function handler(req, res) {
           .map((t) => t.trim())
           .filter((t) => {
             if (!t) return false;
-            if (hasHeadcoverToken) {
+            if (HEAD_COVER_TOKEN_VARIANTS.has(t)) {
+              return treatAsHeadcover;
+            }
+            if (treatAsHeadcover) {
               if (t === "head" || t === "cover" || t === "covers" || t === "headcovers") {
                 return false;
               }
@@ -1002,23 +1049,42 @@ export default async function handler(req, res) {
             .filter((t) => t.length > 1 || /\d/.test(t))
         );
 
-        if (!normalizedModelParam) {
-          return queryTokens.every((tok) => titleTokens.has(tok));
+        let matchesToken = (tok) => titleTokens.has(tok);
+
+        let modelTokens;
+        let matchesTargetModel = false;
+
+        if (normalizedModelParam) {
+          const offerModel = o?.__model ? norm(o.__model) : "";
+          matchesTargetModel = offerModel && offerModel === normalizedModelParam;
+          if (matchesTargetModel) {
+            modelTokens = new Set(
+              tokenize(o?.__model)
+                .map((t) => t.trim())
+                .filter((t) => t.length > 1 || /\d/.test(t))
+            );
+            matchesToken = (tok) => titleTokens.has(tok) || modelTokens.has(tok);
+          }
         }
 
-        const offerModel = o?.__model ? norm(o.__model) : "";
-        const matchesTargetModel = offerModel && offerModel === normalizedModelParam;
-        if (!matchesTargetModel) {
-          return queryTokens.every((tok) => titleTokens.has(tok));
+        if (!treatAsHeadcover) {
+          return queryTokens.every((tok) => matchesToken(tok));
         }
 
-        const modelTokens = new Set(
-          tokenize(o?.__model)
-            .map((t) => t.trim())
-            .filter((t) => t.length > 1 || /\d/.test(t))
-        );
+        const headcoverTokens = queryTokens.filter((tok) => HEAD_COVER_TOKEN_VARIANTS.has(tok));
+        const nonHeadcoverTokens = queryTokens.filter((tok) => !HEAD_COVER_TOKEN_VARIANTS.has(tok));
 
-        return queryTokens.every((tok) => titleTokens.has(tok) || modelTokens.has(tok));
+        const hasHeadcoverMatch =
+          headcoverTokens.length === 0
+            ? true
+            : headcoverTokens.some((tok) => matchesToken(tok));
+        if (!hasHeadcoverMatch) return false;
+
+        if (!nonHeadcoverTokens.length) {
+          return true;
+        }
+
+        return nonHeadcoverTokens.some((tok) => matchesToken(tok));
       });
     }
 
