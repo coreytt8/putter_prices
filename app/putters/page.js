@@ -10,6 +10,7 @@ import HighlightCard from "@/components/HighlightCard";
 import CompareBar from "@/components/CompareBar";
 import CompareTray from "@/components/CompareTray";
 import { detectVariant } from "@/lib/variantMap";
+import { normalizeModelKey } from "@/lib/normalize";
 
 /* ============================
    SMART FAIR-PRICE BADGE (inline, JS/JSX)
@@ -246,14 +247,17 @@ function useRecentModels() {
    EXTRA HELPERS
    ============================ */
 function getModelKey(o) {
-  if (typeof o?.model === "string" && o.model.trim()) return o.model.trim();
-  if (typeof o?.groupModel === "string" && o.groupModel.trim()) return o.groupModel.trim();
-  if (typeof o?.title === "string" && o.title.trim()) {
-    const t = o.title.replace(/\s+/g, " ").trim();
-    const first = t.split(" - ")[0] || t;
-    return first.slice(0, 120);
-  }
-  return "";
+  // Prefer explicit model/groupModel if present, else fall back to title.
+  const raw =
+    (typeof o?.model === "string" && o.model.trim()) ||
+    (typeof o?.groupModel === "string" && o.groupModel.trim()) ||
+    (typeof o?.title === "string" && o.title.trim()) ||
+    "";
+
+  // Normalize to the same key used by the crawler/aggregator so stats match.
+  // This strips brand/length/noise but keeps core model tokens.
+  const key = normalizeModelKey(raw);
+  return key || "";
 }
 function selectedConditionBand(conds) {
   return Array.isArray(conds) && conds.length === 1 ? conds[0] : "";
