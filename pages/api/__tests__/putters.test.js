@@ -727,6 +727,127 @@ test("API handler keeps offers when titles omit filler descriptors", async () =>
   );
 });
 
+test("Jet Set listings survive missing descriptor tokens while accessories drop", async () => {
+  const mod = await modulePromise;
+  const handler = mod.default;
+  assert.equal(typeof handler, "function", "default export should be a function");
+
+  const originalFetch = global.fetch;
+  const originalClientId = process.env.EBAY_CLIENT_ID;
+  const originalClientSecret = process.env.EBAY_CLIENT_SECRET;
+
+  process.env.EBAY_CLIENT_ID = "test-id";
+  process.env.EBAY_CLIENT_SECRET = "test-secret";
+
+  const browseItems = [
+    {
+      itemId: "jet-set-putter",
+      title: "Scotty Cameron Special Select Jet Set Newport 2 Putter",
+      price: { value: "850", currency: "USD" },
+      itemWebUrl: "https://example.com/jet-set-putter",
+      seller: { username: "jet-set-seller" },
+      image: { imageUrl: "https://example.com/jet-set-putter.jpg" },
+      shippingOptions: [
+        { shippingCost: { value: "0", currency: "USD" } },
+      ],
+      buyingOptions: ["FIXED_PRICE"],
+      itemSpecifics: [],
+      localizedAspects: [],
+      additionalProductIdentities: [],
+      returnTerms: {},
+      itemLocation: {},
+    },
+    {
+      itemId: "jet-set-headcover",
+      title: "Scotty Cameron Jet Set Newport 2 Headcover Black",
+      price: { value: "250", currency: "USD" },
+      itemWebUrl: "https://example.com/jet-set-headcover",
+      seller: { username: "jet-set-cover" },
+      image: { imageUrl: "https://example.com/jet-set-headcover.jpg" },
+      shippingOptions: [
+        { shippingCost: { value: "10", currency: "USD" } },
+      ],
+      buyingOptions: ["FIXED_PRICE"],
+      itemSpecifics: [],
+      localizedAspects: [],
+      additionalProductIdentities: [],
+      returnTerms: {},
+      itemLocation: {},
+    },
+    {
+      itemId: "jet-set-accessory",
+      title: "Scotty Cameron Jet Set Weight Kit",
+      price: { value: "120", currency: "USD" },
+      itemWebUrl: "https://example.com/jet-set-weight",
+      seller: { username: "jet-set-weight" },
+      image: { imageUrl: "https://example.com/jet-set-weight.jpg" },
+      shippingOptions: [
+        { shippingCost: { value: "5", currency: "USD" } },
+      ],
+      buyingOptions: ["FIXED_PRICE"],
+      itemSpecifics: [],
+      localizedAspects: [],
+      additionalProductIdentities: [],
+      returnTerms: {},
+      itemLocation: {},
+    },
+  ];
+
+  global.fetch = async (input) => {
+    const url = typeof input === "string" ? input : input?.toString();
+    if (!url) throw new Error("Missing URL in fetch stub");
+
+    if (url.includes("/identity/")) {
+      return {
+        ok: true,
+        status: 200,
+        json: async () => ({ access_token: "fake-token", expires_in: 7200 }),
+        text: async () => "",
+      };
+    }
+
+    if (url.startsWith("https://api.ebay.com/buy/browse/v1/item_summary/search")) {
+      return {
+        ok: true,
+        status: 200,
+        json: async () => ({ itemSummaries: browseItems, total: browseItems.length }),
+        text: async () => "",
+      };
+    }
+
+    throw new Error(`Unexpected fetch URL: ${url}`);
+  };
+
+  const req = {
+    method: "GET",
+    query: {
+      q: "Scotty Cameron Jet Set Newport 2 Black",
+      group: "false",
+      forceCategory: "false",
+    },
+    headers: { host: "test.local", "user-agent": "node" },
+  };
+  const res = createMockRes();
+
+  try {
+    await handler(req, res);
+  } finally {
+    global.fetch = originalFetch;
+    process.env.EBAY_CLIENT_ID = originalClientId;
+    process.env.EBAY_CLIENT_SECRET = originalClientSecret;
+  }
+
+  assert.equal(res.statusCode, 200, "handler should respond with 200");
+  assert.ok(res.jsonBody, "response body should be captured");
+  assert.ok(Array.isArray(res.jsonBody.offers), "offers array should be present");
+  assert.equal(res.jsonBody.offers.length, 1, "only the putter should remain after filtering");
+  assert.equal(
+    res.jsonBody.offers[0]?.title,
+    "Scotty Cameron Special Select Jet Set Newport 2 Putter",
+    "Jet Set putter should survive missing descriptor tokens"
+  );
+});
+
 test("headcover queries ignore length/dex tokens during filtering", async () => {
   const mod = await modulePromise;
   const handler = mod.default;
