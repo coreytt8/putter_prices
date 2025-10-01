@@ -91,6 +91,108 @@ async function collectBrowseQueriesFor(searchQuery) {
   return browseUrls;
 }
 
+test("headcover searches bypass forced golf-club category filter", async () => {
+  const mod = await modulePromise;
+  const handler = mod.default;
+  assert.equal(typeof handler, "function", "default export should be a function");
+  const { __testables__ } = mod;
+  if (__testables__?.resetTokenCache) {
+    __testables__.resetTokenCache();
+  }
+
+  const originalFetch = global.fetch;
+  const originalClientId = process.env.EBAY_CLIENT_ID;
+  const originalClientSecret = process.env.EBAY_CLIENT_SECRET;
+
+  process.env.EBAY_CLIENT_ID = "test-id";
+  process.env.EBAY_CLIENT_SECRET = "test-secret";
+
+  const categoryParams = [];
+
+  const headcoverItem = {
+    itemId: "123",
+    title: "Scotty Cameron Classics Catalina Headcover",
+    price: { value: "199.99", currency: "USD" },
+    buyingOptions: ["FIXED_PRICE"],
+    image: { imageUrl: "https://example.com/headcover.jpg" },
+    itemSpecifics: [],
+    localizedAspects: [],
+    additionalProductIdentities: [],
+    seller: {},
+    returnTerms: {},
+    itemLocation: {},
+    categories: [{ categoryId: "36278" }],
+  };
+
+  let browseCalls = 0;
+
+  global.fetch = async (input) => {
+    const url = typeof input === "string" ? input : input?.toString();
+    if (!url) throw new Error("Missing URL in fetch stub");
+
+    if (url.includes("/identity/")) {
+      return {
+        ok: true,
+        status: 200,
+        json: async () => ({ access_token: "fake-token", expires_in: 7200 }),
+        text: async () => "",
+      };
+    }
+
+    if (url.startsWith("https://api.ebay.com/buy/browse/v1/item_summary/search")) {
+      const parsed = new URL(url);
+      categoryParams.push(parsed.searchParams.get("category_ids"));
+      browseCalls += 1;
+      const items = browseCalls === 1 ? [headcoverItem] : [];
+      return {
+        ok: true,
+        status: 200,
+        json: async () => ({ itemSummaries: items, total: items.length }),
+        text: async () => "",
+      };
+    }
+
+    throw new Error(`Unexpected fetch URL: ${url}`);
+  };
+
+  const req = {
+    method: "GET",
+    query: {
+      q: "Scotty Cameron Classics Catalina headcover",
+      group: "false",
+      samplePages: "1",
+    },
+    headers: { host: "test.local", "user-agent": "node" },
+  };
+  const res = createMockRes();
+
+  try {
+    await handler(req, res);
+  } finally {
+    global.fetch = originalFetch;
+    process.env.EBAY_CLIENT_ID = originalClientId;
+    process.env.EBAY_CLIENT_SECRET = originalClientSecret;
+    if (__testables__?.resetTokenCache) {
+      __testables__.resetTokenCache();
+    }
+  }
+
+  assert.equal(res.statusCode, 200, "handler should respond with 200");
+  const offers = Array.isArray(res.jsonBody?.offers) ? res.jsonBody.offers : [];
+  assert.ok(offers.length > 0, "headcover listing should be returned");
+  assert.ok(
+    offers.some((offer) => offer?.title === headcoverItem.title),
+    "returned offers should include the headcover item"
+  );
+
+  const forcedCategories = categoryParams.filter((value) => value != null && value !== "");
+  assert.equal(
+    forcedCategories.length,
+    0,
+    "headcover searches should not set category_ids, preserving general headcover buckets"
+  );
+});
+
 test("mapEbayItemToOffer normalizes bid count variants", async () => {
   const { mapEbayItemToOffer } = await modulePromise;
 
@@ -1462,17 +1564,13 @@ test("headcover queries broaden categories but still block other accessories", a
   );
 
   assert.ok(browseCallParams.length > 0, "eBay Browse should be called at least once");
-  const expectedHeadcoverCategories = ["36278", "36279", "36280", "36281", "36282"];
   for (const callUrl of browseCallParams) {
     const categoryIds = callUrl.searchParams.get("category_ids");
-    assert.ok(categoryIds, "category ids should be requested when forcing category");
-    assert.ok(categoryIds.includes("115280"), "golf club category should be enforced");
-    for (const cat of expectedHeadcoverCategories) {
-      assert.ok(
-        categoryIds.includes(cat),
-        `headcover category ${cat} should be included for headcover queries`
-      );
-    }
+    assert.equal(
+      categoryIds,
+      null,
+      "headcover searches should omit category_ids to allow general headcover buckets"
+    );
   }
 });
 
@@ -1590,10 +1688,10 @@ test("headcover listings from generic categories survive category filtering", as
   assert.ok(browseCallParams.length > 0, "eBay Browse should be called at least once");
   for (const callUrl of browseCallParams) {
     const categoryIds = callUrl.searchParams.get("category_ids");
-    assert.ok(categoryIds, "category ids should be requested when forcing category");
-    assert.ok(
-      categoryIds.includes(genericHeadcoverCategory),
-      "generic headcover category should be included in browse calls",
+    assert.equal(
+      categoryIds,
+      null,
+      "headcover searches should omit forced category filters to include general headcover listings"
     );
   }
 });
