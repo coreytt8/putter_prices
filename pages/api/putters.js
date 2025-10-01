@@ -33,6 +33,17 @@ const EBAY_SITE = process.env.EBAY_SITE || "EBAY_US";
 
 const CATEGORY_GOLF_CLUBS = "115280";
 const CATEGORY_PUTTER_HEADCOVERS = "36278";
+const CATEGORY_DRIVER_HEADCOVERS = "36279";
+const CATEGORY_FAIRWAY_HEADCOVERS = "36280";
+const CATEGORY_HYBRID_HEADCOVERS = "36281";
+const CATEGORY_OTHER_HEADCOVERS = "36282";
+const CATEGORY_ALL_HEADCOVERS = [
+  CATEGORY_PUTTER_HEADCOVERS,
+  CATEGORY_DRIVER_HEADCOVERS,
+  CATEGORY_FAIRWAY_HEADCOVERS,
+  CATEGORY_HYBRID_HEADCOVERS,
+  CATEGORY_OTHER_HEADCOVERS,
+];
 const ACCESSORY_BLOCK_PATTERN = /\b(shafts?|grips?|weights?)\b/i;
 // -------------------- Token --------------------
 let _tok = { val: null, exp: 0 };
@@ -729,7 +740,9 @@ async function fetchEbayBrowse({
   if (forceCategory) {
     const categoryIds = new Set([CATEGORY_GOLF_CLUBS]);
     if (queryMentionsHeadcover(q)) {
-      categoryIds.add(CATEGORY_PUTTER_HEADCOVERS);
+      for (const headcoverCategory of CATEGORY_ALL_HEADCOVERS) {
+        if (headcoverCategory) categoryIds.add(headcoverCategory);
+      }
     }
     url.searchParams.set("category_ids", Array.from(categoryIds).join(","));
   }
