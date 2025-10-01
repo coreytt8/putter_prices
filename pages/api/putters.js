@@ -1002,23 +1002,42 @@ export default async function handler(req, res) {
             .filter((t) => t.length > 1 || /\d/.test(t))
         );
 
-        if (!normalizedModelParam) {
-          return queryTokens.every((tok) => titleTokens.has(tok));
+        let matchesToken = (tok) => titleTokens.has(tok);
+
+        let modelTokens;
+        let matchesTargetModel = false;
+
+        if (normalizedModelParam) {
+          const offerModel = o?.__model ? norm(o.__model) : "";
+          matchesTargetModel = offerModel && offerModel === normalizedModelParam;
+          if (matchesTargetModel) {
+            modelTokens = new Set(
+              tokenize(o?.__model)
+                .map((t) => t.trim())
+                .filter((t) => t.length > 1 || /\d/.test(t))
+            );
+            matchesToken = (tok) => titleTokens.has(tok) || modelTokens.has(tok);
+          }
         }
 
-        const offerModel = o?.__model ? norm(o.__model) : "";
-        const matchesTargetModel = offerModel && offerModel === normalizedModelParam;
-        if (!matchesTargetModel) {
-          return queryTokens.every((tok) => titleTokens.has(tok));
+        if (!hasHeadcoverToken) {
+          return queryTokens.every((tok) => matchesToken(tok));
         }
 
-        const modelTokens = new Set(
-          tokenize(o?.__model)
-            .map((t) => t.trim())
-            .filter((t) => t.length > 1 || /\d/.test(t))
-        );
+        const headcoverTokens = queryTokens.filter((tok) => HEAD_COVER_TOKEN_VARIANTS.has(tok));
+        const nonHeadcoverTokens = queryTokens.filter((tok) => !HEAD_COVER_TOKEN_VARIANTS.has(tok));
 
-        return queryTokens.every((tok) => titleTokens.has(tok) || modelTokens.has(tok));
+        const hasHeadcoverMatch =
+          headcoverTokens.length === 0
+            ? true
+            : headcoverTokens.some((tok) => matchesToken(tok));
+        if (!hasHeadcoverMatch) return false;
+
+        if (!nonHeadcoverTokens.length) {
+          return true;
+        }
+
+        return nonHeadcoverTokens.some((tok) => matchesToken(tok));
       });
     }
 
