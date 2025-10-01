@@ -823,15 +823,14 @@ async function fetchEbayBrowse({
   };
   const ebaySort = sortMap[normalizedSort];
   if (ebaySort) url.searchParams.set("sort", ebaySort);
-  if (forceCategory) {
+  const headcoverIntent = queryMentionsHeadcover(q);
+  if (forceCategory && !headcoverIntent) {
     const categoryIds = new Set([CATEGORY_GOLF_CLUBS]);
-    if (queryMentionsHeadcover(q)) {
-      for (const headcoverCategory of CATEGORY_ALL_HEADCOVERS) {
-        if (headcoverCategory) categoryIds.add(headcoverCategory);
-      }
-    }
     url.searchParams.set("category_ids", Array.from(categoryIds).join(","));
   }
+  // Headcover-specific searches intentionally skip the category filter so that
+  // eBay's dedicated headcover categories (including the general "Golf Club
+  // Headcovers" bucket) remain eligible.
 
   const filterParts = [];
   if (Array.isArray(buyingOptions) && buyingOptions.length) {
