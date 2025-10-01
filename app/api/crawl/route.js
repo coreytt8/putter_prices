@@ -2,7 +2,7 @@ import { NextResponse } from "next/server";
 import { getSql } from "@/lib/db";
 
 // If you already have a token helper, import it; otherwise this fallback uses client-credentials.
-import { getAccessToken } from "@/lib/ebayAuth"; // tweak if your export name differs
+import { getEbayToken } from "@/lib/ebayAuth"; // tweak if your export name differs
 
 // Minimal normalize helpers (reuse your existing ones if available)
 function cents(value) { return Math.round(Number(value || 0) * 100); }
@@ -27,6 +27,7 @@ function buildVariantKey(title) {
 }
 
 // You likely already have a canonicalizer; call it here instead of this stub
+import { buildVariantKey } from "@/lib/variant-detect;
 import { normalizeModelKey } from "@/lib/normalize"; // already in your repo
 
 async function fetchBrowse(token, params) {
@@ -52,7 +53,7 @@ export async function GET() {
   const now = new Date();
 
   try {
-    const token = await getAccessToken();
+    const token = await getEbayToken();
     // TODO: expand queries by brand/model; start simple with one pass
     const items = await fetchBrowse(token, { q: "putter", limit: 100 });
 
