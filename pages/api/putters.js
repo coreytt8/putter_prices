@@ -1024,15 +1024,19 @@ export default async function handler(req, res) {
           return queryTokens.every((tok) => matchesToken(tok));
         }
 
-        const headcoverTokens = queryTokens.filter((tok) => HEAD_COVER_TOKEN_VARIANTS.has(tok));
+        let headcoverMatch = false;
+        for (const variant of HEAD_COVER_TOKEN_VARIANTS) {
+          if (matchesToken(variant)) {
+            headcoverMatch = true;
+            break;
+          }
+        }
+
+        if (!headcoverMatch) {
+          return false;
+        }
+
         const nonHeadcoverTokens = queryTokens.filter((tok) => !HEAD_COVER_TOKEN_VARIANTS.has(tok));
-
-        const hasHeadcoverMatch =
-          headcoverTokens.length === 0
-            ? true
-            : headcoverTokens.some((tok) => matchesToken(tok));
-        if (!hasHeadcoverMatch) return false;
-
         if (!nonHeadcoverTokens.length) {
           return true;
         }
