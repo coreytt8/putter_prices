@@ -91,6 +91,76 @@ async function collectBrowseQueriesFor(searchQuery) {
   return browseUrls;
 }
 
+async function runHandlerWithBrowseResults(searchQuery, browseItems) {
+  const mod = await modulePromise;
+  const handler = mod.default;
+  assert.equal(typeof handler, "function", "default export should be a function");
+  const { __testables__ } = mod;
+
+  if (__testables__?.resetTokenCache) {
+    __testables__.resetTokenCache();
+  }
+
+  const originalFetch = global.fetch;
+  const originalClientId = process.env.EBAY_CLIENT_ID;
+  const originalClientSecret = process.env.EBAY_CLIENT_SECRET;
+
+  process.env.EBAY_CLIENT_ID = "test-id";
+  process.env.EBAY_CLIENT_SECRET = "test-secret";
+
+  let browseCalls = 0;
+
+  global.fetch = async (input) => {
+    const url = typeof input === "string" ? input : input?.toString();
+    if (!url) throw new Error("Missing URL in fetch stub");
+
+    if (url.includes("/identity/")) {
+      return {
+        ok: true,
+        status: 200,
+        json: async () => ({ access_token: "fake-token", expires_in: 7200 }),
+        text: async () => "",
+      };
+    }
+
+    if (url.startsWith("https://api.ebay.com/buy/browse/v1/item_summary/search")) {
+      browseCalls += 1;
+      return {
+        ok: true,
+        status: 200,
+        json: async () => ({ itemSummaries: browseItems, total: browseItems.length }),
+        text: async () => "",
+      };
+    }
+
+    throw new Error(`Unexpected fetch URL: ${url}`);
+  };
+
+  const req = {
+    method: "GET",
+    query: { q: searchQuery, group: "false", samplePages: "1" },
+    headers: { host: "test.local", "user-agent": "node" },
+  };
+  const res = createMockRes();
+
+  try {
+    await handler(req, res);
+  } finally {
+    global.fetch = originalFetch;
+    process.env.EBAY_CLIENT_ID = originalClientId;
+    process.env.EBAY_CLIENT_SECRET = originalClientSecret;
+    if (__testables__?.resetTokenCache) {
+      __testables__.resetTokenCache();
+    }
+  }
+
+  assert.ok(browseCalls > 0, "eBay browse should be called");
+  assert.equal(res.statusCode, 200, "handler should respond with 200");
+  assert.ok(Array.isArray(res.jsonBody?.offers), "offers array should be returned");
+
+  return res.jsonBody;
+}
+
 test("headcover searches bypass forced golf-club category filter", async () => {
   const mod = await modulePromise;
   const handler = mod.default;
@@ -350,6 +420,64 @@ test("tokenize + queryMentionsHeadcover handle punctuated head cover text", asyn
     "queryMentionsHeadcover should treat punctuation like whitespace"
   );
   assert.ok(queryMentionsHeadcover("hc"), "queryMentionsHeadcover should detect HC abbreviation");
+});
+
+test("API handler matches concatenated TourRat tokens to canonical query terms", async () => {
+  const browseItems = [
+    {
+      itemId: "tourrat1",
+      title: "Scotty Cameron TourRat 1 Circle T",
+      price: { value: "4500", currency: "USD" },
+      itemWebUrl: "https://example.com/tourrat1",
+      seller: { username: "tourrat-seller" },
+      image: { imageUrl: "https://example.com/tourrat.jpg" },
+      shippingOptions: [{ shippingCost: { value: "0", currency: "USD" } }],
+      buyingOptions: ["FIXED_PRICE"],
+      itemSpecifics: [{ name: "Golf Club Type", value: "Putter" }],
+      localizedAspects: [],
+      additionalProductIdentities: [],
+      returnTerms: {},
+      itemLocation: {},
+      categoryPath: ["Golf", "Putters"],
+    },
+  ];
+
+  const body = await runHandlerWithBrowseResults("scotty cameron tour rat", browseItems);
+  assert.equal(body.offers.length, 1, "TourRat listing should be retained for tour rat query");
+  assert.equal(
+    body.offers[0]?.title,
+    browseItems[0].title,
+    "TourRat listing should match canonicalized query tokens",
+  );
+});
+
+test("API handler matches concatenated model tokens across brands", async () => {
+  const browseItems = [
+    {
+      itemId: "queenb6",
+      title: "Bettinardi QueenB 6 Limited",
+      price: { value: "399", currency: "USD" },
+      itemWebUrl: "https://example.com/queenb6",
+      seller: { username: "bettinardi-seller" },
+      image: { imageUrl: "https://example.com/queenb6.jpg" },
+      shippingOptions: [{ shippingCost: { value: "12", currency: "USD" } }],
+      buyingOptions: ["FIXED_PRICE"],
+      itemSpecifics: [{ name: "Golf Club Type", value: "Putter" }],
+      localizedAspects: [],
+      additionalProductIdentities: [],
+      returnTerms: {},
+      itemLocation: {},
+      categoryPath: ["Golf Clubs", "Putters"],
+    },
+  ];
+
+  const body = await runHandlerWithBrowseResults("queen b", browseItems);
+  assert.equal(body.offers.length, 1, "QueenB listing should be retained for queen b query");
+  assert.equal(
+    body.offers[0]?.title,
+    browseItems[0].title,
+    "QueenB listing should match canonicalized query tokens",
+  );
 });
 
 test("normalizeSearchQ + recall helpers avoid putter for headcover intent", async () => {

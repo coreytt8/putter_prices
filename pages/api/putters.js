@@ -99,7 +99,43 @@ const offerCost = (offer) => {
 
 const norm = (s) => String(s || "").trim().toLowerCase();
 
-const tokenize = (s) => {
+const SHARED_MODEL_TOKENS = [
+  // Scotty Cameron core & collectible families
+  "newport 2.5", "newport 2", "newport",
+  "phantom 11.5", "phantom 11", "phantom 7.5", "phantom 7", "phantom 5.5", "phantom 5", "phantom x",
+  "fastback", "squareback", "futura", "select", "special select",
+  "studio select", "studio style", "studio design", "button back",
+  "tei3", "tel3", "pro platinum", "oil can",
+  "newport beach", "beach",
+  "napa", "napa valley",
+  "circle t", "tour rat", "009m", "009h", "009s", "009", "gss", "my girl",
+
+  // TaylorMade / Odyssey / Ping / Bettinardi / LAB / Evnroll families
+  "anser", "tyne", "zing", "tomcat", "fetch",
+  "spider", "spider x", "spider tour", "myspider",
+  "two ball", "2-ball", "eleven", "seven", "#7", "#9", "versa", "jailbird",
+  "bb", "queen b", "studio stock", "inovai",
+  "mezz", "df", "link",
+  "evnroll", "er1", "er2", "er5",
+];
+
+let CANONICAL_BRAND_MODEL_TOKEN_SET = null;
+
+function getCanonicalBrandModelTokens() {
+  if (CANONICAL_BRAND_MODEL_TOKEN_SET) return CANONICAL_BRAND_MODEL_TOKEN_SET;
+  CANONICAL_BRAND_MODEL_TOKEN_SET = buildCanonicalBrandModelTokens();
+  return CANONICAL_BRAND_MODEL_TOKEN_SET;
+}
+
+function canonicalTokenParts(value) {
+  return String(value || "")
+    .toLowerCase()
+    .split(/[^a-z0-9]+/)
+    .map((part) => part.trim())
+    .filter((part) => part && /[a-z]/.test(part) && part.length > 1);
+}
+
+const tokenize = (s, canonicalTokens = getCanonicalBrandModelTokens()) => {
   if (!s) return [];
 
   const normalized = norm(s);
@@ -135,6 +171,33 @@ const tokenize = (s) => {
   if (HEAD_COVER_TEXT_RX.test(normalized)) {
     for (const variant of HEAD_COVER_TOKEN_VARIANTS) {
       tokenSet.add(variant);
+    }
+  }
+
+  const canonicalList = canonicalTokens ? Array.from(canonicalTokens) : [];
+  if (canonicalList.length) {
+    const letterTokens = Array.from(tokenSet).filter((token) => /^[a-z]+$/.test(token));
+    for (const token of letterTokens) {
+      for (const canonical of canonicalList) {
+        if (!canonical || canonical.length < 2) continue;
+        let matched = false;
+
+        if (token.startsWith(canonical) && token.length > canonical.length) {
+          matched = true;
+          const remainder = token.slice(canonical.length);
+          if (remainder.length > 1) tokenSet.add(remainder);
+        }
+
+        if (token.endsWith(canonical) && token.length > canonical.length) {
+          matched = true;
+          const remainder = token.slice(0, token.length - canonical.length);
+          if (remainder.length > 1) tokenSet.add(remainder);
+        }
+
+        if (matched) {
+          tokenSet.add(canonical);
+        }
+      }
     }
   }
 
@@ -410,28 +473,15 @@ function parseSpecsFromItem(item) {
   const shaft = shaftMatch ? shaftMatch[0] : null;
 
   // coarse family tagging (used for grouping key fallback)
-  const FAMILIES = [
-    // Cameron core & collectible
-    "newport 2.5", "newport 2", "newport",
-    "phantom 11.5", "phantom 11", "phantom 7.5", "phantom 7", "phantom 5.5", "phantom 5", "phantom x",
-    "fastback", "squareback", "futura", "select", "special select",
-    "studio select", "studio style", "studio design", "button back",
-    "tei3", "tel3", "pro platinum", "oil can",
-    "newport beach", "beach",
-    "napa", "napa valley",
-    "circle t", "tour rat", "009m", "009h", "009s", "009", "gss", "my girl",
-
-    // TaylorMade / Odyssey / Ping / Bettinardi / LAB / Evnroll
-    "anser", "tyne", "zing", "tomcat", "fetch",
-    "spider", "spider x", "spider tour", "myspider",
-    "two ball", "2-ball", "eleven", "seven", "#7", "#9", "versa", "jailbird",
-    "bb", "queen b", "studio stock", "inovai",
-    "mezz", "df", "link",
-    "evnroll", "er1", "er2", "er5"
-  ];
   let family = null;
   const tl = norm(title);
-  for (const k of FAMILIES) { if (tl.includes(k)) { family = k; break; } }
+  for (const token of SHARED_MODEL_TOKENS) {
+    const normalizedToken = norm(token);
+    if (normalizedToken && tl.includes(normalizedToken)) {
+      family = token;
+      break;
+    }
+  }
 
   return { length, family, headType, dexterity: dex, hasHeadcover, shaft };
 }
@@ -607,6 +657,33 @@ const BRAND_ASSIST_ALIASES = [
   "evnroll",
   "lab golf",
 ];
+
+function buildCanonicalBrandModelTokens() {
+  const canonical = new Set();
+
+  const addParts = (value) => {
+    for (const part of canonicalTokenParts(value)) {
+      canonical.add(part);
+    }
+  };
+
+  for (const alias of BRAND_ASSIST_ALIASES) {
+    addParts(alias);
+  }
+
+  for (const [brand, tokens] of Object.entries(BRAND_LIMITED_TOKENS)) {
+    addParts(brand);
+    for (const token of tokens) {
+      addParts(token);
+    }
+  }
+
+  for (const token of SHARED_MODEL_TOKENS) {
+    addParts(token);
+  }
+
+  return canonical;
+}
 
 const TRIVIAL_QUERY_TOKENS = (() => {
   const trivial = new Set(["putter", "putters", "golf", "club", "clubs", "signature"]);
