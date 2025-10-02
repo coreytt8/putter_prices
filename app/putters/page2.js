@@ -4,6 +4,7 @@ import { useEffect, useMemo, useState } from "react";
 import { usePathname } from "next/navigation";
 import MarketSnapshot from "@/components/MarketSnapshot";
 import PriceSparkline from "@/components/PriceSparkline";
+import ConditionChips from "@/components/ConditionChips";
 import SmartPriceBadge from "@/components/SmartPriceBadge";
 
 
@@ -952,7 +953,9 @@ export default function PuttersPage() {
               const statsKey = getStatsKey(g.model, groupCond);
               const stats = statsByModel[statsKey] || null;
 
-              const bestUrl = ordered.length ? ordered[0]?.url : null;
+              const firstOffer = ordered[0] ?? null;
+              const helperModelKey = firstOffer ? getModelKey(firstOffer) : g.model;
+              const bestUrl = firstOffer?.url ?? null;
 
               const fair = fairPriceBadge(g.bestPrice, stats);
 
@@ -1005,6 +1008,9 @@ export default function PuttersPage() {
                             </span>
                           )}
                         </div>
+                        {helperModelKey ? (
+                          <ConditionChips model={helperModelKey} className="mt-2" />
+                        ) : null}
 			<div className="mt-2">
   <SmartPriceBadge
     price={Number(g.bestPrice)}

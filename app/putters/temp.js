@@ -3,6 +3,7 @@
 import { useEffect, useMemo, useState } from "react";
 import MarketSnapshot from "@/components/MarketSnapshot";
 import PriceSparkline from "@/components/PriceSparkline";
+import ConditionChips from "@/components/ConditionChips";
 
 /* ============================
    SMART FAIR-PRICE BADGE (inline)
@@ -935,7 +936,9 @@ export default function PuttersPage() {
               const series = seriesByModel[g.model] || [];
               const stats = statsByModel[g.model] || null;
 
-              const bestUrl = ordered.length ? ordered[0]?.url : null;
+              const firstOffer = ordered[0] ?? null;
+              const helperModelKey = firstOffer ? getModelKey(firstOffer) : g.model;
+              const bestUrl = firstOffer?.url ?? null;
 
               const fair = fairPriceBadge(g.bestPrice, stats);
 
@@ -988,6 +991,9 @@ export default function PuttersPage() {
                             </span>
                           )}
                         </div>
+                        {helperModelKey ? (
+                          <ConditionChips model={helperModelKey} className="mt-2" />
+                        ) : null}
 
                         {/* Lows row (on expand) */}
                         {isOpen && (
