@@ -3,6 +3,10 @@
 import { useEffect, useMemo, useState } from 'react';
 import PriceSparkline from './PriceSparkline';
 
+export const TREND_WRAPPER_CLASS = 'mt-4';
+export const TREND_LOADING_CLASS = 'h-20 rounded-xl bg-slate-100/80 animate-pulse';
+export const TREND_ERROR_TEXT_CLASS = 'text-xs text-slate-400';
+
 const seriesCache = new Map();
 const inflightCache = new Map();
 
@@ -95,21 +99,18 @@ export default function TrendingSparkline({ modelKey, height = 72, className = '
       .filter(Boolean);
   }, [data]);
 
-  const wrapperClassName = ['mt-4', className].filter(Boolean).join(' ');
+  const wrapperClassName = [TREND_WRAPPER_CLASS, className].filter(Boolean).join(' ');
 
   if (!shouldFetch) {
     return (
       <div className={wrapperClassName}>
-        <p className="text-xs text-slate-400">Trend data unavailable.</p>
+        <p className={TREND_ERROR_TEXT_CLASS}>Trend data unavailable.</p>
       </div>
     );
   }
 
   if (isLoading) {
-    const loadingClassName = [
-      wrapperClassName,
-      'h-20 rounded-xl bg-slate-100/80 animate-pulse',
-    ]
+    const loadingClassName = [wrapperClassName, TREND_LOADING_CLASS]
       .filter(Boolean)
       .join(' ');
     return (
@@ -122,7 +123,7 @@ export default function TrendingSparkline({ modelKey, height = 72, className = '
   if (error) {
     return (
       <div className={wrapperClassName}>
-        <p className="text-xs text-slate-400">Trend unavailable.</p>
+        <p className={TREND_ERROR_TEXT_CLASS}>Trend unavailable.</p>
       </div>
     );
   }
@@ -130,7 +131,7 @@ export default function TrendingSparkline({ modelKey, height = 72, className = '
   if (!points.length) {
     return (
       <div className={wrapperClassName}>
-        <p className="text-xs text-slate-400">Trend loading…</p>
+        <p className={TREND_ERROR_TEXT_CLASS}>Trend loading…</p>
       </div>
     );
   }
