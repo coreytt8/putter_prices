@@ -5,7 +5,7 @@ import { NextResponse } from "next/server";
 import { getSql } from "@/lib/db";
 import { normalizeModelKey } from "@/lib/normalize";
 import { mapConditionIdToBand } from "@/lib/condition-band"; // you added this
-import { getAccessToken } from "@/lib/ebayAuth";              // you already have this
+import { getAccessToken } from "@/lib/ebayauth";              // you already have this
 
 const BROWSE_BASE = "https://api.ebay.com/buy/browse/v1";
 const ADMIN_KEY = process.env.ADMIN_KEY;
