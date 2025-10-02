@@ -522,6 +522,8 @@ function normalizeBuyingOptions(list) {
   return normalized;
 }
 
+import { mapConditionIdToBand } from "@/lib/condition-band"; // your helper
+
 function mapEbayItemToOffer(item) {
   if (!item) return null;
 
@@ -557,6 +559,8 @@ function mapEbayItemToOffer(item) {
   const url = decorateEbayUrl(rawUrl);
 
   const modelKey = normalizeModelFromTitle(item?.title || "", family);
+  const conditionId = Number(item?.conditionId ?? null);
+  const conditionBand = mapConditionIdToBand(conditionId);
 
   return {
     productId: item?.itemId || item?.legacyItemId || item?.itemHref || item?.title,
@@ -566,6 +570,8 @@ function mapEbayItemToOffer(item) {
     price: itemPrice,
     shipping: shippingValue,
     total,
+    conditionId,
+    conditionBand,
     currency,
     condition: item?.condition || null,
     createdAt: item?.itemCreationDate || item?.itemEndDate || item?.estimatedAvailDate || null,
