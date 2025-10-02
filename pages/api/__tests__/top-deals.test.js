@@ -5,7 +5,16 @@ const { pathToFileURL } = require("node:url");
 
 const modulePath = path.join(__dirname, "..", "top-deals.js");
 const moduleHref = pathToFileURL(modulePath).href;
-const modulePromise = import(moduleHref);
+
+// Regular import once (used by the first/second tests)
+const modulePromise = import(/* webpackIgnore: true */ moduleHref);
+
+// Fresh importer for reloading the module (third test)
+// Appends a cache-busting query and asks bundlers to skip static analysis.
+async function importFreshFromHref(href) {
+  const freshHref = href + (href.includes("?") ? "&" : "?") + "t=" + Date.now();
+  return import(/* webpackIgnore: true */ freshHref);
+}
 
 test("loadRankedDeals returns listings observed before midnight when window is rolling", async () => {
   const { loadRankedDeals } = await modulePromise;
@@ -105,7 +114,10 @@ test("loadRankedDeals surfaces refreshed totals for long-running listings", asyn
   assert.equal(deal.bestOffer.total, refreshedRow.total);
   assert.equal(deal.bestOffer.price, refreshedRow.price);
   assert.equal(deal.bestOffer.shipping, refreshedRow.shipping);
-  assert.equal(Math.round(deal.savings.amount), Math.round((refreshedRow.p50_cents / 100) - refreshedRow.total));
+  assert.equal(
+    Math.round(deal.savings.amount),
+    Math.round((refreshedRow.p50_cents / 100) - refreshedRow.total)
+  );
 });
 
 test("buildDealsFromRows decorates URLs with affiliate params when configured", async () => {
@@ -128,7 +140,8 @@ test("buildDealsFromRows decorates URLs with affiliate params when configured", 
   process.env.EPN_MKEVT = "5";
 
   try {
-    const freshModule = await import(`${moduleHref}?update=${Date.now()}`);
+    // Fresh import so env vars are picked up cleanly
+    const freshModule = await importFreshFromHref(moduleHref);
     const { buildDealsFromRows } = freshModule;
 
     const rows = [
