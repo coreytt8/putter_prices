@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import MarketSnapshot from "@/components/MarketSnapshot";
 import PriceSparkline from "@/components/PriceSparkline";
+import ConditionChips from "@/components/ConditionChips";
 import SmartPriceBadge from "@/components/SmartPriceBadge";
 import HeroSection from "@/components/HeroSection";
 import SectionWrapper from "@/components/SectionWrapper";
@@ -1304,6 +1305,10 @@ export default function PuttersPage() {
                                     </span>
                                   )}
                                 </div>
+
+                                {helperModelKey ? (
+                                  <ConditionChips model={helperModelKey} className="mt-2" />
+                                ) : null}
 
                                 <div className="mt-2">
                                   <SmartPriceBadge

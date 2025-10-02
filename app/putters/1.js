@@ -2,6 +2,7 @@
 
 import { useEffect, useMemo, useState } from "react";
 import MarketSnapshot from "@/components/MarketSnapshot";
+import ConditionChips from "@/components/ConditionChips";
 
 // ---------- helpers ----------
 function formatPrice(value, currency = "USD") {
@@ -522,7 +523,9 @@ export default function PuttersPage() {
               const lows = lowsByModel[g.model];
 
               // pick best listing url for copy
-              const bestUrl = ordered.length ? ordered[0]?.url : null;
+              const firstOffer = ordered[0] ?? null;
+              const helperModelKey = firstOffer?.model || firstOffer?.groupModel || g.model;
+              const bestUrl = firstOffer?.url ?? null;
 
               return (
                 <article key={g.model} className="overflow-hidden rounded-xl border border-gray-200 bg-white shadow-sm">
@@ -563,6 +566,9 @@ export default function PuttersPage() {
                             </span>
                           )}
                         </div>
+                        {helperModelKey ? (
+                          <ConditionChips model={helperModelKey} className="mt-2" />
+                        ) : null}
 
                         {/* NEW: Lows row */}
                         {isOpen && (
