@@ -1,196 +1,65 @@
+// components/ConditionChips.jsx
 'use client';
 
-import { useEffect, useMemo, useState } from 'react';
-import {
-  TREND_ERROR_TEXT_CLASS,
-  TREND_LOADING_CLASS,
-  TREND_WRAPPER_CLASS,
-} from './TrendingSparkline';
+import { useEffect, useMemo, useRef, useState } from 'react';
 
-const conditionCache = new Map();
-const inflightConditionCache = new Map();
-const SHARED_SURFACE_CLASS = TREND_LOADING_CLASS.split(' ')
-  .filter(
-    (token) => token && token !== 'h-20' && token !== 'animate-pulse' && token !== 'rounded-xl'
-  )
-  .join(' ');
+export default function ConditionChips({ model }) {
+  const [state, setState] = useState({ loading: false, error: null, data: null });
+  const mounted = useRef(true);
 
-const fetchConditionDeltas = async (modelKey) => {
-  if (conditionCache.has(modelKey)) {
-    return conditionCache.get(modelKey);
-  }
-  if (inflightConditionCache.has(modelKey)) {
-    return inflightConditionCache.get(modelKey);
-  }
-
-  const url = `/api/condition-deltas?model=${encodeURIComponent(modelKey)}`;
-  const request = fetch(url, { cache: 'no-store' })
-    .then(async (res) => {
-      if (!res.ok) {
-        const message = await res.text();
-        throw new Error(message || 'Failed to load condition deltas');
-      }
-      const payload = await res.json();
-      conditionCache.set(modelKey, payload);
-      inflightConditionCache.delete(modelKey);
-      return payload;
-    })
-    .catch((error) => {
-      inflightConditionCache.delete(modelKey);
-      throw error;
-    });
-
-  inflightConditionCache.set(modelKey, request);
-  return request;
-};
-
-/**
- * Displays relative price premiums across condition bands for a putter model.
- *
- * Expected API response shape:
- * {
- *   ok: boolean,
- *   modelKey?: string,
- *   windowDays?: number,
- *   bandsCount: number,
- *   bands: Array<{
- *     condition: string,
- *     median: number, // price for the band
- *     premium: number, // delta vs baseline median (dollars)
- *     sampleSize: number,
- *   }>
- * }
- */
-export default function ConditionChips({ model, className = '' }) {
-  const shouldFetch = Boolean(model);
-  const cachedData = shouldFetch ? conditionCache.get(model) ?? null : null;
-  const [data, setData] = useState(cachedData);
-  const [error, setError] = useState(null);
-  const [isLoading, setIsLoading] = useState(shouldFetch && !cachedData);
+  const url = useMemo(() => {
+    const m = String(model || '').trim();
+    if (!m) return null;
+    return `/api/condition-deltas?model=${encodeURIComponent(m)}`;
+  }, [model]);
 
   useEffect(() => {
-    if (!shouldFetch) {
-      setData(null);
-      setError(null);
-      setIsLoading(false);
-      return;
-    }
+    mounted.current = true;
+    return () => { mounted.current = false; };
+  }, []);
 
-    if (conditionCache.has(model)) {
-      setData(conditionCache.get(model));
-      setIsLoading(false);
-      return;
-    }
+  useEffect(() => {
+    if (!url) return;
+    setState({ loading: true, error: null, data: null });
+    fetch(url, { cache: 'no-store' })
+      .then(r => r.json())
+      .then(json => { if (mounted.current) setState({ loading: false, error: null, data: json }); })
+      .catch(err => { if (mounted.current) setState({ loading: false, error: err.message, data: null }); });
+  }, [url]);
 
-    let isActive = true;
-    setIsLoading(true);
-    setError(null);
+  if (!model) return null;
+  if (state.loading) return null; // keep UI clean; you can show a skeleton if you want
+  if (state.error) return null;
+  if (!state.data) return null;
 
-    fetchConditionDeltas(model)
-      .then((payload) => {
-        if (!isActive) return;
-        setData(payload);
-        setIsLoading(false);
-      })
-      .catch((err) => {
-        if (!isActive) return;
-        setError(err);
-        setIsLoading(false);
-      });
+  const { bandsCount, bands, resolved } = state.data;
+  if (!bandsCount || bandsCount < 2 || !Array.isArray(bands) || bands.length < 2) return null;
 
-    return () => {
-      isActive = false;
-    };
-  }, [model, shouldFetch]);
-
-  const processedBands = useMemo(() => {
-    if (!data?.bands?.length) return [];
-
-    return data.bands
-      .map((band) => {
-        const premium = Number(band?.premium);
-        const median = Number(band?.median);
-        const condition = band?.condition;
-        if (!condition || !Number.isFinite(premium) || !Number.isFinite(median)) {
-          return null;
-        }
-        const baseline = median - premium;
-        if (!Number.isFinite(baseline) || baseline <= 0) {
-          return null;
-        }
-        const percent = (premium / baseline) * 100;
-        if (!Number.isFinite(percent)) {
-          return null;
-        }
-        const formattedPercent = new Intl.NumberFormat('en-US', {
-          signDisplay: 'always',
-          maximumFractionDigits: Math.abs(percent) >= 10 ? 0 : 1,
-          minimumFractionDigits: 0,
-        }).format(percent);
-
-        return {
-          ...band,
-          condition,
-          premium,
-          median,
-          percent,
-          formattedPercent,
-        };
-      })
-      .filter(Boolean)
-      .sort((a, b) => b.premium - a.premium);
-  }, [data]);
-
-  if (!shouldFetch || isLoading || error) {
-    return null;
-  }
-
-  const bandsCount = data?.bandsCount ?? processedBands.length;
-  if (!bandsCount || bandsCount < 2 || processedBands.length < 2) {
-    return null;
-  }
-
-  const windowDays = Number.isFinite(Number(data?.windowDays))
-    ? Number(data.windowDays)
-    : null;
-
-  const wrapperClassName = [
-    TREND_WRAPPER_CLASS,
-    'flex flex-wrap items-center gap-2 text-xs font-medium text-slate-600',
-    className,
-  ]
-    .filter(Boolean)
-    .join(' ');
-
-  const badgeClassName = [
-    TREND_ERROR_TEXT_CLASS,
-    'inline-flex items-center rounded-full px-2 py-1 text-[11px] font-semibold uppercase tracking-wide',
-    SHARED_SURFACE_CLASS,
-  ]
-    .filter(Boolean)
-    .join(' ');
-
-  const chipBaseClass = [
-    'inline-flex items-center rounded-full px-3 py-1.5 shadow-sm ring-1 ring-slate-200',
-    SHARED_SURFACE_CLASS,
-  ]
-    .filter(Boolean)
-    .join(' ');
+  // Sort by biggest % premium first
+  const sorted = [...bands].sort((a,b) => (b.premiumPct ?? 0) - (a.premiumPct ?? 0));
+  const lookback = resolved?.windowDays ?? state.data.windowDays ?? null;
 
   return (
-    <div className={wrapperClassName}>
-      {windowDays ? <span className={badgeClassName}>Last {windowDays}d</span> : null}
-      {processedBands.map((band) => {
-        const directionClass = band.percent >= 0 ? 'text-emerald-600' : 'text-rose-600';
+    <div className="flex flex-wrap items-center gap-2">
+      {sorted.map(b => {
+        const pct = (typeof b.pct_vs_any === 'string') ? b.pct_vs_any
+          : (typeof b.premiumPct === 'number' ? (b.premiumPct * 100).toFixed(1) : '0.0');
+        const signed = (pct.startsWith('-') ? '' : '+') + pct + '%';
         return (
-          <span key={band.condition} className={chipBaseClass}>
-            <span className="mr-2 text-[11px] font-semibold uppercase tracking-wide text-slate-500">
-              {band.condition}
-            </span>
-            <span className={`text-sm ${directionClass}`}>{band.formattedPercent}%</span>
+          <span
+            key={b.condition}
+            className="inline-flex items-center rounded-full border border-gray-300 px-2 py-0.5 text-xs text-gray-700"
+            title={`Median ${b.median?.toFixed ? '$' + b.median.toFixed(2) : b.median} • n=${b.sampleSize ?? 0}`}
+          >
+            {b.condition.replace(/_/g, ' ')} {signed}
           </span>
         );
       })}
+      {lookback ? (
+        <span className="ml-1 inline-flex items-center rounded-full bg-gray-100 px-2 py-0.5 text-[10px] uppercase tracking-wide text-gray-600">
+          Last {lookback}d
+        </span>
+      ) : null}
     </div>
   );
 }
