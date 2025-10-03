@@ -116,7 +116,7 @@ export default async function handler(req, res) {
     return res.status(200).json({
       ok: true,
       requested: { modelKey: requested, windowDays },
-      resolved: { modelKey: picked },
+      resolved: { modelKey: picked, windowDays },
       series: {
         points,
         bands: Array.from(
