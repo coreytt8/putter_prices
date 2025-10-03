@@ -130,6 +130,27 @@ function parseConditionIds(raw) {
     .filter((num) => Number.isFinite(num));
 }
 
+function coerceDate(value) {
+  if (!value) return null;
+  const date = value instanceof Date ? new Date(value.getTime()) : new Date(value);
+  return Number.isNaN(date.getTime()) ? null : date;
+}
+
+function chooseSnapshotTimestamp(summary) {
+  const candidates = [summary?.itemCreationDate, summary?.itemEndDate];
+  for (const candidate of candidates) {
+    const parsed = coerceDate(candidate);
+    if (parsed) return parsed;
+  }
+  return new Date();
+}
+
+function toUtcDateOnly(value) {
+  const date = coerceDate(value);
+  if (!date) return null;
+  return new Date(Date.UTC(date.getUTCFullYear(), date.getUTCMonth(), date.getUTCDate()));
+}
+
 function expandConditionNames(names = []) {
   const ids = new Set();
   for (const name of names) {
@@ -475,23 +496,27 @@ export async function POST(req) {
       : [];
 
     // Normalize items (include auction currentBidPrice + optional shipping)
-    const items = summaries.map((it) => {
-      const priceVal = Number(it.price?.value ?? it.currentBidPrice?.value ?? 0);
-      const shipVal = Number(it.shippingOptions?.[0]?.shippingCost?.value ?? 0);
+    const items = summaries.map((summary) => {
+      const priceVal = Number(summary.price?.value ?? summary.currentBidPrice?.value ?? 0);
+      const shipVal = Number(summary.shippingOptions?.[0]?.shippingCost?.value ?? 0);
       const total = priceVal + (Number.isFinite(shipVal) ? shipVal : 0);
-      const condId = it.conditionId ? Number(it.conditionId) : null;
+      const condSource = summary.conditionId ?? summary.condition ?? null;
+      const timestamp = chooseSnapshotTimestamp(summary);
+      const snapshotDay = toUtcDateOnly(timestamp) ?? toUtcDateOnly(new Date());
 
       return {
-        item_id: it.itemId,
-        title: it.title || "",
-        item_web_url: it.itemWebUrl || null,
-        model: modelKey,
+        item_id: summary.itemId,
+        title: summary.title || "",
+        item_web_url: summary.itemWebUrl || null,
+        model: normalizeModelKey(summary.title || raw),
         variant_key: variantKey || "",
         price_cents: Math.round(priceVal * 100),
         shipping_cents: Number.isFinite(shipVal) ? Math.round(shipVal * 100) : 0,
         total_cents: Math.round(total * 100),
-        condition_id: condId,
-        condition_band: mapConditionIdToBand(condId),
+        condition_id: summary.conditionId ? Number(summary.conditionId) : null,
+        condition_band: mapConditionIdToBand(condSource) ?? "ANY",
+        snapshot_ts: timestamp,
+        snapshot_day: snapshotDay,
       };
     });
 
@@ -515,7 +540,7 @@ export async function POST(req) {
             (${r.item_id}, ${r.model}, ${r.variant_key},
              ${r.total_cents - r.shipping_cents}, ${r.shipping_cents}, ${r.total_cents},
              ${r.condition_id}, ${r.condition_band},
-             now(), (now() AT TIME ZONE 'UTC')::date)
+             ${r.snapshot_ts}, ${r.snapshot_day})
           ON CONFLICT (item_id, snapshot_day) DO NOTHING
           RETURNING 1
         `;
