@@ -5,7 +5,7 @@
       "schedule": "30 3 * * *"
     },
     {
-      "path": "/api/admin/aggregate?secret=YOUR-NEW-RANDOM-SECRET",
+      "path": "/api/admin/aggregate?secret=12qwaszx!@QWASZX",
       "schedule": "0 9 * * *"
     }
   ]
