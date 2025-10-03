@@ -5,657 +5,283 @@ import { NextResponse } from "next/server";
 import { getSql } from "@/lib/db";
 import { normalizeModelKey } from "@/lib/normalize";
 import { mapConditionIdToBand } from "@/lib/condition-band";
-// If your helper is named differently, change this import (e.g. getEbayToken as getAccessToken)
-import { getEbayToken } from "@/lib/ebay";
+// You said your token helper is exported like this:
+import { getEbayToken as getAccessToken } from "@/lib/ebay";
 
-const NAME_TO_IDS = {
-  NEW: [1000],
-  NEW_OTHER: [1500, 2750],
-  NEW_WITH_DEFECTS: [1750],
-  OPEN_BOX: [1500, 1750, 2750],
-  MANUFACTURER_REFURBISHED: [2000, 2010, 2020, 2030, 2040, 2050, 2060, 2070],
-  CERTIFIED_REFURBISHED: [2000, 2010, 2020, 2030, 2040, 2050, 2060, 2070],
-  SELLER_REFURBISHED: [2500],
-  REFURBISHED: [2000, 2010, 2020, 2030, 2040, 2050, 2060, 2070, 2500],
-  USED: [3000, 4000, 5000, 6000],
-  PREOWNED: [3000, 4000, 5000, 6000],
-  PRE_OWNED: [3000, 4000, 5000, 6000],
-  VERY_GOOD: [4000],
-  GOOD: [5000],
-  ACCEPTABLE: [6000],
-  LIKE_NEW: [4000],
-  FOR_PARTS: [7000],
-  FOR_PARTS_OR_NOT_WORKING: [7000],
-};
-
-const VARIANT_EXPANSIONS = {
-  "newport": [
-    { key: "newport|circle_t", append: ["circle t"] },
-    { key: "newport|tour_only", append: ["tour only"] },
-    { key: "newport|gss", append: ["gss"] },
-  ],
-  "newport 2": [
-    { key: "newport 2|circle_t", append: ["circle t"] },
-    { key: "newport 2|tour_only", append: ["tour only"] },
-    { key: "newport 2|gss", append: ["gss"] },
-    { key: "newport 2|button_back", append: ["button back"] },
-    { key: "newport 2|jet_set", append: ["jet set"] },
-  ],
-  "newport 2.5": [
-    { key: "newport 2.5|circle_t", append: ["circle t"] },
-    { key: "newport 2.5|tour_only", append: ["tour only"] },
-  ],
-  "newport 3": [
-    { key: "newport 3|circle_t", append: ["circle t"] },
-    { key: "newport 3|tour_only", append: ["tour only"] },
-  ],
-  "newport 1.5": [
-    { key: "newport 1.5|circle_t", append: ["circle t"] },
-    { key: "newport 1.5|tour_only", append: ["tour only"] },
-  ],
-  "phantom x": [
-    { key: "phantom x|circle_t", append: ["circle t"] },
-    { key: "phantom x|tour_only", append: ["tour only"] },
-  ],
-  "phantom 5": [
-    { key: "phantom 5|circle_t", append: ["circle t"] },
-    { key: "phantom 5|tour_only", append: ["tour only"] },
-  ],
-  "phantom 7": [
-    { key: "phantom 7|circle_t", append: ["circle t"] },
-    { key: "phantom 7|tour_only", append: ["tour only"] },
-  ],
-  "phantom 9": [
-    { key: "phantom 9|circle_t", append: ["circle t"] },
-    { key: "phantom 9|tour_only", append: ["tour only"] },
-  ],
-  "phantom 11": [
-    { key: "phantom 11|circle_t", append: ["circle t"] },
-    { key: "phantom 11|tour_only", append: ["tour only"] },
-  ],
-  "squareback": [
-    { key: "squareback|circle_t", append: ["circle t"] },
-    { key: "squareback|tour_only", append: ["tour only"] },
-  ],
-  "fastback": [
-    { key: "fastback|circle_t", append: ["circle t"] },
-    { key: "fastback|tour_only", append: ["tour only"] },
-  ],
-  "futura": [
-    { key: "futura|circle_t", append: ["circle t"] },
-    { key: "futura|tour_only", append: ["tour only"] },
-  ],
-  "button back": [
-    { key: "button back|circle_t", append: ["circle t"] },
-    { key: "button back|tour_only", append: ["tour only"] },
-  ],
-};
-
+const ADMIN_KEY = process.env.ADMIN_KEY || process.env.CRON_SECRET || "";
 const BROWSE_BASE = "https://api.ebay.com/buy/browse/v1";
-const CATEGORY_GOLF_CLUBS = "115280";
-const ADMIN_KEY = process.env.ADMIN_KEY;
+const MARKETPLACE = process.env.EBAY_MARKETPLACE_ID || "EBAY_US";
 
-function parseBool(value) {
-  if (typeof value !== "string") return false;
-  const normalized = value.trim().toLowerCase();
-  return normalized === "1" || normalized === "true" || normalized === "yes";
-}
+// util
+const toIntCents = (n) => Math.round(Number(n || 0) * 100);
+const has = (s, sub) => s.toLowerCase().includes(sub.toLowerCase());
 
-function parseLimit(raw) {
-  const n = Number(raw);
-  if (!Number.isFinite(n)) return 50;
-  return Math.max(1, Math.min(200, Math.floor(n)));
-}
+function buildQuery(base, {
+  q, limit, categoryIds, buyingOptions, conditions, conditionIds, fieldgroups
+}) {
+  const params = new URLSearchParams();
+  if (q) params.set("q", q);
+  if (limit) params.set("limit", String(limit));
 
-function parseConditions(raw) {
-  if (!raw) return { names: [], useIds: false };
-  const parts = String(raw)
-    .split(",")
-    .map((part) => part.trim())
-    .filter(Boolean)
-    .map((part) => part.replace(/[^a-z0-9]+/gi, " ").trim())
-    .map((part) => part.replace(/\s+/g, "_").toUpperCase());
-
-  const names = Array.from(new Set(parts));
-  const useIds =
-    names.length > 0 && names.every((name) => Array.isArray(NAME_TO_IDS[name]) && NAME_TO_IDS[name].length > 0);
-  return { names, useIds };
-}
-
-function parseConditionIds(raw) {
-  if (!raw) return [];
-  return String(raw)
-    .split(",")
-    .map((part) => Number(part.trim()))
-    .filter((num) => Number.isFinite(num));
-}
-
-function coerceDate(value) {
-  if (!value) return null;
-  const date = value instanceof Date ? new Date(value.getTime()) : new Date(value);
-  return Number.isNaN(date.getTime()) ? null : date;
-}
-
-function chooseSnapshotTimestamp(summary) {
-  const candidates = [summary?.itemCreationDate, summary?.itemEndDate];
-  for (const candidate of candidates) {
-    const parsed = coerceDate(candidate);
-    if (parsed) return parsed;
+  // ask for condition refinements when useful
+  if (fieldgroups && fieldgroups.length) {
+    params.set("fieldgroups", fieldgroups.join(","));
   }
-  return new Date();
+
+  if (categoryIds && categoryIds.length) {
+    params.set("category_ids", categoryIds.join(","));
+  }
+
+  const filters = [];
+  if (buyingOptions && buyingOptions.length) {
+    filters.push(`buyingOptions:{${buyingOptions.join(",")}}`);
+  }
+  if (conditions && conditions.length) {
+    filters.push(`conditions:{${conditions.join(",")}}`);
+  }
+  if (conditionIds && conditionIds.length) {
+    // NOTE: eBay param is "conditionIds"
+    filters.push(`conditionIds:{${conditionIds.join(",")}}`);
+  }
+  if (filters.length) {
+    params.set("filter", filters.join(","));
+  }
+
+  return `${base}/item_summary/search?${params.toString()}`;
 }
 
-function toUtcDateOnly(value) {
-  const date = coerceDate(value);
-  if (!date) return null;
-  return new Date(Date.UTC(date.getUTCFullYear(), date.getUTCMonth(), date.getUTCDate()));
-}
-
-function expandConditionNames(names = []) {
-  const ids = new Set();
-  for (const name of names) {
-    const arr = NAME_TO_IDS[name];
-    if (Array.isArray(arr)) {
-      for (const id of arr) ids.add(Number(id));
+async function doBrowse(url, token) {
+  const r = await fetch(url, {
+    headers: {
+      Authorization: `Bearer ${token}`,
+      "X-EBAY-C-MARKETPLACE-ID": MARKETPLACE,
+      Accept: "application/json"
     }
-  }
-  return Array.from(ids);
-}
-
-function ensurePutter(query) {
-  const trimmed = String(query || "").trim();
-  if (!trimmed) return "putter";
-  return /\bputter\b/i.test(trimmed) ? trimmed : `${trimmed} putter`;
-}
-
-function applyVariantTokens(base, tokens = []) {
-  const trimmed = String(base || "").trim();
-  const lower = trimmed.toLowerCase();
-  const extras = tokens
-    .map((token) => String(token || "").trim())
-    .filter(Boolean)
-    .filter((token) => !lower.includes(token.toLowerCase()));
-  if (!extras.length) return trimmed || tokens.join(" ");
-  return `${trimmed} ${extras.join(" ")}`.trim();
-}
-
-async function getBearerToken(forceRefresh = false) {
-  const rawToken = await getEbayToken(forceRefresh);
-  const token =
-    typeof rawToken === "string"
-      ? rawToken
-      : rawToken?.access_token || rawToken?.token || rawToken?.accessToken || "";
-
-  if (!token) {
-    throw new Error("Failed to retrieve eBay access token");
-  }
-
-  return token;
-}
-
-async function callBrowseWithRetry(getToken, url) {
-  async function _call(token) {
-    return fetch(url, {
-      headers: {
-        Authorization: `Bearer ${token}`,
-        "Content-Type": "application/json",
-        "X-EBAY-C-MARKETPLACE-ID": "EBAY_US",
-      },
-      cache: "no-store",
-    });
-  }
-
-  let token = await getToken(false);
-  let res = await _call(token);
-
-  if (res.status === 401 || res.status === 403) {
-    token = await getToken(true);
-    res = await _call(token);
-  }
-
-  if (!res.ok) {
-    const txt = await res.text().catch(() => "");
-    throw new Error(`eBay browse ${res.status}: ${txt.slice(0, 500)}`);
-  }
-
-  const data = await res.json();
-  return { data, url: url.toString() };
-}
-
-async function followConditionHref(response, attempt, limit, attemptsLog, httpErrors) {
-  const distributions = Array.isArray(response?.refinement?.conditionDistributions)
-    ? response.refinement.conditionDistributions
-    : [];
-  for (const dist of distributions) {
-    const href = dist?.refinementHref;
-    if (!href) continue;
-    const name = String(dist?.condition || "").trim().toUpperCase();
-    if (name !== "NEW" && name !== "USED") continue;
-    const url = buildBrowseUrl({ refinementHref: href, limit });
-    try {
-      const { data } = await callBrowseWithRetry(getBearerToken, url);
-      const items = Array.isArray(data?.itemSummaries) ? data.itemSummaries : [];
-      const urlString = url.toString();
-      attemptsLog.push({
-        url: urlString,
-        count: items.length,
-        variantKey: attempt.variantKey || "",
-        label: `${attempt.label}|refinement:${name}`,
-      });
-      if (items.length) {
-        return { data, url: urlString, count: items.length };
-      }
-    } catch (error) {
-      httpErrors.push({ url: url.toString(), error: String(error) });
-    }
-  }
-  return null;
-}
-
-async function executeAttempt(attempt, limit, attemptsLog, httpErrors) {
-  const url = buildBrowseUrl({
-    q: attempt.q,
-    limit,
-    categoryId: attempt.categoryId,
-    addPutterWord: attempt.addPutterWord,
-    conditions: attempt.conditions,
-    conditionIds: attempt.conditionIds,
-    allBuying: attempt.allBuying,
   });
-
-  try {
-    const { data } = await callBrowseWithRetry(getBearerToken, url);
-    const items = Array.isArray(data?.itemSummaries) ? data.itemSummaries : [];
-    const urlString = url.toString();
-    attemptsLog.push({
-      url: urlString,
-      count: items.length,
-      variantKey: attempt.variantKey || "",
-      label: attempt.label,
-    });
-    if (items.length) {
-      return { data, url: urlString, count: items.length };
-    }
-    const refinement = await followConditionHref(data, attempt, limit, attemptsLog, httpErrors);
-    if (refinement) return refinement;
-    return { data, url: urlString, count: 0 };
-  } catch (error) {
-    httpErrors.push({ url: url.toString(), error: String(error) });
-    return { data: null, url: url.toString(), count: 0 };
+  if (!r.ok) {
+    const text = await r.text().catch(() => "");
+    throw new Error(`Browse ${r.status} ${r.statusText} for ${url} :: ${text.slice(0, 200)}`);
   }
+  return r.json();
 }
 
-function buildAttemptConfigs({ rawQuery, conditions, conditionIds, allBuying, modelKey }) {
-  const attempts = [];
-  const baseConditions = Array.from(conditions?.names || []);
-  const explicitConditionIds = Array.from(conditionIds || []);
-  const derivedConditionIds = explicitConditionIds.length
-    ? explicitConditionIds
-    : conditions?.useIds
-    ? expandConditionNames(baseConditions)
-    : [];
+// Turn an item_summary into a snapshot row payload (normalized)
+function snapshotFromItem(item) {
+  const title = String(item?.title || "");
+  const model = normalizeModelKey(title);
 
-  const baseAttempt = {
-    label: "base",
-    q: rawQuery,
-    categoryId: null,
-    addPutterWord: false,
-    allBuying: Boolean(allBuying),
-    conditions: baseConditions,
-    conditionIds: [],
-    variantKey: "",
-  };
-  attempts.push(baseAttempt);
+  // price + shipping (fallbacks)
+  const priceV = item?.price?.value ?? item?.currentBidPrice?.value ?? null;
+  const shipV =
+    item?.shippingOptions?.[0]?.shippingCost?.value ??
+    item?.shipping?.value ?? // some responses include this short form
+    0;
 
-  attempts.push({
-    ...baseAttempt,
-    label: "baseline-no-filter",
-    categoryId: CATEGORY_GOLF_CLUBS,
-    addPutterWord: true,
-    allBuying: false,
-    conditions: null,
-    conditionIds: [],
-  });
+  const price_cents = toIntCents(priceV);
+  const shipping_cents = toIntCents(shipV);
+  const total_cents = price_cents + shipping_cents;
 
-  attempts.push({
-    ...baseAttempt,
-    label: "baseline-no-filter+auctions",
-    categoryId: CATEGORY_GOLF_CLUBS,
-    addPutterWord: true,
-    allBuying: true,
-    conditions: null,
-    conditionIds: [],
-  });
+  // map condition band
+  const conditionId = item?.conditionId ? String(item.conditionId) : null;
+  const condition_band = mapConditionIdToBand(conditionId) || "ANY";
 
-  attempts.push({ ...baseAttempt, label: "category", categoryId: CATEGORY_GOLF_CLUBS });
+  // prefer a stable “when” if present
+  const whenIso =
+    item?.itemCreationDate ||
+    item?.itemEndDate ||
+    item?.itemAffiliateWebUrlTimestamp || // not standard, just in case
+    null;
 
-  attempts.push({
-    ...baseAttempt,
-    label: "category+putter",
-    categoryId: CATEGORY_GOLF_CLUBS,
-    addPutterWord: true,
-  });
+  const ts = whenIso ? new Date(whenIso) : new Date();
+  // snapshot_day from that timestamp, in UTC
+  const snapshot_ts = ts;
+  const snapshot_day_iso = new Date(Date.UTC(
+    ts.getUTCFullYear(), ts.getUTCMonth(), ts.getUTCDate()
+  )).toISOString().slice(0, 10); // YYYY-MM-DD
 
-  attempts.push({
-    ...baseAttempt,
-    label: "category+putter+auctions",
-    categoryId: CATEGORY_GOLF_CLUBS,
-    addPutterWord: true,
-    allBuying: true,
-  });
-
-  if (derivedConditionIds.length) {
-    attempts.push({
-      ...baseAttempt,
-      label: "category+putter+conditionIds",
-      categoryId: CATEGORY_GOLF_CLUBS,
-      addPutterWord: true,
-      allBuying: true,
-      conditions: [],
-      conditionIds: derivedConditionIds,
-    });
-  }
-
-  const stripped = normalizeModelKey(rawQuery);
-  if (stripped && stripped !== rawQuery.toLowerCase()) {
-    attempts.push({
-      ...baseAttempt,
-      label: "brandless",
-      q: stripped,
-      categoryId: CATEGORY_GOLF_CLUBS,
-      addPutterWord: true,
-      allBuying: true,
-    });
-  }
-
-  const variantAttempts = [];
-  const expansions = VARIANT_EXPANSIONS[modelKey] || [];
-  for (const expansion of expansions) {
-    const qVariant = applyVariantTokens(rawQuery, expansion.append || []);
-    variantAttempts.push({
-      ...baseAttempt,
-      label: `variant:${expansion.key}`,
-      q: qVariant,
-      categoryId: CATEGORY_GOLF_CLUBS,
-      addPutterWord: true,
-      allBuying: true,
-      variantKey: expansion.key,
-    });
-  }
-
-  attempts.push(...variantAttempts);
-
-  if (baseConditions.length || derivedConditionIds.length) {
-    attempts.push({
-      ...baseAttempt,
-      label: "category+putter+no-conditions",
-      categoryId: CATEGORY_GOLF_CLUBS,
-      addPutterWord: true,
-      allBuying: true,
-      conditions: [],
-      conditionIds: [],
-    });
-  }
-
-  return attempts;
-}
-
-async function runSearchLadder({ rawQuery, limit, conditions, conditionIds, allBuying, modelKey }) {
-  const attempts = buildAttemptConfigs({ rawQuery, conditions, conditionIds, allBuying, modelKey });
-  const attemptsLog = [];
-  const httpErrors = [];
-  let finalData = null;
-  let finalUrl = "";
-  let finalVariantKey = "";
-  let lastData = null;
-
-  for (const attempt of attempts) {
-    const result = await executeAttempt(attempt, limit, attemptsLog, httpErrors);
-    if (result.count > 0) {
-      finalData = result.data;
-      finalUrl = result.url;
-      finalVariantKey = attempt.variantKey || "";
-      break;
-    }
-    lastData = result.data || lastData;
-  }
-
-  if (!finalUrl && attemptsLog.length) {
-    finalUrl = attemptsLog[attemptsLog.length - 1].url || "";
-  }
-
-  const data = finalData || lastData || { itemSummaries: [] };
   return {
-    data,
-    attempts: attemptsLog,
-    usedUrl: finalUrl,
-    variantKey: finalVariantKey,
-    found: Boolean(finalData),
-    httpErrors,
+    item_id: String(item?.itemId || ""),
+    model,
+    variant_key: "", // keep empty for now; you can wire buildVariantKey(title) later
+    price_cents,
+    shipping_cents,
+    total_cents,
+    condition_id: conditionId,
+    condition_band,
+    snapshot_ts,
+    snapshot_day_iso
   };
 }
 
-function buildBrowseUrl({
-  q = "",
-  limit = 50,
-  offset = 0,
-  categoryId = null,
-  addPutterWord = false,
-  conditions = [],
-  conditionIds = [],
-  allBuying = false,
-  refinementHref = null,
-} = {}) {
-  const url = refinementHref
-    ? new URL(refinementHref)
-    : new URL(`${BROWSE_BASE}/item_summary/search`);
+async function insertSnapshots(sql, rows) {
+  if (!rows.length) return { inserted: 0, skipped: 0 };
 
-  const normalizedLimit = Number.isFinite(Number(limit)) ? Number(limit) : 50;
-  const normalizedOffset = Number.isFinite(Number(offset)) ? Number(offset) : 0;
-
-  if (!refinementHref) {
-    const query = addPutterWord ? ensurePutter(q) : String(q || "");
-    url.searchParams.set("q", query);
-    url.searchParams.set("limit", String(normalizedLimit));
-    url.searchParams.set("offset", String(normalizedOffset));
-    url.searchParams.set("fieldgroups", "CONDITION_REFINEMENTS");
-
-    if (categoryId) {
-      url.searchParams.set("category_ids", String(categoryId));
+  let inserted = 0, skipped = 0, firstError = null;
+  for (const r of rows) {
+    try {
+      await sql`
+        INSERT INTO listing_snapshots
+          (item_id, model, variant_key, price_cents, shipping_cents, total_cents,
+           condition_id, condition_band, snapshot_ts, snapshot_day)
+        VALUES
+          (${r.item_id}, ${r.model}, ${r.variant_key},
+           ${r.price_cents}, ${r.shipping_cents}, ${r.total_cents},
+           ${r.condition_id}, ${r.condition_band},
+           ${r.snapshot_ts}, ${r.snapshot_day_iso}::date)
+        ON CONFLICT (item_id, snapshot_day) DO NOTHING
+      `;
+      inserted++;
+    } catch (e) {
+      // likely duplicate; treat as skipped but keep the first error for debug
+      skipped++;
+      if (!firstError) firstError = e.message;
     }
-
-    const filterParts = [];
-    const normalizedIds = Array.from(
-      new Set(
-        (Array.isArray(conditionIds) ? conditionIds : [])
-          .map((id) => Number(id))
-          .filter((num) => Number.isFinite(num))
-      )
-    );
-
-    if (normalizedIds.length) {
-      filterParts.push(`conditionIds:{${normalizedIds.join("|")}}`);
-    } else {
-      const normalizedConditions = Array.from(
-        new Set(
-          (Array.isArray(conditions) ? conditions : [])
-            .map((name) => String(name || "").trim())
-            .filter(Boolean)
-        )
-      );
-      if (normalizedConditions.length) {
-        filterParts.push(`conditions:{${normalizedConditions.join("|")}}`);
-      }
-    }
-
-    const desiredBuying = allBuying
-      ? ["FIXED_PRICE", "AUCTION", "AUCTION_WITH_BUY_IT_NOW"]
-      : ["FIXED_PRICE"];
-    const buyingFilters = Array.from(
-      new Set(
-        desiredBuying
-          .map((opt) => String(opt || "").trim().toUpperCase())
-          .filter(Boolean)
-      )
-    );
-    if (buyingFilters.length) {
-      filterParts.push(`buyingOptions:{${buyingFilters.join("|")}}`);
-    }
-
-    if (filterParts.length) {
-      url.searchParams.set("filter", filterParts.join(","));
-    } else {
-      url.searchParams.delete("filter");
-    }
-  } else {
-    if (limit !== undefined && limit !== null) {
-      url.searchParams.set("limit", String(normalizedLimit));
-    } else if (!url.searchParams.has("limit")) {
-      url.searchParams.set("limit", String(normalizedLimit));
-    }
-
-    if (offset !== undefined && offset !== null) {
-      url.searchParams.set("offset", String(normalizedOffset));
-    } else if (!url.searchParams.has("offset")) {
-      url.searchParams.set("offset", String(normalizedOffset));
-    }
-
-    url.searchParams.set("fieldgroups", "CONDITION_REFINEMENTS");
   }
+  return { inserted, skipped, firstError };
+}
 
-  return url;
+function uniquePush(arr, val) {
+  if (!arr.includes(val)) arr.push(val);
 }
 
 export async function POST(req) {
-  try {
-    // simple admin guard
-    if (!ADMIN_KEY || (req.headers.get("x-admin-key") || "") !== ADMIN_KEY) {
-      return NextResponse.json({ ok: false, error: "unauthorized" }, { status: 401 });
-    }
-
-    const { searchParams } = new URL(req.url);
-    const raw = (searchParams.get("model") || "").trim();
-    const limit = parseLimit(searchParams.get("limit"));
-    const debug = parseBool(searchParams.get("debug"));
-    const allBuying = parseBool(searchParams.get("allBuying"));
-    const conditions = parseConditions(searchParams.get("conditions"));
-    const conditionIds = parseConditionIds(searchParams.get("conditionIds"));
-    if (!raw) return NextResponse.json({ ok: false, error: "Missing model" }, { status: 400 });
-
-    const modelKey = normalizeModelKey(raw);
-    const { data, attempts, usedUrl, variantKey, found, httpErrors } = await runSearchLadder({
-      rawQuery: raw,
-      limit,
-      conditions,
-      conditionIds,
-      allBuying,
-      modelKey,
-    });
-
-    const summaries = Array.isArray(data?.itemSummaries) ? data.itemSummaries : [];
-    const conditionHistogram = Array.isArray(data?.refinement?.conditionDistributions)
-      ? data.refinement.conditionDistributions.map((c) => ({
-          condition: c.condition,
-          conditionId: c.conditionId,
-          matchCount: Number(c.matchCount || 0),
-        }))
-      : [];
-
-    // Normalize items (include auction currentBidPrice + optional shipping)
-    const items = summaries.map((summary) => {
-      const priceVal = Number(summary.price?.value ?? summary.currentBidPrice?.value ?? 0);
-      const shipVal = Number(summary.shippingOptions?.[0]?.shippingCost?.value ?? 0);
-      const total = priceVal + (Number.isFinite(shipVal) ? shipVal : 0);
-      const condSource = summary.conditionId ?? summary.condition ?? null;
-      const timestamp = chooseSnapshotTimestamp(summary);
-      const snapshotDay = toUtcDateOnly(timestamp) ?? toUtcDateOnly(new Date());
-
-      return {
-        item_id: summary.itemId,
-        title: summary.title || "",
-        item_web_url: summary.itemWebUrl || null,
-        model: normalizeModelKey(summary.title || raw),
-        variant_key: variantKey || "",
-        price_cents: Math.round(priceVal * 100),
-        shipping_cents: Number.isFinite(shipVal) ? Math.round(shipVal * 100) : 0,
-        total_cents: Math.round(total * 100),
-        condition_id: summary.conditionId ? Number(summary.conditionId) : null,
-        condition_band: mapConditionIdToBand(condSource) ?? "ANY",
-        snapshot_ts: timestamp,
-        snapshot_day: snapshotDay,
-      };
-    });
-
-    const sql = getSql();
-    let inserted = 0;
-    let skipped = 0;
-    let firstError = null;
-
-    for (const r of items) {
-      if (!r.item_id) {
-        skipped++;
-        continue;
-      }
-      try {
-        // Requires unique index: CREATE UNIQUE INDEX IF NOT EXISTS ux_snapshots_item_day ON public.listing_snapshots (item_id, snapshot_day);
-        const res = await sql`
-          INSERT INTO listing_snapshots
-            (item_id, model, variant_key, price_cents, shipping_cents, total_cents,
-             condition_id, condition_band, snapshot_ts, snapshot_day)
-          VALUES
-            (${r.item_id}, ${r.model}, ${r.variant_key},
-             ${r.total_cents - r.shipping_cents}, ${r.shipping_cents}, ${r.total_cents},
-             ${r.condition_id}, ${r.condition_band},
-             ${r.snapshot_ts}, ${r.snapshot_day})
-          ON CONFLICT (item_id, snapshot_day) DO NOTHING
-          RETURNING 1
-        `;
-        if (res.length) inserted++;
-        else skipped++;
-      } catch (e) {
-        skipped++;
-        if (!firstError) firstError = String(e);
-      }
-    }
-
-    const out = {
-      ok: true,
-      model: modelKey,
-      saw: summaries.length,
-      inserted,
-      skipped,
-      firstError,
-      histogram: conditionHistogram,
-    };
-
-    const sample = summaries.length
-      ? {
-          id: summaries[0].itemId,
-          title: summaries[0].title,
-          price: summaries[0].price,
-          currentBidPrice: summaries[0].currentBidPrice,
-          shipping: summaries[0].shippingOptions?.[0]?.shippingCost,
-          condition: summaries[0].condition,
-          conditionId: summaries[0].conditionId,
-          variantKey: variantKey || "",
-        }
-      : null;
-
-    if (debug || found) {
-      const debugPayload = {
-        attempts,
-        usedUrl,
-        sample,
-        histogram: conditionHistogram,
-      };
-      if (debug) {
-        debugPayload.httpErrors = httpErrors;
-      }
-      out.debug = debugPayload;
-    }
-
-    return NextResponse.json(out);
-  } catch (e) {
-    return NextResponse.json({ ok: false, error: String(e) }, { status: 500 });
+  // admin guard
+  const auth = req.headers.get("x-admin-key") || "";
+  if (!ADMIN_KEY || auth.trim() !== ADMIN_KEY.trim()) {
+    return NextResponse.json({ ok: false, error: "unauthorized" }, { status: 401 });
   }
+
+  const url = new URL(req.url);
+  const rawModel = url.searchParams.get("model") || "";
+  const limit = Number(url.searchParams.get("limit") || "50");
+  const debug = url.searchParams.has("debug");
+  const condParam = (url.searchParams.get("conditions") || "").trim().toUpperCase(); // e.g. "NEW" or "USED"
+
+  const rawQ = rawModel.trim();
+  if (!rawQ) {
+    return NextResponse.json({ ok: false, error: "missing model" }, { status: 400 });
+  }
+
+  const token = await getAccessToken();
+  // Build attempts (fallback ladder)
+  const attempts = [];
+  const baseQ = rawQ;
+  const putterQ = has(baseQ, "putter") ? baseQ : `${baseQ} putter`;
+  const CAT_GOLF_PUTTERS = ["115280"]; // eBay putters category
+
+  const conds = condParam ? [condParam] : null;
+
+  // 1) bare query (with refinements requested)
+  attempts.push({
+    q: baseQ, category_ids: null, conditions: conds,
+    buyingOptions: null, conditionIds: null,
+    fieldgroups: ["CONDITION_REFINEMENTS"]
+  });
+  // 2) same + buying options (all)
+  attempts.push({
+    q: baseQ, category_ids: null, conditions: conds,
+    buyingOptions: ["FIXED_PRICE", "AUCTION", "AUCTION_WITH_BIN"], conditionIds: null,
+    fieldgroups: ["CONDITION_REFINEMENTS"]
+  });
+  // 3) add category
+  attempts.push({
+    q: baseQ, category_ids: CAT_GOLF_PUTTERS, conditions: conds,
+    buyingOptions: null, conditionIds: null,
+    fieldgroups: ["CONDITION_REFINEMENTS"]
+  });
+  // 4) category + all buying options
+  attempts.push({
+    q: baseQ, category_ids: CAT_GOLF_PUTTERS, conditions: conds,
+    buyingOptions: ["FIXED_PRICE", "AUCTION", "AUCTION_WITH_BIN"], conditionIds: null,
+    fieldgroups: ["CONDITION_REFINEMENTS"]
+  });
+  // 5) inject "putter"
+  attempts.push({
+    q: putterQ, category_ids: CAT_GOLF_PUTTERS, conditions: conds,
+    buyingOptions: null, conditionIds: null,
+    fieldgroups: ["CONDITION_REFINEMENTS"]
+  });
+  // 6) inject "putter" + all buying options
+  attempts.push({
+    q: putterQ, category_ids: CAT_GOLF_PUTTERS, conditions: conds,
+    buyingOptions: ["FIXED_PRICE", "AUCTION", "AUCTION_WITH_BIN"], conditionIds: null,
+    fieldgroups: ["CONDITION_REFINEMENTS"]
+  });
+  // 7) explicit condition IDs try (USED/NEW map to 3000/1000)
+  const conditionIdTry =
+    condParam === "USED" ? ["3000"] :
+    condParam === "NEW"  ? ["1000"] : null;
+  if (conditionIdTry) {
+    attempts.push({
+      q: putterQ, category_ids: CAT_GOLF_PUTTERS, conditions: null,
+      buyingOptions: null, conditionIds: conditionIdTry,
+      fieldgroups: ["CONDITION_REFINEMENTS"]
+    });
+  }
+
+  const triedUrls = [];
+  let usedUrl = "";
+  let summaries = [];
+  for (const a of attempts) {
+    const u = buildQuery(`${BROWSE_BASE}`, {
+      q: a.q,
+      limit,
+      categoryIds: a.category_ids,
+      buyingOptions: a.buyingOptions,
+      conditions: a.conditions,
+      conditionIds: a.conditionIds,
+      fieldgroups: a.fieldgroups
+    });
+    uniquePush(triedUrls, u);
+
+    try {
+      const json = await doBrowse(u, token);
+      const items = json?.itemSummaries || json?.item_summary || json?.item_summarys || [];
+      if (items.length > 0) {
+        summaries = items;
+        usedUrl = u;
+        break;
+      }
+    } catch (_e) {
+      // keep trying
+    }
+  }
+
+  if (!summaries.length) {
+    const payload = { ok: true, model: normalizeModelKey(rawQ), saw: 0, inserted: 0, skipped: 0, firstError: null, histogram: [], usedUrl };
+    if (debug) payload.attempts = triedUrls;
+    return NextResponse.json(payload);
+  }
+
+  // convert to snapshot rows
+  const rows = summaries.map(snapshotFromItem);
+
+  // prepare a simple histogram from items themselves
+  const hist = [];
+  const counts = new Map();
+  for (const it of summaries) {
+    const id = String(it?.conditionId || "UNSPECIFIED");
+    counts.set(id, (counts.get(id) || 0) + 1);
+  }
+  for (const [id, n] of counts.entries()) {
+    hist.push({ conditionId: id, matchCount: n });
+  }
+
+  // insert
+  const sql = getSql();
+  const { inserted, skipped, firstError } = await insertSnapshots(sql, rows);
+
+  const out = {
+    ok: true,
+    model: normalizeModelKey(rawQ),
+    saw: summaries.length,
+    inserted,
+    skipped,
+    firstError,
+    histogram: hist,
+    usedUrl,
+    sample: summaries[0] || null
+  };
+  if (debug) out.attempts = triedUrls;
+  return NextResponse.json(out);
 }
