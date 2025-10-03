@@ -1,16 +1,12 @@
 {
   "crons": [
     {
+      "path": "/api/cron/nightly?secret=12qwaszx!@QWASZX",
+      "schedule": "15 9 * * *"
+    },
+    {
       "path": "/api/cron/collect-prices?key=12qwaszx!@QWASZX",
       "schedule": "30 3 * * *"
-    },
-    {
-      "path": "/api/admin/aggregate?secret=12qwaszx!@QWASZX",
-      "schedule": "0 9 * * *"
-    },
-    {
-      "path": "/api/cron/seed-browse?secret=12qwaszx!@QWASZX",
-      "schedule": "15 9 * * *"
     }
   ]
 }
