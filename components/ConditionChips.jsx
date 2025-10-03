@@ -102,6 +102,35 @@ export default function ConditionChips({ model }) {
 
   if (!processedBands.length || processedBands.length < 2) return null;
 
+  const directionStyles = {
+    positive: {
+      chip: 'bg-emerald-50 text-emerald-700 ring-1 ring-inset ring-emerald-500/40',
+      secondary: 'text-emerald-600/80',
+    },
+    negative: {
+      chip: 'bg-rose-50 text-rose-700 ring-1 ring-inset ring-rose-500/40',
+      secondary: 'text-rose-600/80',
+    },
+    neutral: {
+      chip: 'bg-slate-50 text-slate-600 ring-1 ring-inset ring-slate-500/30',
+      secondary: 'text-slate-500',
+    },
+  };
+
+  const formatCurrency = (value) => {
+    if (typeof value !== 'number' || !Number.isFinite(value)) return null;
+    try {
+      return new Intl.NumberFormat('en-US', {
+        style: 'currency',
+        currency: 'USD',
+        maximumFractionDigits: Math.abs(value) >= 100 ? 0 : 2,
+      }).format(value);
+    } catch (err) {
+      const fixed = Math.abs(value) >= 100 ? value.toFixed(0) : value.toFixed(2);
+      return `${value < 0 ? '-' : ''}$${Math.abs(Number.parseFloat(fixed))}`;
+    }
+  };
+
   return (
     <div className="flex flex-wrap items-center gap-2">
       {processedBands.map(b => {
@@ -112,13 +141,35 @@ export default function ConditionChips({ model }) {
             ? b.pct_vs_any
             : '0.0';
         const signed = (pctValue.startsWith('-') ? '' : '+') + pctValue + '%';
+        const direction =
+          typeof b.premiumPct === 'number' && b.premiumPct !== 0
+            ? b.premiumPct > 0
+              ? 'positive'
+              : 'negative'
+            : 'neutral';
+        const styles = directionStyles[direction] ?? directionStyles.neutral;
+        const secondaryParts = [];
+        if (typeof b.sampleSize === 'number' && Number.isFinite(b.sampleSize) && b.sampleSize > 0) {
+          secondaryParts.push(`n=${b.sampleSize}`);
+        }
+        if (typeof b.premiumAbs === 'number' && Number.isFinite(b.premiumAbs) && b.premiumAbs !== 0) {
+          const formatted = formatCurrency(b.premiumAbs);
+          if (formatted) secondaryParts.push(`${b.premiumAbs > 0 ? '+' : ''}${formatted}`);
+        }
         return (
           <span
             key={b.condition}
-            className="inline-flex items-center rounded-full border border-gray-300 px-2 py-0.5 text-xs text-gray-700"
+            className={`inline-flex min-w-0 items-start gap-2 rounded-full px-2 py-1 text-xs font-medium ${styles.chip}`}
             title={`Median ${b.median?.toFixed ? '$' + b.median.toFixed(2) : b.median} • n=${b.sampleSize ?? 0}`}
           >
-            {b.condition.replace(/_/g, ' ')} {signed}
+            <span className="flex min-w-0 flex-col text-left leading-tight">
+              <span className="truncate font-semibold">{b.condition.replace(/_/g, ' ')} {signed}</span>
+              {secondaryParts.length ? (
+                <span className={`text-[10px] font-normal ${styles.secondary}`}>
+                  {secondaryParts.join(' • ')}
+                </span>
+              ) : null}
+            </span>
           </span>
         );
       })}
