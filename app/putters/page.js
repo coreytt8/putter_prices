@@ -1306,8 +1306,8 @@ export default function PuttersPage() {
                                   )}
                                 </div>
 
-                                {helperModelKey ? (
-                                  <ConditionChips model={helperModelKey} className="mt-2" />
+                                {g.model ? (
+                                  <ConditionChips model={g.model} className="mt-2" />
                                 ) : null}
 
                                 <div className="mt-2">
