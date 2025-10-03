@@ -8,17 +8,376 @@ import { mapConditionIdToBand } from "@/lib/condition-band";
 // If your helper is named differently, change this import (e.g. getEbayToken as getAccessToken)
 import { getEbayToken as getAccessToken } from "@/lib/ebay";
 
+const NAME_TO_IDS = {
+  NEW: [1000],
+  NEW_OTHER: [1500, 2750],
+  NEW_WITH_DEFECTS: [1750],
+  OPEN_BOX: [1500, 1750, 2750],
+  MANUFACTURER_REFURBISHED: [2000, 2010, 2020, 2030, 2040, 2050, 2060, 2070],
+  CERTIFIED_REFURBISHED: [2000, 2010, 2020, 2030, 2040, 2050, 2060, 2070],
+  SELLER_REFURBISHED: [2500],
+  REFURBISHED: [2000, 2010, 2020, 2030, 2040, 2050, 2060, 2070, 2500],
+  USED: [3000, 4000, 5000, 6000],
+  PREOWNED: [3000, 4000, 5000, 6000],
+  PRE_OWNED: [3000, 4000, 5000, 6000],
+  VERY_GOOD: [4000],
+  GOOD: [5000],
+  ACCEPTABLE: [6000],
+  LIKE_NEW: [4000],
+  FOR_PARTS: [7000],
+  FOR_PARTS_OR_NOT_WORKING: [7000],
+};
+
+const VARIANT_EXPANSIONS = {
+  "newport": [
+    { key: "newport|circle_t", append: ["circle t"] },
+    { key: "newport|tour_only", append: ["tour only"] },
+    { key: "newport|gss", append: ["gss"] },
+  ],
+  "newport 2": [
+    { key: "newport 2|circle_t", append: ["circle t"] },
+    { key: "newport 2|tour_only", append: ["tour only"] },
+    { key: "newport 2|gss", append: ["gss"] },
+    { key: "newport 2|button_back", append: ["button back"] },
+    { key: "newport 2|jet_set", append: ["jet set"] },
+  ],
+  "newport 2.5": [
+    { key: "newport 2.5|circle_t", append: ["circle t"] },
+    { key: "newport 2.5|tour_only", append: ["tour only"] },
+  ],
+  "newport 3": [
+    { key: "newport 3|circle_t", append: ["circle t"] },
+    { key: "newport 3|tour_only", append: ["tour only"] },
+  ],
+  "newport 1.5": [
+    { key: "newport 1.5|circle_t", append: ["circle t"] },
+    { key: "newport 1.5|tour_only", append: ["tour only"] },
+  ],
+  "phantom x": [
+    { key: "phantom x|circle_t", append: ["circle t"] },
+    { key: "phantom x|tour_only", append: ["tour only"] },
+  ],
+  "phantom 5": [
+    { key: "phantom 5|circle_t", append: ["circle t"] },
+    { key: "phantom 5|tour_only", append: ["tour only"] },
+  ],
+  "phantom 7": [
+    { key: "phantom 7|circle_t", append: ["circle t"] },
+    { key: "phantom 7|tour_only", append: ["tour only"] },
+  ],
+  "phantom 9": [
+    { key: "phantom 9|circle_t", append: ["circle t"] },
+    { key: "phantom 9|tour_only", append: ["tour only"] },
+  ],
+  "phantom 11": [
+    { key: "phantom 11|circle_t", append: ["circle t"] },
+    { key: "phantom 11|tour_only", append: ["tour only"] },
+  ],
+  "squareback": [
+    { key: "squareback|circle_t", append: ["circle t"] },
+    { key: "squareback|tour_only", append: ["tour only"] },
+  ],
+  "fastback": [
+    { key: "fastback|circle_t", append: ["circle t"] },
+    { key: "fastback|tour_only", append: ["tour only"] },
+  ],
+  "futura": [
+    { key: "futura|circle_t", append: ["circle t"] },
+    { key: "futura|tour_only", append: ["tour only"] },
+  ],
+  "button back": [
+    { key: "button back|circle_t", append: ["circle t"] },
+    { key: "button back|tour_only", append: ["tour only"] },
+  ],
+};
+
 const BROWSE_BASE = "https://api.ebay.com/buy/browse/v1";
+const CATEGORY_GOLF_CLUBS = "115280";
 const ADMIN_KEY = process.env.ADMIN_KEY;
 
-async function browseSearch({ q, limit = 50, offset = 0 }) {
+function parseBool(value) {
+  if (typeof value !== "string") return false;
+  const normalized = value.trim().toLowerCase();
+  return normalized === "1" || normalized === "true" || normalized === "yes";
+}
+
+function parseLimit(raw) {
+  const n = Number(raw);
+  if (!Number.isFinite(n)) return 50;
+  return Math.max(1, Math.min(200, Math.floor(n)));
+}
+
+function parseConditions(raw) {
+  if (!raw) return { names: [], useIds: false };
+  const parts = String(raw)
+    .split(",")
+    .map((part) => part.trim())
+    .filter(Boolean)
+    .map((part) => part.replace(/[^a-z0-9]+/gi, " ").trim())
+    .map((part) => part.replace(/\s+/g, "_").toUpperCase());
+
+  const names = Array.from(new Set(parts));
+  const useIds =
+    names.length > 0 && names.every((name) => Array.isArray(NAME_TO_IDS[name]) && NAME_TO_IDS[name].length > 0);
+  return { names, useIds };
+}
+
+function parseConditionIds(raw) {
+  if (!raw) return [];
+  return String(raw)
+    .split(",")
+    .map((part) => Number(part.trim()))
+    .filter((num) => Number.isFinite(num));
+}
+
+function expandConditionNames(names = []) {
+  const ids = new Set();
+  for (const name of names) {
+    const arr = NAME_TO_IDS[name];
+    if (Array.isArray(arr)) {
+      for (const id of arr) ids.add(Number(id));
+    }
+  }
+  return Array.from(ids);
+}
+
+function ensurePutter(query) {
+  const trimmed = String(query || "").trim();
+  if (!trimmed) return "putter";
+  return /\bputter\b/i.test(trimmed) ? trimmed : `${trimmed} putter`;
+}
+
+function applyVariantTokens(base, tokens = []) {
+  const trimmed = String(base || "").trim();
+  const lower = trimmed.toLowerCase();
+  const extras = tokens
+    .map((token) => String(token || "").trim())
+    .filter(Boolean)
+    .filter((token) => !lower.includes(token.toLowerCase()));
+  if (!extras.length) return trimmed || tokens.join(" ");
+  return `${trimmed} ${extras.join(" ")}`.trim();
+}
+
+function normalizeBuyingOptions(options = []) {
+  return Array.from(
+    new Set(
+      options
+        .map((opt) => String(opt || "").trim().toUpperCase())
+        .filter(Boolean)
+    )
+  );
+}
+
+async function followConditionHref(response, attempt, limit, attemptsLog) {
+  const distributions = Array.isArray(response?.refinement?.conditionDistributions)
+    ? response.refinement.conditionDistributions
+    : [];
+  for (const dist of distributions) {
+    const href = dist?.refinementHref;
+    if (!href) continue;
+    const name = String(dist?.condition || "").trim().toUpperCase();
+    if (name !== "NEW" && name !== "USED") continue;
+    const { data, url } = await browseSearch({ href, limit });
+    const items = Array.isArray(data?.itemSummaries) ? data.itemSummaries : [];
+    attemptsLog.push({
+      url,
+      count: items.length,
+      variantKey: attempt.variantKey || "",
+      label: `${attempt.label}|refinement:${name}`,
+    });
+    if (items.length) {
+      return { data, url, count: items.length };
+    }
+  }
+  return null;
+}
+
+async function executeAttempt(attempt, limit, attemptsLog) {
+  const { data, url } = await browseSearch({
+    q: attempt.q,
+    limit,
+    categoryIds: attempt.categoryIds,
+    conditionNames: attempt.conditionNames,
+    conditionIds: attempt.conditionIds,
+    buyingOptions: attempt.buyingOptions,
+  });
+  const items = Array.isArray(data?.itemSummaries) ? data.itemSummaries : [];
+  attemptsLog.push({ url, count: items.length, variantKey: attempt.variantKey || "", label: attempt.label });
+  if (items.length) {
+    return { data, url, count: items.length };
+  }
+  const refinement = await followConditionHref(data, attempt, limit, attemptsLog);
+  if (refinement) return refinement;
+  return { data, url, count: 0 };
+}
+
+function buildAttemptConfigs({ rawQuery, conditions, conditionIds, allBuying, modelKey }) {
+  const attempts = [];
+  const baseConditions = Array.from(conditions?.names || []);
+  const explicitConditionIds = Array.from(conditionIds || []);
+  const derivedConditionIds = explicitConditionIds.length
+    ? explicitConditionIds
+    : conditions?.useIds
+    ? expandConditionNames(baseConditions)
+    : [];
+
+  const baseBuying = normalizeBuyingOptions(allBuying ? ["FIXED_PRICE", "AUCTION", "AUCTION_WITH_BUY_IT_NOW"] : ["FIXED_PRICE"]);
+  const auctionBuying = normalizeBuyingOptions(baseBuying.concat(["AUCTION", "AUCTION_WITH_BUY_IT_NOW"]));
+
+  const baseAttempt = {
+    label: "base",
+    q: rawQuery,
+    categoryIds: [],
+    buyingOptions: baseBuying,
+    conditionNames: baseConditions,
+    conditionIds: [],
+    variantKey: "",
+  };
+  attempts.push(baseAttempt);
+
+  attempts.push({ ...baseAttempt, label: "category", categoryIds: [CATEGORY_GOLF_CLUBS] });
+
+  const withPutter = ensurePutter(rawQuery);
+  attempts.push({
+    ...baseAttempt,
+    label: "category+putter",
+    q: withPutter,
+    categoryIds: [CATEGORY_GOLF_CLUBS],
+  });
+
+  attempts.push({
+    ...baseAttempt,
+    label: "category+putter+auctions",
+    q: withPutter,
+    categoryIds: [CATEGORY_GOLF_CLUBS],
+    buyingOptions: auctionBuying,
+  });
+
+  if (derivedConditionIds.length) {
+    attempts.push({
+      ...baseAttempt,
+      label: "category+putter+conditionIds",
+      q: withPutter,
+      categoryIds: [CATEGORY_GOLF_CLUBS],
+      buyingOptions: auctionBuying,
+      conditionNames: [],
+      conditionIds: derivedConditionIds,
+    });
+  }
+
+  const stripped = normalizeModelKey(rawQuery);
+  if (stripped && stripped !== rawQuery.toLowerCase()) {
+    attempts.push({
+      ...baseAttempt,
+      label: "brandless",
+      q: ensurePutter(stripped),
+      categoryIds: [CATEGORY_GOLF_CLUBS],
+      buyingOptions: auctionBuying,
+    });
+  }
+
+  const variantAttempts = [];
+  const expansions = VARIANT_EXPANSIONS[modelKey] || [];
+  for (const expansion of expansions) {
+    const qVariant = ensurePutter(applyVariantTokens(rawQuery, expansion.append || []));
+    variantAttempts.push({
+      ...baseAttempt,
+      label: `variant:${expansion.key}`,
+      q: qVariant,
+      categoryIds: [CATEGORY_GOLF_CLUBS],
+      buyingOptions: auctionBuying,
+      variantKey: expansion.key,
+    });
+  }
+
+  attempts.push(...variantAttempts);
+
+  if (baseConditions.length || derivedConditionIds.length) {
+    attempts.push({
+      ...baseAttempt,
+      label: "category+putter+no-conditions",
+      q: withPutter,
+      categoryIds: [CATEGORY_GOLF_CLUBS],
+      buyingOptions: auctionBuying,
+      conditionNames: [],
+      conditionIds: [],
+    });
+  }
+
+  return attempts;
+}
+
+async function runSearchLadder({ rawQuery, limit, conditions, conditionIds, allBuying, modelKey }) {
+  const attempts = buildAttemptConfigs({ rawQuery, conditions, conditionIds, allBuying, modelKey });
+  const attemptsLog = [];
+  let finalData = null;
+  let finalUrl = "";
+  let finalVariantKey = "";
+  let lastData = null;
+
+  for (const attempt of attempts) {
+    const result = await executeAttempt(attempt, limit, attemptsLog);
+    if (result.count > 0) {
+      finalData = result.data;
+      finalUrl = result.url;
+      finalVariantKey = attempt.variantKey || "";
+      break;
+    }
+    lastData = result.data || lastData;
+  }
+
+  if (!finalUrl && attemptsLog.length) {
+    finalUrl = attemptsLog[attemptsLog.length - 1].url || "";
+  }
+
+  const data = finalData || lastData || { itemSummaries: [] };
+  return { data, attempts: attemptsLog, usedUrl: finalUrl, variantKey: finalVariantKey, found: Boolean(finalData) };
+}
+
+async function browseSearch({
+  q,
+  limit = 50,
+  offset = 0,
+  categoryIds = [],
+  conditionNames = [],
+  conditionIds = [],
+  buyingOptions = [],
+  href = null,
+}) {
   const token = await getAccessToken();
-  const url = new URL(`${BROWSE_BASE}/item_summary/search`);
-  url.searchParams.set("q", q);
-  url.searchParams.set("limit", String(limit));
-  url.searchParams.set("offset", String(offset));
-  // FULL returns items + refinements (condition histogram) in one call
-  url.searchParams.set("fieldgroups", "FULL");
+  const url = href ? new URL(href) : new URL(`${BROWSE_BASE}/item_summary/search`);
+
+  if (!href) {
+    url.searchParams.set("q", q || "");
+    url.searchParams.set("limit", String(limit));
+    url.searchParams.set("offset", String(offset));
+    url.searchParams.set("fieldgroups", "FULL");
+
+    if (Array.isArray(categoryIds) && categoryIds.length) {
+      const unique = Array.from(new Set(categoryIds.map(String))).filter(Boolean);
+      if (unique.length) url.searchParams.set("category_ids", unique.join(","));
+    }
+
+    const filterParts = [];
+    if (Array.isArray(conditionIds) && conditionIds.length) {
+      const ids = Array.from(new Set(conditionIds.map(Number).filter(Number.isFinite)));
+      if (ids.length) filterParts.push(`conditionIds:{${ids.join("|")}}`);
+    } else if (Array.isArray(conditionNames) && conditionNames.length) {
+      const names = Array.from(new Set(conditionNames.map((name) => String(name || "").trim()).filter(Boolean)));
+      if (names.length) filterParts.push(`conditions:{${names.join("|")}}`);
+    }
+
+    if (Array.isArray(buyingOptions) && buyingOptions.length) {
+      const opts = Array.from(new Set(buyingOptions.map((opt) => String(opt || "").trim()).filter(Boolean)));
+      if (opts.length) filterParts.push(`buyingOptions:{${opts.join("|")}}`);
+    }
+
+    if (filterParts.length) {
+      url.searchParams.set("filter", filterParts.join(","));
+    }
+  } else if (!url.searchParams.has("fieldgroups")) {
+    url.searchParams.set("fieldgroups", "FULL");
+  }
 
   const res = await fetch(url, {
     headers: {
@@ -33,7 +392,8 @@ async function browseSearch({ q, limit = 50, offset = 0 }) {
     const txt = await res.text().catch(() => "");
     throw new Error(`eBay browse ${res.status}: ${txt.slice(0, 500)}`);
   }
-  return res.json();
+  const data = await res.json();
+  return { data, url: url.toString() };
 }
 
 export async function POST(req) {
@@ -45,19 +405,31 @@ export async function POST(req) {
 
     const { searchParams } = new URL(req.url);
     const raw = (searchParams.get("model") || "").trim();
-    const limit = Number(searchParams.get("limit") || 50);
-    const debug = searchParams.get("debug") === "1";
+    const limit = parseLimit(searchParams.get("limit"));
+    const debug = parseBool(searchParams.get("debug"));
+    const allBuying = parseBool(searchParams.get("allBuying"));
+    const conditions = parseConditions(searchParams.get("conditions"));
+    const conditionIds = parseConditionIds(searchParams.get("conditionIds"));
     if (!raw) return NextResponse.json({ ok: false, error: "Missing model" }, { status: 400 });
 
     const modelKey = normalizeModelKey(raw);
-    const data = await browseSearch({ q: raw, limit });
+    const { data, attempts, usedUrl, variantKey, found } = await runSearchLadder({
+      rawQuery: raw,
+      limit,
+      conditions,
+      conditionIds,
+      allBuying,
+      modelKey,
+    });
 
-    const summaries = Array.isArray(data.itemSummaries) ? data.itemSummaries : [];
-    const conditionHistogram = (data.refinement?.conditionDistributions || []).map((c) => ({
-      condition: c.condition,
-      conditionId: c.conditionId,
-      matchCount: Number(c.matchCount || 0),
-    }));
+    const summaries = Array.isArray(data?.itemSummaries) ? data.itemSummaries : [];
+    const conditionHistogram = Array.isArray(data?.refinement?.conditionDistributions)
+      ? data.refinement.conditionDistributions.map((c) => ({
+          condition: c.condition,
+          conditionId: c.conditionId,
+          matchCount: Number(c.matchCount || 0),
+        }))
+      : [];
 
     // Normalize items (include auction currentBidPrice + optional shipping)
     const items = summaries.map((it) => {
@@ -71,7 +443,7 @@ export async function POST(req) {
         title: it.title || "",
         item_web_url: it.itemWebUrl || null,
         model: modelKey,
-        variant_key: "", // add variant detection later as needed
+        variant_key: variantKey || "",
         price_cents: Math.round(priceVal * 100),
         shipping_cents: Number.isFinite(shipVal) ? Math.round(shipVal * 100) : 0,
         total_cents: Math.round(total * 100),
@@ -122,15 +494,25 @@ export async function POST(req) {
       histogram: conditionHistogram,
     };
 
-    if (debug && summaries.length) {
-      out.sample = {
-        id: summaries[0].itemId,
-        title: summaries[0].title,
-        price: summaries[0].price,
-        currentBidPrice: summaries[0].currentBidPrice,
-        shipping: summaries[0].shippingOptions?.[0]?.shippingCost,
-        condition: summaries[0].condition,
-        conditionId: summaries[0].conditionId,
+    const sample = summaries.length
+      ? {
+          id: summaries[0].itemId,
+          title: summaries[0].title,
+          price: summaries[0].price,
+          currentBidPrice: summaries[0].currentBidPrice,
+          shipping: summaries[0].shippingOptions?.[0]?.shippingCost,
+          condition: summaries[0].condition,
+          conditionId: summaries[0].conditionId,
+          variantKey: variantKey || "",
+        }
+      : null;
+
+    if (debug || found) {
+      out.debug = {
+        attempts,
+        usedUrl,
+        sample,
+        histogram: conditionHistogram,
       };
     }
 
