@@ -27,16 +27,11 @@ export default function ConditionChips({ model }) {
       .catch(err => { if (mounted.current) setState({ loading: false, error: err.message, data: null }); });
   }, [url]);
 
-  if (!model) return null;
-  if (state.loading) return null; // keep UI clean; you can show a skeleton if you want
-  if (state.error) return null;
-  if (!state.data) return null;
+  const { processedBands, bandsCount, lookback } = useMemo(() => {
+    const data = state.data;
+    const rawBands = Array.isArray(data?.bands) ? data.bands : [];
 
-  const { bandsCount, bands, resolved } = state.data;
-  if (!bandsCount || bandsCount < 2 || !Array.isArray(bands) || bands.length < 2) return null;
-
-  const processedBands = useMemo(() => {
-    return bands
+    const processed = rawBands
       .map((band) => {
         const medianRaw =
           typeof band.median === 'number'
@@ -97,10 +92,22 @@ export default function ConditionChips({ model }) {
       })
       .filter(Boolean)
       .sort((a, b) => (b.premiumPct ?? 0) - (a.premiumPct ?? 0));
-  }, [bands]);
-  const lookback = resolved?.windowDays ?? state.data.windowDays ?? null;
+    const lookbackValue = data?.resolved?.windowDays ?? data?.windowDays ?? null;
+    const count = typeof data?.bandsCount === 'number' ? data.bandsCount : rawBands.length;
+
+    return {
+      processedBands: processed,
+      bandsCount: count,
+      lookback: lookbackValue,
+    };
+  }, [state.data]);
+
+  if (!model) return null;
+  if (state.loading) return null; // keep UI clean; you can show a skeleton if you want
+  if (state.error) return null;
 
   if (!processedBands.length || processedBands.length < 2) return null;
+  if (!bandsCount || bandsCount < 2) return null;
 
   const directionStyles = {
     positive: {
