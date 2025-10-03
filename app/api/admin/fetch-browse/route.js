@@ -179,7 +179,50 @@ function applyVariantTokens(base, tokens = []) {
   return `${trimmed} ${extras.join(" ")}`.trim();
 }
 
-async function followConditionHref(response, attempt, limit, attemptsLog) {
+async function getBearerToken(forceRefresh = false) {
+  const rawToken = await getEbayToken(forceRefresh);
+  const token =
+    typeof rawToken === "string"
+      ? rawToken
+      : rawToken?.access_token || rawToken?.token || rawToken?.accessToken || "";
+
+  if (!token) {
+    throw new Error("Failed to retrieve eBay access token");
+  }
+
+  return token;
+}
+
+async function callBrowseWithRetry(getToken, url) {
+  async function _call(token) {
+    return fetch(url, {
+      headers: {
+        Authorization: `Bearer ${token}`,
+        "Content-Type": "application/json",
+        "X-EBAY-C-MARKETPLACE-ID": "EBAY_US",
+      },
+      cache: "no-store",
+    });
+  }
+
+  let token = await getToken(false);
+  let res = await _call(token);
+
+  if (res.status === 401 || res.status === 403) {
+    token = await getToken(true);
+    res = await _call(token);
+  }
+
+  if (!res.ok) {
+    const txt = await res.text().catch(() => "");
+    throw new Error(`eBay browse ${res.status}: ${txt.slice(0, 500)}`);
+  }
+
+  const data = await res.json();
+  return { data, url: url.toString() };
+}
+
+async function followConditionHref(response, attempt, limit, attemptsLog, httpErrors) {
   const distributions = Array.isArray(response?.refinement?.conditionDistributions)
     ? response.refinement.conditionDistributions
     : [];
@@ -188,23 +231,29 @@ async function followConditionHref(response, attempt, limit, attemptsLog) {
     if (!href) continue;
     const name = String(dist?.condition || "").trim().toUpperCase();
     if (name !== "NEW" && name !== "USED") continue;
-    const { data, url } = await browseSearch({ refinementHref: href, limit });
-    const items = Array.isArray(data?.itemSummaries) ? data.itemSummaries : [];
-    attemptsLog.push({
-      url,
-      count: items.length,
-      variantKey: attempt.variantKey || "",
-      label: `${attempt.label}|refinement:${name}`,
-    });
-    if (items.length) {
-      return { data, url, count: items.length };
+    const url = buildBrowseUrl({ refinementHref: href, limit });
+    try {
+      const { data } = await callBrowseWithRetry(getBearerToken, url);
+      const items = Array.isArray(data?.itemSummaries) ? data.itemSummaries : [];
+      const urlString = url.toString();
+      attemptsLog.push({
+        url: urlString,
+        count: items.length,
+        variantKey: attempt.variantKey || "",
+        label: `${attempt.label}|refinement:${name}`,
+      });
+      if (items.length) {
+        return { data, url: urlString, count: items.length };
+      }
+    } catch (error) {
+      httpErrors.push({ url: url.toString(), error: String(error) });
     }
   }
   return null;
 }
 
-async function executeAttempt(attempt, limit, attemptsLog) {
-  const { data, url } = await browseSearch({
+async function executeAttempt(attempt, limit, attemptsLog, httpErrors) {
+  const url = buildBrowseUrl({
     q: attempt.q,
     limit,
     categoryId: attempt.categoryId,
@@ -213,14 +262,27 @@ async function executeAttempt(attempt, limit, attemptsLog) {
     conditionIds: attempt.conditionIds,
     allBuying: attempt.allBuying,
   });
-  const items = Array.isArray(data?.itemSummaries) ? data.itemSummaries : [];
-  attemptsLog.push({ url, count: items.length, variantKey: attempt.variantKey || "", label: attempt.label });
-  if (items.length) {
-    return { data, url, count: items.length };
+
+  try {
+    const { data } = await callBrowseWithRetry(getBearerToken, url);
+    const items = Array.isArray(data?.itemSummaries) ? data.itemSummaries : [];
+    const urlString = url.toString();
+    attemptsLog.push({
+      url: urlString,
+      count: items.length,
+      variantKey: attempt.variantKey || "",
+      label: attempt.label,
+    });
+    if (items.length) {
+      return { data, url: urlString, count: items.length };
+    }
+    const refinement = await followConditionHref(data, attempt, limit, attemptsLog, httpErrors);
+    if (refinement) return refinement;
+    return { data, url: urlString, count: 0 };
+  } catch (error) {
+    httpErrors.push({ url: url.toString(), error: String(error) });
+    return { data: null, url: url.toString(), count: 0 };
   }
-  const refinement = await followConditionHref(data, attempt, limit, attemptsLog);
-  if (refinement) return refinement;
-  return { data, url, count: 0 };
 }
 
 function buildAttemptConfigs({ rawQuery, conditions, conditionIds, allBuying, modelKey }) {
@@ -321,13 +383,14 @@ function buildAttemptConfigs({ rawQuery, conditions, conditionIds, allBuying, mo
 async function runSearchLadder({ rawQuery, limit, conditions, conditionIds, allBuying, modelKey }) {
   const attempts = buildAttemptConfigs({ rawQuery, conditions, conditionIds, allBuying, modelKey });
   const attemptsLog = [];
+  const httpErrors = [];
   let finalData = null;
   let finalUrl = "";
   let finalVariantKey = "";
   let lastData = null;
 
   for (const attempt of attempts) {
-    const result = await executeAttempt(attempt, limit, attemptsLog);
+    const result = await executeAttempt(attempt, limit, attemptsLog, httpErrors);
     if (result.count > 0) {
       finalData = result.data;
       finalUrl = result.url;
@@ -342,10 +405,17 @@ async function runSearchLadder({ rawQuery, limit, conditions, conditionIds, allB
   }
 
   const data = finalData || lastData || { itemSummaries: [] };
-  return { data, attempts: attemptsLog, usedUrl: finalUrl, variantKey: finalVariantKey, found: Boolean(finalData) };
+  return {
+    data,
+    attempts: attemptsLog,
+    usedUrl: finalUrl,
+    variantKey: finalVariantKey,
+    found: Boolean(finalData),
+    httpErrors,
+  };
 }
 
-async function browseSearch({
+function buildBrowseUrl({
   q = "",
   limit = 50,
   offset = 0,
@@ -356,16 +426,6 @@ async function browseSearch({
   allBuying = false,
   refinementHref = null,
 } = {}) {
-  const rawToken = await getEbayToken();
-  const token =
-    typeof rawToken === "string"
-      ? rawToken
-      : rawToken?.access_token || rawToken?.token || rawToken?.accessToken || "";
-
-  if (!token) {
-    throw new Error("Failed to retrieve eBay access token");
-  }
-
   const url = refinementHref
     ? new URL(refinementHref)
     : new URL(`${BROWSE_BASE}/item_summary/search`);
@@ -443,21 +503,7 @@ async function browseSearch({
     url.searchParams.set("fieldgroups", "CONDITION_REFINEMENTS");
   }
 
-  const res = await fetch(url, {
-    headers: {
-      Authorization: `Bearer ${token}`,
-      "Content-Type": "application/json",
-      "X-EBAY-C-MARKETPLACE-ID": "EBAY_US",
-    },
-    cache: "no-store",
-  });
-
-  if (!res.ok) {
-    const txt = await res.text().catch(() => "");
-    throw new Error(`eBay browse ${res.status}: ${txt.slice(0, 500)}`);
-  }
-  const data = await res.json();
-  return { data, url: url.toString() };
+  return url;
 }
 
 export async function POST(req) {
@@ -477,7 +523,7 @@ export async function POST(req) {
     if (!raw) return NextResponse.json({ ok: false, error: "Missing model" }, { status: 400 });
 
     const modelKey = normalizeModelKey(raw);
-    const { data, attempts, usedUrl, variantKey, found } = await runSearchLadder({
+    const { data, attempts, usedUrl, variantKey, found, httpErrors } = await runSearchLadder({
       rawQuery: raw,
       limit,
       conditions,
@@ -576,12 +622,16 @@ export async function POST(req) {
       : null;
 
     if (debug || found) {
-      out.debug = {
+      const debugPayload = {
         attempts,
         usedUrl,
         sample,
         histogram: conditionHistogram,
       };
+      if (debug) {
+        debugPayload.httpErrors = httpErrors;
+      }
+      out.debug = debugPayload;
     }
 
     return NextResponse.json(out);
