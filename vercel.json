@@ -3,6 +3,10 @@
     {
       "path": "/api/cron/collect-prices?key=12qwaszx!@QWASZX",
       "schedule": "30 3 * * *"
+    },
+    {
+      "path": "/api/admin/aggregate?secret=YOUR-NEW-RANDOM-SECRET",
+      "schedule": "0 9 * * *"
     }
   ]
 }
