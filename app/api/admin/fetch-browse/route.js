@@ -50,19 +50,47 @@ function buildQuery(base, {
   return `${base}/item_summary/search?${params.toString()}`;
 }
 
-async function doBrowse(url, token) {
+async function doBrowse(url, tokenInput) {
+  // Accept both a raw string token and an object with access_token/accessToken
+  const token =
+    typeof tokenInput === "string"
+      ? tokenInput
+      : tokenInput?.access_token || tokenInput?.accessToken || "";
+
+  if (!token) {
+    const err = new Error("Missing eBay token (access_token)");
+    err.code = "NO_TOKEN";
+    throw err;
+  }
+
   const r = await fetch(url, {
     headers: {
       Authorization: `Bearer ${token}`,
       "X-EBAY-C-MARKETPLACE-ID": MARKETPLACE,
-      Accept: "application/json"
-    }
+      Accept: "application/json",
+    },
   });
+
+  const text = await r.text().catch(() => "");
   if (!r.ok) {
-    const text = await r.text().catch(() => "");
-    throw new Error(`Browse ${r.status} ${r.statusText} for ${url} :: ${text.slice(0, 200)}`);
+    const err = new Error(`Browse ${r.status} ${r.statusText}`);
+    err.status = r.status;
+    err.body = text.slice(0, 400);
+    err.url = url;
+    throw err;
   }
-  return r.json();
+
+  // parse once
+  let json;
+  try {
+    json = text ? JSON.parse(text) : {};
+  } catch (e) {
+    const err = new Error("Browse JSON parse error");
+    err.body = text.slice(0, 200);
+    err.url = url;
+    throw err;
+  }
+  return json;
 }
 
 // Turn an item_summary into a snapshot row payload (normalized)
@@ -219,69 +247,56 @@ export async function POST(req) {
     });
   }
 
-  const triedUrls = [];
-  let usedUrl = "";
-  let summaries = [];
-  for (const a of attempts) {
-    const u = buildQuery(`${BROWSE_BASE}`, {
-      q: a.q,
-      limit,
-      categoryIds: a.category_ids,
-      buyingOptions: a.buyingOptions,
-      conditions: a.conditions,
-      conditionIds: a.conditionIds,
-      fieldgroups: a.fieldgroups
-    });
-    uniquePush(triedUrls, u);
+ // --- replace your attempt loop with this (more verbose debug) ---
+const tried = [];      // [{ url, ok, count, status, errorHead }]
+let usedUrl = "";
+let summaries = [];
 
-    try {
-      const json = await doBrowse(u, token);
-      const items = json?.itemSummaries || json?.item_summary || json?.item_summarys || [];
-      if (items.length > 0) {
-        summaries = items;
-        usedUrl = u;
-        break;
-      }
-    } catch (_e) {
-      // keep trying
+for (const a of attempts) {
+  const u = buildQuery(`${BROWSE_BASE}`, {
+    q: a.q,
+    limit,
+    categoryIds: a.category_ids,
+    buyingOptions: a.buyingOptions,
+    conditions: a.conditions,
+    conditionIds: a.conditionIds,
+    fieldgroups: a.fieldgroups,
+  });
+
+  try {
+    const json = await doBrowse(u, token);
+    const items =
+      json?.itemSummaries || // normal Browse payload
+      json?.item_summaries || // (defensive)
+      json?.item_summary ||   // (defensive)
+      [];
+
+    tried.push({ url: u, ok: true, count: items.length, status: 200 });
+    if (items.length > 0) {
+      summaries = items;
+      usedUrl = u;
+      break;
     }
+  } catch (e) {
+    tried.push({
+      url: u,
+      ok: false,
+      count: 0,
+      status: e?.status || 0,
+      errorHead: (e?.body || e?.message || "").slice(0, 200),
+    });
+    // keep trying next rung
   }
+}
 
-  if (!summaries.length) {
-    const payload = { ok: true, model: normalizeModelKey(rawQ), saw: 0, inserted: 0, skipped: 0, firstError: null, histogram: [], usedUrl };
-    if (debug) payload.attempts = triedUrls;
-    return NextResponse.json(payload);
-  }
-
-  // convert to snapshot rows
-  const rows = summaries.map(snapshotFromItem);
-
-  // prepare a simple histogram from items themselves
-  const hist = [];
-  const counts = new Map();
-  for (const it of summaries) {
-    const id = String(it?.conditionId || "UNSPECIFIED");
-    counts.set(id, (counts.get(id) || 0) + 1);
-  }
-  for (const [id, n] of counts.entries()) {
-    hist.push({ conditionId: id, matchCount: n });
-  }
-
-  // insert
-  const sql = getSql();
-  const { inserted, skipped, firstError } = await insertSnapshots(sql, rows);
-
-  const out = {
+if (!summaries.length) {
+  const payload = {
     ok: true,
     model: normalizeModelKey(rawQ),
-    saw: summaries.length,
-    inserted,
-    skipped,
-    firstError,
-    histogram: hist,
+    saw: 0, inserted: 0, skipped: 0, firstError: null,
+    histogram: [],
     usedUrl,
-    sample: summaries[0] || null
   };
-  if (debug) out.attempts = triedUrls;
-  return NextResponse.json(out);
+  if (debug) payload.attempts = tried;
+  return NextResponse.json(payload);
 }
