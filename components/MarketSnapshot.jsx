@@ -1,6 +1,8 @@
 "use client";
 
+import ConditionChips from "./ConditionChips";
 import ModelHistoryChart from "./ModelHistoryChart";
+import { sanitizeModelKey } from "../lib/sanitizeModelKey";
 
 function pickString(...values) {
   for (const value of values) {
@@ -32,6 +34,39 @@ function extractModelKey(snapshot, meta) {
   );
 }
 
+function deriveModelLabel(snapshot, meta, query) {
+  const label = pickString(
+    meta?.resolved?.model?.label,
+    meta?.resolved?.modelLabel,
+    meta?.resolved?.label,
+    meta?.model?.label,
+    meta?.modelLabel,
+    meta?.label,
+    meta?.requested?.model?.label,
+    meta?.requested?.modelLabel,
+    meta?.requested?.label,
+    meta?.segment?.resolved?.model?.label,
+    meta?.segment?.resolved?.modelLabel,
+    meta?.segment?.model?.label,
+    meta?.segment?.modelLabel,
+    snapshot?.context?.model?.label,
+    snapshot?.context?.modelLabel,
+    snapshot?.model?.label,
+    snapshot?.modelLabel,
+    snapshot?.label,
+    query
+  );
+
+  if (!label) return null;
+
+  try {
+    const sanitized = sanitizeModelKey(label);
+    return pickString(sanitized?.query, sanitized?.label, label);
+  } catch {
+    return label;
+  }
+}
+
 function formatCurrency(n, currency = "USD") {
   if (typeof n !== "number" || Number.isNaN(n)) return "—";
   try {
@@ -48,6 +83,7 @@ export default function MarketSnapshot({ snapshot, meta, query }) {
   const hasHistogram = Array.isArray(price.histogram) && price.histogram.length > 0;
   const sampleSize = hasHistogram ? price.histogram.reduce((a, b) => a + (b || 0), 0) : null;
   const modelKey = extractModelKey(snapshot, meta);
+  const modelLabel = deriveModelLabel(snapshot, meta, query);
 
   const bucketLabels = (() => {
     if (!hasHistogram) return [];
@@ -76,6 +112,7 @@ export default function MarketSnapshot({ snapshot, meta, query }) {
             <h2 className="text-lg font-semibold tracking-tight">
               Live market coverage {query ? <span className="text-gray-600">for “{query}”</span> : null}
             </h2>
+            {modelLabel ? <ConditionChips model={modelLabel} /> : null}
             <p className="mt-0.5 text-xs text-gray-500">
               Aggregating live listings across our tracked marketplaces to map today’s pricing landscape.
             </p>
