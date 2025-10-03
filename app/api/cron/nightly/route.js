@@ -1,107 +1,82 @@
 // app/api/cron/nightly/route.js
-export const runtime = "nodejs";
+export const runtime = 'nodejs';
 
-import { NextResponse } from "next/server";
+import { NextResponse } from 'next/server';
 
-// 🔑 Auth: pass ?secret=<CRON_SECRET> to this route (same secret used below)
-function authorized(req) {
-  const { searchParams } = new URL(req.url);
-  const q = searchParams.get("secret");
-  return !!process.env.CRON_SECRET && q === process.env.CRON_SECRET;
-}
-
-// Figure out your own base URL (works on localhost & Vercel)
-function siteBase(req) {
-  const host =
+function getBase(req) {
+  // Prefer explicit envs, else derive from the incoming request
+  const envBase =
     process.env.NEXT_PUBLIC_SITE_URL ||
-    process.env.VERCEL_URL ||
-    req.headers.get("host") ||
-    "localhost:3000";
-  const proto = host.includes("localhost") ? "http" : "https";
-  return `${proto}://${host}`;
+    process.env.NEXT_PUBLIC_BASE_URL ||
+    '';
+  if (envBase.startsWith('http')) return envBase.replace(/\/+$/, '');
+
+  // Derive from request URL (has protocol + host in Next route handlers)
+  const origin = req.nextUrl?.origin || '';
+  return origin.replace(/\/+$/, '');
 }
 
-// Models to seed nightly (tune this anytime)
-const MODELS = [
-  "Scotty Cameron Newport 2",
-  "Scotty Cameron Squareback 2",
-  "Odyssey White Hot OG Rossie",
-  "TaylorMade Spider Tour",
-  "Ping Anser",
-];
+function adminKey() {
+  return process.env.ADMIN_KEY || process.env.CRON_SECRET || '';
+}
 
-// Seed one model via your internal admin fetch-browse endpoint
-async function seedOne(base, adminKey, model, limit = 120) {
-  const url = `${base}/api/admin/fetch-browse?limit=${limit}&model=${encodeURIComponent(
-    model
-  )}`;
-  const res = await fetch(url, {
-    method: "POST",
-    headers: { "X-ADMIN-KEY": adminKey },
-  });
-
+async function postJson(url, headers = {}) {
+  const res = await fetch(url, { method: 'POST', headers, body: '' });
+  const text = await res.text();
   let json = null;
-  try {
-    json = await res.json();
-  } catch (_) {
-    json = { ok: false, error: `non-JSON (${res.status})` };
-  }
-
-  if (!json?.ok) {
-    return { model, ok: false, error: json?.error || `HTTP ${res.status}` };
-  }
-  return {
-    model,
-    ok: true,
-    saw: json.saw ?? 0,
-    inserted: json.inserted ?? 0,
-    usedUrl: json.usedUrl || "",
-  };
-}
-
-// Roll up 60/90/180 aggregates
-async function runAggregate(base) {
-  const url = `${base}/api/admin/aggregate?secret=${encodeURIComponent(
-    process.env.CRON_SECRET
-  )}`;
-  const res = await fetch(url);
-  const json = await res.json().catch(() => ({}));
-  return json;
-}
-
-async function runNightly(req) {
-  const base = siteBase(req);
-
-  // Use ADMIN_KEY if set, otherwise fall back to CRON_SECRET
-  const adminKey = process.env.ADMIN_KEY || process.env.CRON_SECRET || "";
-
-  const seedResults = [];
-  for (const m of MODELS) {
-    try {
-      const r = await seedOne(base, adminKey, m);
-      seedResults.push(r);
-    } catch (e) {
-      seedResults.push({ model: m, ok: false, error: e.message });
-    }
-  }
-
-  const aggregate = await runAggregate(base);
-  return { ok: true, base, seedResults, aggregate };
+  try { json = JSON.parse(text); } catch (_) {}
+  return { status: res.status, json, text };
 }
 
 export async function GET(req) {
-  if (!authorized(req)) {
-    return NextResponse.json({ ok: false, error: "unauthorized" }, { status: 401 });
+  const url = new URL(req.url);
+  const secret = url.searchParams.get('secret') || '';
+  const allowed = [process.env.CRON_SECRET, process.env.ADMIN_KEY].filter(Boolean);
+  if (!allowed.includes(secret)) {
+    return NextResponse.json({ ok: false, error: 'unauthorized' }, { status: 401 });
   }
-  try {
-    const out = await runNightly(req);
-    return NextResponse.json(out);
-  } catch (e) {
-    return NextResponse.json({ ok: false, error: e.message }, { status: 500 });
-  }
-}
 
-export async function POST(req) {
-  // Allow POST too
-  return GET(req);
+  const base = getBase(req);
+  const key = adminKey();
+  const hdrs = { 'X-ADMIN-KEY': key };
+
+  const models = [
+    'Scotty Cameron Newport 2',
+    'Scotty Cameron Squareback 2',
+    'Odyssey White Hot OG Rossie',
+    'TaylorMade Spider Tour',
+    'Ping Anser',
+  ];
+
+  const seedResults = [];
+  for (const m of models) {
+    const u = `${base}/api/admin/fetch-browse?limit=50&model=${encodeURIComponent(m)}`;
+    try {
+      const r = await postJson(u, hdrs);
+      if (r.json?.ok) {
+        seedResults.push({ model: m, ok: true, saw: r.json.saw, inserted: r.json.inserted, usedUrl: r.json.usedUrl || '' });
+      } else {
+        seedResults.push({
+          model: m,
+          ok: false,
+          status: r.status,
+          error: r.json?.error || `non-JSON (${r.status})`,
+          sample: r.json?.sample ? true : false,
+        });
+      }
+    } catch (e) {
+      seedResults.push({ model: m, ok: false, error: String(e) });
+    }
+  }
+
+  // Kick aggregates (60/90/180) if you have /api/admin/aggregate
+  let aggregate = {};
+  try {
+    const a = await postJson(`${base}/api/admin/aggregate?secret=${encodeURIComponent(key)}`);
+    aggregate = a.json || { status: a.status, body: a.text?.slice(0, 200) };
+  } catch (e) {
+    aggregate = { error: String(e) };
+  }
+
+  return NextResponse.json({ ok: true, base, seedResults, aggregate });
 }
