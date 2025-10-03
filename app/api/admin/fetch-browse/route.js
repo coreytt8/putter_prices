@@ -307,6 +307,26 @@ function buildAttemptConfigs({ rawQuery, conditions, conditionIds, allBuying, mo
   };
   attempts.push(baseAttempt);
 
+  attempts.push({
+    ...baseAttempt,
+    label: "baseline-no-filter",
+    categoryId: CATEGORY_GOLF_CLUBS,
+    addPutterWord: true,
+    allBuying: false,
+    conditions: null,
+    conditionIds: [],
+  });
+
+  attempts.push({
+    ...baseAttempt,
+    label: "baseline-no-filter+auctions",
+    categoryId: CATEGORY_GOLF_CLUBS,
+    addPutterWord: true,
+    allBuying: true,
+    conditions: null,
+    conditionIds: [],
+  });
+
   attempts.push({ ...baseAttempt, label: "category", categoryId: CATEGORY_GOLF_CLUBS });
 
   attempts.push({
