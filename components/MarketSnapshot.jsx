@@ -1,5 +1,37 @@
 "use client";
 
+import ModelHistoryChart from "./ModelHistoryChart";
+
+function pickString(...values) {
+  for (const value of values) {
+    if (typeof value === "string" && value.trim()) {
+      return value.trim();
+    }
+  }
+  return null;
+}
+
+function extractModelKey(snapshot, meta) {
+  return pickString(
+    meta?.modelKey,
+    meta?.model?.key,
+    meta?.model?.modelKey,
+    meta?.requested?.modelKey,
+    meta?.requested?.model?.key,
+    meta?.resolved?.modelKey,
+    meta?.resolved?.model?.key,
+    meta?.segment?.modelKey,
+    meta?.segment?.requested?.modelKey,
+    meta?.segment?.resolved?.modelKey,
+    meta?.segment?.actual?.modelKey,
+    meta?.segment?.resolved?.model?.key,
+    snapshot?.context?.modelKey,
+    snapshot?.context?.model?.key,
+    snapshot?.modelKey,
+    snapshot?.model?.key
+  );
+}
+
 function formatCurrency(n, currency = "USD") {
   if (typeof n !== "number" || Number.isNaN(n)) return "—";
   try {
@@ -15,6 +47,7 @@ export default function MarketSnapshot({ snapshot, meta, query }) {
   const { price, conditions = [], buyingOptions = [], brandsTop = [] } = snapshot;
   const hasHistogram = Array.isArray(price.histogram) && price.histogram.length > 0;
   const sampleSize = hasHistogram ? price.histogram.reduce((a, b) => a + (b || 0), 0) : null;
+  const modelKey = extractModelKey(snapshot, meta);
 
   const bucketLabels = (() => {
     if (!hasHistogram) return [];
@@ -131,6 +164,13 @@ export default function MarketSnapshot({ snapshot, meta, query }) {
                 </ul>
               )}
             </div>
+
+            {modelKey ? (
+              <div>
+                <h3 className="mb-2 text-sm font-medium text-gray-700">Price history</h3>
+                <ModelHistoryChart model={modelKey} />
+              </div>
+            ) : null}
 
             {!!buyingOptions.length && (
               <div>
