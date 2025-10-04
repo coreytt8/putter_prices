@@ -1,154 +1,87 @@
-export const config = { api: { bodyParser: false } };
-export const runtime = 'nodejs';
+// pages/api/admin/backfill-variants.js
+export const runtime = "nodejs";
 
-import fs from 'node:fs/promises';
-import path from 'node:path';
-
-import { getSql } from '../../../lib/db';
-import { normalizeModelKey } from '../../../lib/normalize';
-import { detectVariantTags, buildVariantKey } from '../../../lib/variant-detect';
-
-const ADMIN_HDR = 'x-admin-key';
-
-const FAMILY_CANON = new Map([
-  ['spider tour x', 'spider tour'],
-  ['spider tour v', 'spider tour'],
-  ['spider tour z', 'spider tour'],
-]);
-
-function collapseToParent(modelKey) {
-  return FAMILY_CANON.get(modelKey) || modelKey;
-}
-
-function wildcardFromSeed(label) {
-  const tokens = label.toLowerCase().split(/\s+/).filter(Boolean);
-  if (tokens.length >= 2) {
-    return `%${tokens[0]}%${tokens[1]}%`;
-  }
-  return `%${tokens[0]}%`;
-}
+import { getSql } from "../../../lib/db";
+import { normalizeModelKey } from "../../../lib/normalize";
+import { detectVariantTags, buildVariantKey } from "../../../lib/variant-detect";
 
 export default async function handler(req, res) {
   try {
-    if (req.method !== 'POST') {
-      return res.status(405).json({ ok: false, error: 'method_not_allowed' });
+    if (req.method !== "POST") {
+      res.setHeader("Allow", "POST");
+      return res.status(405).json({ ok: false, error: "method not allowed" });
     }
 
-    const admin = req.headers[ADMIN_HDR];
-    if (!admin || admin !== process.env.ADMIN_KEY) {
-      return res.status(401).json({ ok: false, error: 'unauthorized' });
+    const ADMIN = process.env.ADMIN_KEY || "12qwaszx!@QWASZX";
+    const headerKey = String(req.headers["x-admin-key"] || "");
+    if (headerKey !== ADMIN) {
+      return res.status(401).json({ ok: false, error: "unauthorized" });
     }
 
+    // Inputs
+    const onlyModelRaw = String(req.query.onlyModel || req.query.model || "").trim();
+    const dryRun = /^(1|true|yes)$/i.test(String(req.query.dryRun || req.query.dryrun || ""));
+    const limit = Math.min(Number(req.query.limit || 2000), 10000);
+    const sinceDays = Math.min(Number(req.query.sinceDays || 3650), 3650);
+
+    if (!onlyModelRaw) {
+      // We no longer read any seed file; require the caller to pass onlyModel
+      return res.status(400).json({ ok: false, error: "missing onlyModel" });
+    }
+
+    const baseKey = normalizeModelKey(onlyModelRaw); // e.g. "spider tour"
     const sql = getSql();
-    const sinceDays = Number(req.query.sinceDays || 3650);
-    const limitPerModel = Number(req.query.limit || 1500);
-    const onlyModel = (req.query.onlyModel || '').trim().toLowerCase();
-    const dryRun = String(req.query.dryRun || '').toLowerCase() === '1';
 
-    const seedPath = path.resolve(process.cwd(), 'data/seed-models.txt');
-    const raw = await fs.readFile(seedPath, 'utf8');
-    const seeds = raw
-      .split(/\r?\n/)
-      .map((s) => s.trim())
-      .filter((s) => s && !s.startsWith('#'));
-    const targets = onlyModel
-      ? seeds.filter((s) => s.toLowerCase() === onlyModel)
-      : seeds;
+    // Time window
+    const since = new Date(Date.now() - sinceDays * 24 * 60 * 60 * 1000);
 
-    const sinceDate = new Date(Date.now() - sinceDays * 24 * 3600 * 1000);
+    // Title match pattern (against listing_snapshots.model which stores the raw-ish title text)
+    const likePattern = `%${onlyModelRaw.replace(/\s+/g, "%")}%`;
 
-    const results = [];
-    for (const label of targets) {
-      const requestedKey = normalizeModelKey(label);
-      const baseKey = collapseToParent(requestedKey);
-      const like = wildcardFromSeed(label);
+    // Pull candidate rows with empty variant_key
+    const rows = await sql`
+      SELECT item_id, model, variant_key, snapshot_ts
+      FROM listing_snapshots
+      WHERE (variant_key IS NULL OR variant_key = '')
+        AND model ILIKE ${likePattern}
+        AND snapshot_ts >= ${since}
+      ORDER BY snapshot_ts DESC
+      LIMIT ${limit}
+    `;
 
-      const rows = await sql`
-        SELECT item_id, snapshot_day, model
-        FROM listing_snapshots
-        WHERE COALESCE(variant_key,'') = ''
-          AND snapshot_day >= ${sinceDate}
-          AND lower(model) LIKE ${like}
-        LIMIT ${limitPerModel}
-      `;
+    let updated = 0;
+    const attempts = [];
 
-      const updates = [];
-      for (const r of rows) {
-        const rawModel = String(r.model || '');
-        const norm = normalizeModelKey(rawModel);
-        const collapsed = collapseToParent(norm);
+    for (const r of rows) {
+      const tags = detectVariantTags(r.model || "");
+      if (!tags || tags.length === 0) continue;
 
-        if (collapsed !== baseKey) continue;
+      const vkey = buildVariantKey(baseKey, tags);
+      if (!vkey) continue;
 
-        const tags = detectVariantTags(rawModel);
-        if (!tags || !tags.length) continue;
+      attempts.push({ item_id: r.item_id, tags, vkey });
 
-        const vk = buildVariantKey(baseKey, tags);
-        if (!vk) continue;
-
-        updates.push({ ...r, baseKey, variant_key: vk });
-      }
-
-      let updated = 0;
-      if (!dryRun && updates.length) {
-        for (const u of updates) {
-          const res2 = await sql`
-            UPDATE listing_snapshots
-            SET model = ${u.baseKey}, variant_key = ${u.variant_key}
-            WHERE item_id = ${u.item_id}
-              AND snapshot_day = ${u.snapshot_day}
-              AND COALESCE(variant_key,'') = ''
-          `;
-          updated += res2.count || 0;
-        }
-
+      if (!dryRun) {
         await sql`
-          WITH windows AS (SELECT unnest(ARRAY[60,90,180])::int AS w),
-          base AS (
-            SELECT s.model,
-                   COALESCE(s.variant_key,'') AS variant_key,
-                   s.condition_band,
-                   w.w AS window_days,
-                   COUNT(*)::int AS n,
-                   PERCENTILE_CONT(0.10) WITHIN GROUP (ORDER BY s.total_cents) AS p10,
-                   PERCENTILE_CONT(0.50) WITHIN GROUP (ORDER BY s.total_cents) AS p50,
-                   PERCENTILE_CONT(0.90) WITHIN GROUP (ORDER BY s.total_cents) AS p90
-            FROM listing_snapshots s
-            JOIN windows w ON s.snapshot_day >= (CURRENT_DATE - (w.w || ' days')::interval)
-            WHERE s.model = ${baseKey}
-            GROUP BY s.model, COALESCE(s.variant_key,''), s.condition_band, w.w
-          )
-          INSERT INTO aggregated_stats_variant
-            (model, variant_key, condition_band, window_days, n, p10_cents, p50_cents, p90_cents, dispersion_ratio, updated_at)
-          SELECT
-            b.model, b.variant_key, b.condition_band, b.window_days, b.n,
-            ROUND(b.p10)::int, ROUND(b.p50)::int, ROUND(b.p90)::int,
-            CASE WHEN b.p50 > 0 THEN LEAST(5.0, GREATEST(0.1, (b.p90 - b.p10) / NULLIF(b.p50,0))) END,
-            NOW()
-          FROM base b
-          ON CONFLICT (model, variant_key, condition_band, window_days)
-          DO UPDATE
-            SET n = EXCLUDED.n,
-                p10_cents = EXCLUDED.p10_cents,
-                p50_cents = EXCLUDED.p50_cents,
-                p90_cents = EXCLUDED.p90_cents,
-                dispersion_ratio = EXCLUDED.dispersion_ratio,
-                updated_at = EXCLUDED.updated_at
+          UPDATE listing_snapshots
+          SET variant_key = ${vkey}
+          WHERE item_id = ${r.item_id}
+            AND (variant_key IS NULL OR variant_key = '')
         `;
+        updated++;
       }
-
-      results.push({
-        label,
-        baseKey,
-        candidates: rows.length,
-        tagged: updates.length,
-        updated,
-      });
     }
 
-    return res.json({ ok: true, sinceDays, limitPerModel, dryRun, results });
-  } catch (e) {
-    console.error(e);
-    return res.status(500).json({ ok: false, error: e.message });
+    return res.status(200).json({
+      ok: true,
+      onlyModel: onlyModelRaw,
+      baseKey,
+      scanned: rows.length,
+      updated,
+      dryRun,
+      sample: attempts[0] || null,
+    });
+  } catch (err) {
+    return res.status(500).json({ ok: false, error: String(err.message || err) });
   }
 }
