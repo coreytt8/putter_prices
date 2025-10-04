@@ -1,4 +1,3 @@
-// app/api/admin/fetch-browse/route.js
 export const runtime = "nodejs";
 
 import { NextResponse } from "next/server";
@@ -8,310 +7,284 @@ import { mapConditionIdToBand } from "@/lib/condition-band";
 import { detectVariantTags, buildVariantKey } from "@/lib/variant-detect";
 import { getEbayToken as getAccessToken } from "@/lib/ebay";
 
-const ADMIN_KEY = process.env.ADMIN_KEY || process.env.CRON_SECRET || "";
+const ADMIN_KEY = process.env.ADMIN_KEY || "";
 const BROWSE_BASE = "https://api.ebay.com/buy/browse/v1";
-const MARKETPLACE = process.env.EBAY_MARKETPLACE_ID || "EBAY_US";
-const CAT_PUTTERS = ["115280"]; // Golf Clubs
+const MARKETPLACE = "EBAY_US";
+const PUTTER_CAT = "115280"; // Golf Clubs
 
-const includesCi = (s, sub) => String(s || "").toLowerCase().includes(String(sub || "").toLowerCase());
-
-// Build the search URL
-function buildQuery(base, { q, limit, categoryIds, buyingOptions, conditions, conditionIds, fieldgroups }) {
-  const params = new URLSearchParams();
-  if (q) params.set("q", q);
-  if (limit) params.set("limit", String(limit));
-  if (categoryIds?.length) params.set("category_ids", categoryIds.join(","));
-  if (fieldgroups?.length) params.set("fieldgroups", fieldgroups.join(","));
-
-  const filters = [];
-  if (buyingOptions?.length) filters.push(`buyingOptions:{${buyingOptions.join(",")}}`);
-  if (conditions?.length) filters.push(`conditions:{${conditions.join(",")}}`);
-  if (conditionIds?.length) filters.push(`conditionIds:{${conditionIds.join(",")}}`);
-  if (filters.length) params.set("filter", filters.join(","));
-
-  return `${base}/item_summary/search?${params.toString()}`;
+// -------------------------- utils --------------------------
+function ok(val) { return val !== null && val !== undefined; }
+function toInt(v, fallback = 0) {
+  const n = Number(v);
+  return Number.isFinite(n) ? n : fallback;
 }
-
-// Token can be a string or object
-async function doBrowse(url, tokenInput) {
-  const token =
-    typeof tokenInput === "string"
-      ? tokenInput
-      : tokenInput?.access_token || tokenInput?.accessToken || tokenInput?.token || "";
-
-  if (!token) {
-    const err = new Error("Missing eBay token");
-    err.code = "NO_TOKEN";
-    throw err;
-  }
-
-  const r = await fetch(url, {
-    headers: {
-      Authorization: `Bearer ${token}`,
-      "X-EBAY-C-MARKETPLACE-ID": MARKETPLACE,
-      Accept: "application/json",
-    },
-  });
-
-  const text = await r.text().catch(() => "");
-  if (!r.ok) {
-    const err = new Error(`Browse ${r.status} ${r.statusText}`);
-    err.status = r.status;
-    err.body = text.slice(0, 400);
-    err.url = url;
-    throw err;
-  }
-
-  let json = {};
-  try {
-    json = text ? JSON.parse(text) : {};
-  } catch {
-    const err = new Error("Browse JSON parse error");
-    err.body = text.slice(0, 200);
-    err.url = url;
-    throw err;
-  }
-  return json;
+function toCents(v) {
+  const n = Number(v);
+  if (!Number.isFinite(n)) return 0;
+  return Math.round(n * 100);
 }
-
-// Convert eBay summary → snapshot row
-function snapshotFromItem(item) {
-  const title = String(item?.title || "");
-  const model = normalizeModelKey(title);
-  const tags = detectVariantTags(title);
-  const variant_key = buildVariantKey(model, tags);
-
-  const priceRaw = item?.price?.value ?? item?.currentBidPrice?.value ?? null;
-  const price_cents = (() => {
-    if (priceRaw == null) return null;
-    const cents = Math.round(Number(priceRaw || 0) * 100);
-    return cents || null;
-  })();
-
-  const shipRaw =
-    item?.shippingOptions?.[0]?.shippingCost?.value ??
-
-    item?.shipping?.value ??
-    0;
-  const price_cents = Math.round(Number(summary?.price?.value || 0) * 100);
-  const ship_cents  = Math.round(Number(summary?.shippingOptions?.[0]?.shippingCost?.value || 0) * 100) || 0;
-  const total_cents = price_cents + ship_cents;
-
-  const conditionId = item?.conditionId ? String(item.conditionId) : null;
-  const condition_band = mapConditionIdToBand(summary.conditionId);
-
-  const whenIso = item?.itemCreationDate || item?.itemOriginDate || null;
-  const snapshot_ts = whenIso ? new Date(whenIso) : new Date();
-  const snapshot_day = new Date(
-    Date.UTC(
-      snapshot_ts.getUTCFullYear(),
-      snapshot_ts.getUTCMonth(),
-      snapshot_ts.getUTCDate()
-    )
-  );
-
+function parseBool(v) {
+  if (typeof v === "boolean") return v;
+  if (!v) return false;
+  const s = String(v).toLowerCase();
+  return s === "1" || s === "true" || s === "yes";
+}
+function utcDayFromISO(isoLike) {
+  const d = isoLike ? new Date(isoLike) : new Date();
+  // build a date-only value in UTC (00:00:00)
+  return new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate()));
+}
+function pickListingTimestamps(item) {
+  // Prefer creation/origin dates from Browse; fallback to now.
+  const ts =
+    item?.itemCreationDate ||
+    item?.itemOriginDate ||
+    null;
+  const snapshotTs = ts ? new Date(ts) : new Date();
+  const snapshotDay = utcDayFromISO(ts);
+  return { snapshotTs, snapshotDay };
+}
+function condFilterPieces({ conditions, conditionIds }) {
+  // Build a string filter for Browse
+  // e.g. "conditions:{USED}"  or  "conditionIds:{1000,3000}"
+  const pieces = [];
+  if (conditions) {
+    const val = String(conditions).toUpperCase().replace(/[^A-Z_,]/g, "");
+    if (val) pieces.push(`conditions:{${val}}`);
+  }
+  if (conditionIds) {
+    const val = String(conditionIds).replace(/[^0-9,]/g, "");
+    if (val) pieces.push(`conditionIds:{${val}}`);
+  }
+  return pieces.join(",");
+}
+function buyingOptionsFilter(all = true) {
+  return all ? "buyingOptions:{FIXED_PRICE,AUCTION,AUCTION_WITH_BIN}" : "";
+}
+function makeHeaders(token) {
   return {
-    item_id: String(item?.itemId || ""),
-    model,
-    variant_key,
-    price_cents,
-    shipping_cents,
-    total_cents,
-    condition_id: conditionId,
-    condition_band,
-    snapshot_ts,
-    snapshot_day,
+    "Authorization": `Bearer ${token}`,
+    "Accept": "application/json",
+    "Content-Type": "application/json",
+    "X-EBAY-C-MARKETPLACE-ID": MARKETPLACE,
   };
 }
+function summarizeHistogram(json) {
+  // Prefer refinement distributions when present; otherwise count by itemSummaries
+  const out = [];
+  const dist = json?.refinement?.conditionDistributions;
+  if (Array.isArray(dist) && dist.length) {
+    for (const d of dist) {
+      out.push({
+        conditionId: d.conditionId,
+        matchCount: toInt(d.matchCount, 0),
+        refinementHref: d.refinementHref || undefined,
+      });
+    }
+    return out;
+  }
+  const tallies = new Map();
+  const items = json?.itemSummaries || [];
+  for (const it of items) {
+    const id = it?.conditionId || "UNSPEC";
+    tallies.set(id, (tallies.get(id) || 0) + 1);
+  }
+  for (const [conditionId, matchCount] of tallies) {
+    out.push({ conditionId, matchCount });
+  }
+  return out;
+}
 
-async function insertSnapshots(sql, rows) {
-  if (!rows.length) return { inserted: 0, skipped: 0 };
+async function browseSearch(token, params = {}, wantRefinements = false) {
+  const u = new URL(`${BROWSE_BASE}/item_summary/search`);
+  const q = params.q || "";
+  const limit = toInt(params.limit, 50);
+  u.searchParams.set("q", q);
+  u.searchParams.set("limit", String(limit));
+  if (wantRefinements) {
+    u.searchParams.set("fieldgroups", "CONDITION_REFINEMENTS");
+  }
+  if (params.category_ids) {
+    u.searchParams.set("category_ids", String(params.category_ids));
+  }
+  const filterPieces = [];
+  if (params.filter) filterPieces.push(params.filter);
+  if (params.buyingOptions) filterPieces.push(params.buyingOptions);
+  const filter = filterPieces.filter(Boolean).join(",");
+  if (filter) u.searchParams.set("filter", filter);
 
-  let inserted = 0,
-    skipped = 0,
-    firstError = null;
+  const resp = await fetch(u.href, { headers: makeHeaders(token) });
+  const status = resp.status;
+  let json = null;
+  try { json = await resp.json(); } catch { /* non-JSON */ }
+  const items = json?.itemSummaries || [];
+  return { url: u.href, status, json, items };
+}
 
-  for (const r of rows) {
+// Ladder: try progressively broader/smarter patterns
+async function runFallbackLadder(token, rawQuery, limit, filterBase, debug) {
+  const attempts = [];
+  const pushAttempt = (obj) => { if (debug) attempts.push(obj); };
+
+  // Variants of q and filters
+  const queries = [
+    rawQuery,
+    `${rawQuery} putter`,
+  ];
+  const cats = [null, PUTTER_CAT];
+  const wantOptions = [false, true];
+  const refinements = [false, true]; // sometimes refinements breaks counts, try both
+
+  for (const wantRef of refinements) {
+    for (const q of queries) {
+      // 1) Bare
+      {
+        const r = await browseSearch(token, { q, limit }, wantRef);
+        pushAttempt({ url: r.url, ok: !!r.items.length, count: r.items.length, status: r.status, keys: Object.keys(r.json || {}) });
+        if (r.items.length) return { result: r, attempts };
+      }
+      // 2) + filter
+      if (filterBase) {
+        const r = await browseSearch(token, { q, limit, filter: filterBase }, wantRef);
+        pushAttempt({ url: r.url, ok: !!r.items.length, count: r.items.length, status: r.status, keys: Object.keys(r.json || {}) });
+        if (r.items.length) return { result: r, attempts };
+      }
+      // 3) + category
+      for (const cat of cats) {
+        if (!cat) continue;
+        const r = await browseSearch(token, { q, limit, category_ids: cat, filter: filterBase }, wantRef);
+        pushAttempt({ url: r.url, ok: !!r.items.length, count: r.items.length, status: r.status, keys: Object.keys(r.json || {}) });
+        if (r.items.length) return { result: r, attempts };
+
+        // 4) + buyingOptions
+        for (const wantAll of wantOptions) {
+          const buy = buyingOptionsFilter(wantAll);
+          const r2 = await browseSearch(token, { q, limit, category_ids: cat, filter: filterBase, buyingOptions: buy }, wantRef);
+          pushAttempt({ url: r2.url, ok: !!r2.items.length, count: r2.items.length, status: r2.status, keys: Object.keys(r2.json || {}) });
+          if (r2.items.length) return { result: r2, attempts };
+        }
+      }
+    }
+  }
+  return { result: null, attempts };
+}
+
+async function insertSnapshots(sql, modelKeyCanonical, items = []) {
+  let inserted = 0;
+  let skipped = 0;
+  let firstError = null;
+
+  for (const it of items) {
     try {
+      const title = it?.title || "";
+      const model = normalizeModelKey(title) || modelKeyCanonical;
+      const tags = detectVariantTags(title);
+      const variant_key = buildVariantKey(model, tags);
+      const conditionId = it?.conditionId || null;
+      const condition_band = mapConditionIdToBand(conditionId || it?.condition);
+
+      const price_cents = toCents(it?.price?.value);
+      const ship_cents = toCents(it?.shippingOptions?.[0]?.shippingCost?.value);
+      const total_cents = price_cents + ship_cents;
+
+      const item_id = it?.itemId || it?.legacyItemId || it?.itemWebUrl || it?.itemHref;
+      if (!item_id) { skipped++; continue; }
+
+      const { snapshotTs, snapshotDay } = pickListingTimestamps(it);
+
       await sql`
         INSERT INTO listing_snapshots
-          (item_id, model, variant_key, price_cents, shipping_cents, total_cents,
-           condition_id, condition_band, snapshot_ts, snapshot_day)
+          (item_id, model, variant_key,
+           price_cents, shipping_cents, total_cents,
+           condition_id, condition_band,
+           snapshot_ts, snapshot_day)
         VALUES
-          (${r.item_id}, ${r.model}, ${r.variant_key},
-           ${r.price_cents}, ${r.shipping_cents}, ${r.total_cents},
-           ${r.condition_id}, ${r.condition_band},
-           ${r.snapshot_ts}, ${r.snapshot_day}::date)
+          (${item_id}, ${model}, ${variant_key},
+           ${price_cents}, ${ship_cents}, ${total_cents},
+           ${conditionId}, ${condition_band},
+           ${snapshotTs}, ${snapshotDay})
         ON CONFLICT (item_id, snapshot_day) DO NOTHING
       `;
       inserted++;
     } catch (e) {
+      if (!firstError) firstError = String(e?.message || e);
       skipped++;
-      if (!firstError) firstError = e.message;
     }
   }
   return { inserted, skipped, firstError };
 }
 
-export async function POST(req) {
-  // Admin auth
-  const auth = req.headers.get("x-admin-key") || "";
-  if (!ADMIN_KEY || auth.trim() !== ADMIN_KEY.trim()) {
+// -------------------------- handler --------------------------
+async function handle(req) {
+  // auth
+  const adminHdr = req.headers.get("x-admin-key") || "";
+  const url = new URL(req.url);
+  const secret = url.searchParams.get("secret") || "";
+  if (ADMIN_KEY && adminHdr !== ADMIN_KEY && secret !== ADMIN_KEY) {
     return NextResponse.json({ ok: false, error: "unauthorized" }, { status: 401 });
   }
 
-  const url = new URL(req.url);
-  const rawModel = (url.searchParams.get("model") || "").trim();
-  const limit = Number(url.searchParams.get("limit") || "50");
-  const debug = url.searchParams.has("debug");
-  const condParam = (url.searchParams.get("conditions") || "").trim().toUpperCase();
+  const limit = toInt(url.searchParams.get("limit"), 50);
+  const rawModel = url.searchParams.get("model") || url.searchParams.get("q") || "";
+  const conditions = url.searchParams.get("conditions") || "";     // e.g. NEW or USED
+  const conditionIds = url.searchParams.get("conditionIds") || ""; // e.g. 1000,3000
+  const debug = parseBool(url.searchParams.get("debug"));
 
-  if (!rawModel) {
+  if (!rawModel.trim()) {
     return NextResponse.json({ ok: false, error: "missing model" }, { status: 400 });
   }
 
   const token = await getAccessToken();
-  const baseQ = rawModel;
-  const putterQ = includesCi(baseQ, "putter") ? baseQ : `${baseQ} putter`;
-  const conds = condParam ? [condParam] : null;
-  const conditionIdTry =
-    condParam === "USED" ? ["3000"] : condParam === "NEW" ? ["1000"] : null;
+  const sql = getSql();
 
-  // Build the base ladder (we will try each WITH and WITHOUT fieldgroups)
-  const baseAttempts = [
-    { q: baseQ,  category_ids: null,        conditions: conds, buyingOptions: null,                                          conditionIds: null },
-    { q: baseQ,  category_ids: null,        conditions: conds, buyingOptions: ["FIXED_PRICE","AUCTION","AUCTION_WITH_BIN"],  conditionIds: null },
-    { q: baseQ,  category_ids: CAT_PUTTERS, conditions: conds, buyingOptions: null,                                          conditionIds: null },
-    { q: baseQ,  category_ids: CAT_PUTTERS, conditions: conds, buyingOptions: ["FIXED_PRICE","AUCTION","AUCTION_WITH_BIN"],  conditionIds: null },
-    { q: putterQ,category_ids: CAT_PUTTERS, conditions: conds, buyingOptions: null,                                          conditionIds: null },
-    { q: putterQ,category_ids: CAT_PUTTERS, conditions: conds, buyingOptions: ["FIXED_PRICE","AUCTION","AUCTION_WITH_BIN"],  conditionIds: null },
-  ];
-  if (conditionIdTry) {
-    baseAttempts.push(
-      { q: putterQ, category_ids: CAT_PUTTERS, conditions: null, buyingOptions: null,                                         conditionIds: conditionIdTry },
-      { q: putterQ, category_ids: CAT_PUTTERS, conditions: null, buyingOptions: ["FIXED_PRICE","AUCTION","AUCTION_WITH_BIN"], conditionIds: conditionIdTry },
-    );
-  }
+  const requestedModelKey = normalizeModelKey(rawModel);
+  const filterBase = condFilterPieces({ conditions, conditionIds });
 
-  // For each base attempt, try WITH fieldgroups (to read refinements) and WITHOUT (to fetch items)
-  const attempts = [];
-  for (const a of baseAttempts) {
-    attempts.push({ ...a, fieldgroups: ["CONDITION_REFINEMENTS"] });
-    attempts.push({ ...a, fieldgroups: null });
-  }
+  // Run the ladder
+  const { result, attempts } = await runFallbackLadder(token, rawModel, limit, filterBase, debug);
 
-  const tried = []; // debug list
-  let usedUrl = "";
-  let summaries = [];
-  let lastRefinements = null;
-
-  for (const a of attempts) {
-    const u = buildQuery(BROWSE_BASE, {
-      q: a.q,
-      limit,
-      categoryIds: a.category_ids,
-      buyingOptions: a.buyingOptions,
-      conditions: a.conditions,
-      conditionIds: a.conditionIds,
-      fieldgroups: a.fieldgroups,
-    });
-
-    try {
-      const json = await doBrowse(u, token);
-
-      // Capture refinements if present (for debug/histogram)
-      const condRef = json?.conditionDistributions || json?.refinement?.conditionDistributions || null;
-      if (condRef) lastRefinements = condRef;
-
-      const items = json?.itemSummaries || json?.item_summaries || json?.item_summary || [];
-      tried.push({
-        url: u,
-        ok: true,
-        count: Array.isArray(items) ? items.length : 0,
-        status: 200,
-        keys: Object.keys(json || {}).slice(0, 8),
-      });
-
-      if (items?.length > 0) {
-        summaries = items;
-        usedUrl = u;
-        break;
-      }
-    } catch (e) {
-      tried.push({
-        url: u,
-        ok: false,
-        count: 0,
-        status: e?.status || 0,
-        errorHead: (e?.body || e?.message || "").slice(0, 200),
-      });
-      // continue attempts
-    }
-  }
-
-  if (!summaries.length) {
-    // Build histogram from refinements if we saw any
-    const histogram =
-      Array.isArray(lastRefinements)
-        ? lastRefinements.map((r) => ({
-            condition: r?.condition || r?.value || "UNKNOWN",
-            matchCount: Number(r?.matchCount || 0),
-          }))
-        : [];
-
-    const payload = {
+  if (!result) {
+    return NextResponse.json({
       ok: true,
-      model: normalizeModelKey(rawModel),
+      model: requestedModelKey,
       saw: 0,
       inserted: 0,
       skipped: 0,
       firstError: null,
-      histogram,
-      usedUrl,
-    };
-    if (debug) payload.attempts = tried;
-    return NextResponse.json(payload);
+      histogram: [],
+      usedUrl: "",
+      ...(debug ? { attempts } : {}),
+    });
   }
 
-  // Normalize → snapshots
-  const rows = summaries.map(snapshotFromItem);
+  // Insert snapshots
+  const { items, json } = result;
+  const write = await insertSnapshots(sql, requestedModelKey, items);
 
-  // Insert
-  const sql = getSql();
-  const { inserted, skipped, firstError } = await insertSnapshots(sql, rows);
+  // Build histogram and sample
+  const histogram = summarizeHistogram(json);
+  const sample = items[0] || null;
 
-  // Build condition histogram from summaries, or fallback to refinements
-  const byCond = new Map();
-  for (const it of summaries) {
-    const cid = String(it?.conditionId || "UNSPECIFIED");
-    byCond.set(cid, (byCond.get(cid) || 0) + 1);
-  }
-  let histogram = Array.from(byCond.entries()).map(([conditionId, matchCount]) => ({ conditionId, matchCount }));
-  if (!histogram.length && Array.isArray(lastRefinements)) {
-    histogram = lastRefinements.map((r) => ({
-      condition: r?.condition || r?.value || "UNKNOWN",
-      matchCount: Number(r?.matchCount || 0),
-    }));
-  }
-
-  const out = {
+  return NextResponse.json({
     ok: true,
-    model: normalizeModelKey(rawModel),
-    saw: summaries.length,
-    inserted,
-    skipped,
-    firstError,
+    model: requestedModelKey,
+    saw: items.length,
+    inserted: write.inserted,
+    skipped: write.skipped,
+    firstError: write.firstError,
     histogram,
-    usedUrl,
-    sample: summaries[0] || null,
-  };
-  if (debug) out.attempts = tried;
-  return NextResponse.json(out);
+    usedUrl: result.url,
+    sample,
+    ...(debug ? { attempts } : {}),
+  });
 }
 
-// (optional) allow GET for quick local testing only with ?debugGet=1
-export async function GET(req) {
-  const url = new URL(req.url);
-  if (url.searchParams.get("debugGet") === "1") return POST(req);
-  return NextResponse.json({ ok: false, error: "Method Not Allowed. Use POST." }, { status: 405 });
+export async function POST(req) {
+  try { return await handle(req); }
+  catch (e) {
+    return NextResponse.json({ ok: false, error: String(e?.message || e) }, { status: 500 });
+  }
 }
+
+// (Optional) allow GET for quick debugging
+export async function GET(req) { return POST(req); }
