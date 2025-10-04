@@ -90,13 +90,15 @@ function snapshotFromItem(item) {
 
   const shipRaw =
     item?.shippingOptions?.[0]?.shippingCost?.value ??
+
     item?.shipping?.value ??
     0;
-  const shipping_cents = Math.round(Number(shipRaw || 0) * 100) || 0;
-  const total_cents = price_cents !== null ? price_cents + shipping_cents : null;
+  const price_cents = Math.round(Number(summary?.price?.value || 0) * 100);
+  const ship_cents  = Math.round(Number(summary?.shippingOptions?.[0]?.shippingCost?.value || 0) * 100) || 0;
+  const total_cents = price_cents + ship_cents;
 
   const conditionId = item?.conditionId ? String(item.conditionId) : null;
-  const condition_band = mapConditionIdToBand(conditionId) || "ANY";
+  const condition_band = mapConditionIdToBand(summary.conditionId);
 
   const whenIso = item?.itemCreationDate || item?.itemOriginDate || null;
   const snapshot_ts = whenIso ? new Date(whenIso) : new Date();
