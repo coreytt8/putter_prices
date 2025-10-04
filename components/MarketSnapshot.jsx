@@ -3,6 +3,7 @@
 import ConditionChips from "./ConditionChips";
 import ModelHistoryChart from "./ModelHistoryChart";
 import { sanitizeModelKey } from "../lib/sanitizeModelKey";
+import VariantChips from "./VariantChips";
 
 function pickString(...values) {
   for (const value of values) {
@@ -113,6 +114,7 @@ export default function MarketSnapshot({ snapshot, meta, query }) {
               Live market coverage {query ? <span className="text-gray-600">for “{query}”</span> : null}
             </h2>
             {modelLabel ? <ConditionChips model={modelLabel} /> : null}
+	    {modelLabel ? <VariantChips   model={modelLabel} /> : null}
             <p className="mt-0.5 text-xs text-gray-500">
               Aggregating live listings across our tracked marketplaces to map today’s pricing landscape.
             </p>
