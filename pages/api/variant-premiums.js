@@ -4,7 +4,9 @@ export const runtime = 'nodejs';
 import { getSql } from '../../lib/db';
 import { normalizeModelKey, degradeKeyForKnownBugs } from '../../lib/normalize';
 
+// --- helpers ---
 function centsToDollars(v) {
+  if (v === null || v === undefined) return null;
   const n = Number(v);
   return Number.isFinite(n) ? n / 100 : null;
 }
@@ -19,37 +21,10 @@ function parseWindow(req) {
   return [60, 90, 180].includes(n) ? n : null;
 }
 
-function prettyTag(tag) {
-  const map = new Map([
-    ['circle_t', 'Circle T'],
-    ['tour_only', 'Tour Only'],
-    ['gss', 'GSS'],
-    ['button_back', 'Button Back'],
-    ['tei3', 'TeI3'],
-    ['garage', 'Garage'],
-    ['limited', 'Limited'],
-    ['prototype', 'Prototype'],
-    ['small_slant', 'Small Slant'],
-  ]);
-  if (map.has(tag)) return map.get(tag);
-  // Title-case fallback
-  return tag
-    .split(/[_-]+/g)
-    .map((s) => s ? s[0].toUpperCase() + s.slice(1).toLowerCase() : s)
-    .join(' ');
-}
-
-function tagsFromVariantKey(model, variantKey) {
-  // variant_key is usually "model|tag|tag"
-  const parts = String(variantKey || '').split('|');
-  if (parts.length <= 1) return [];
-  const [, ...rawTags] = parts;
-  return rawTags.map(prettyTag);
-}
-
 async function selectBaselineAny(sql, modelKey, prefWindow = null) {
+  // try preferred window
   if (prefWindow) {
-    const rows = await sql`
+    const r = await sql`
       SELECT window_days, p50_cents
       FROM aggregated_stats_variant
       WHERE model = ${modelKey}
@@ -58,9 +33,10 @@ async function selectBaselineAny(sql, modelKey, prefWindow = null) {
         AND window_days = ${prefWindow}
       LIMIT 1
     `;
-    if (rows?.length) return rows[0];
+    if (r?.length) return r[0];
   }
-  const rows2 = await sql`
+  // else take most recent window available
+  const r2 = await sql`
     SELECT window_days, p50_cents
     FROM aggregated_stats_variant
     WHERE model = ${modelKey}
@@ -69,7 +45,31 @@ async function selectBaselineAny(sql, modelKey, prefWindow = null) {
     ORDER BY window_days DESC
     LIMIT 1
   `;
-  return rows2?.[0] || null;
+  return r2?.[0] || null;
+}
+
+const TAG_LABELS = new Map([
+  ['button_back', 'Button Back'],
+  ['circle_t', 'Circle T'],
+  ['tour_only', 'Tour Only'],
+  ['gss', 'GSS'],
+  ['limited', 'Limited'],
+  ['prototype', 'Prototype'],
+  ['tei3', 'Teryllium T3'],
+  ['009', '009'],
+  ['garage', 'Custom Garage'],
+  ['small_slant', 'Small Slant'],
+]);
+
+function formatTags(variantKey) {
+  if (!variantKey) return { tags: [], label: '' };
+  const parts = String(variantKey).split('|');
+  // variant_key format is "model|tag|tag" -> drop the first element (model)
+  const tags = parts.slice(1).filter(Boolean);
+  const label = tags
+    .map(t => TAG_LABELS.get(t) || t.replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase()))
+    .join(' + ');
+  return { tags, label };
 }
 
 export default async function handler(req, res) {
@@ -79,82 +79,101 @@ export default async function handler(req, res) {
     const raw = String(req.query.model || '').trim();
     if (!raw) return res.status(400).json({ ok: false, error: 'Missing model' });
 
+    const prefWindow = parseWindow(req); // 60|90|180|null
+
+    // Build candidate keys
     const requestedKey = normalizeModelKey(raw);
     const degraded = degradeKeyForKnownBugs(requestedKey);
-    const prefWindow = parseWindow(req);
-
     const candidates = [requestedKey];
     if (degraded && degraded !== requestedKey) candidates.push(degraded);
 
+    // 1) Find a baseline ANY median for the parent model
     let selectedKey = requestedKey;
     let baseline = null;
-
     for (const key of candidates) {
       const row = await selectBaselineAny(sql, key, prefWindow);
       if (row) { selectedKey = key; baseline = row; break; }
     }
-
     if (!baseline) {
+      // no direct parent baseline; return soft failure
       return res.status(200).json({
         ok: true,
         requested: { modelKey: requestedKey, window: prefWindow },
         resolved: null,
+        variantsCount: 0,
         variants: [],
-        variantsCount: 0
       });
     }
 
-    const baseMedian = centsToDollars(baseline.p50_cents);
-    const windowDays = Number(baseline.window_days || 0);
-    if (!isPos(baseMedian)) {
+    const baselineMedian = centsToDollars(baseline.p50_cents);
+    const windowDays = Number(baseline.window_days ?? 0);
+    if (!isPos(baselineMedian)) {
       return res.status(200).json({
         ok: true,
         requested: { modelKey: requestedKey, window: prefWindow },
         resolved: { modelKey: selectedKey, windowDays },
+        variantsCount: 0,
         variants: [],
-        variantsCount: 0
       });
     }
 
-    // Pull variant-level ANY medians in the same window
+    // 2) Pull variant rows (ANY band) from the "family":
+    //    exact parent OR children that start with the parent key
+    const like = `${selectedKey}%`;
     const rows = await sql`
-      SELECT variant_key, n, p50_cents
+      SELECT model, variant_key, n, p50_cents
       FROM aggregated_stats_variant
-      WHERE model = ${selectedKey}
-        AND COALESCE(variant_key,'') <> ''
+      WHERE window_days = ${windowDays}
         AND condition_band = 'ANY'
-        AND window_days = ${windowDays}
+        AND COALESCE(variant_key,'') <> ''
+        AND (model = ${selectedKey} OR model LIKE ${like})
+      ORDER BY n DESC NULLS LAST, p50_cents DESC NULLS LAST
+      LIMIT 100
     `;
 
-    const variants = (rows || [])
-      .map((r) => {
+    if (!rows?.length) {
+      return res.status(200).json({
+        ok: true,
+        requested: { modelKey: requestedKey, window: prefWindow },
+        resolved: { modelKey: selectedKey, windowDays },
+        variantsCount: 0,
+        variants: [],
+      });
+    }
+
+    // 3) Build premiums vs the parent's ANY median
+    const variants = rows
+      .map(r => {
         const median = centsToDollars(r.p50_cents);
         if (!isPos(median)) return null;
-        const premiumAbs = median - baseMedian;
-        const premiumPct = baseMedian > 0 ? premiumAbs / baseMedian : 0;
-        const tags = tagsFromVariantKey(selectedKey, r.variant_key);
+        const premiumAbs = median - baselineMedian;
+        const premiumPct = baselineMedian > 0 ? premiumAbs / baselineMedian : 0;
+        const { tags, label } = formatTags(r.variant_key);
         return {
-          variantKey: r.variant_key,
-          label: tags.length ? tags.join(' + ') : 'Variant',
-          median,
-          premiumAbs,
-          premiumPct,
+          model: r.model,                  // the child model label
+          variantKey: r.variant_key,       // "model|tag|tag"
+          tags,                            // ["button_back","gss",...]
+          label,                           // "Button Back + GSS"
+          median,                          // variant ANY median ($)
+          premiumAbs,                      // $ over parent ANY
+          premiumPct,                      // fraction over parent ANY
           pct_vs_any: (premiumPct * 100).toFixed(1),
           sampleSize: Number(r.n || 0),
+          lowSample: Number(r.n || 0) < 3, // flag for UI
         };
       })
       .filter(Boolean)
-      // some minimum support so we don’t show 1-off variants:
-      .filter(v => v.sampleSize >= 2)
-      .sort((a, b) => b.premiumPct - a.premiumPct)
-      .slice(0, 8);
+      // drop variants that have zero price (shouldn't happen) or identical median to baseline
+      .filter(v => v.median != null && Number.isFinite(v.premiumPct))
+      // most interesting first
+      .sort((a, b) => b.premiumPct - a.premiumPct);
 
     return res.status(200).json({
       ok: true,
       requested: { modelKey: requestedKey, window: prefWindow },
       resolved: { modelKey: selectedKey, windowDays },
+      variantsCount: variants.length,
       variants,
-      variantsCount: variants.length
     });
   } catch (err) {
     return res.status(500).json({ ok: false, error: err.message });
