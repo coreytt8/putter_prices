@@ -1,70 +1,83 @@
 // components/VariantChips.jsx
 'use client';
+
 import { useEffect, useMemo, useState } from 'react';
 
-export default function VariantChips({ model }) {
-  const [data, setData] = useState({ ok: true, variants: [], resolved: null });
+export default function VariantChips({ model, limit = 4, minN = 3 }) {
+  // Unconditional hooks (avoid React hook order errors)
+  const [data, setData] = useState(null);
+  const [err, setErr] = useState(null);
   const [loading, setLoading] = useState(false);
-
-  const modelKey = String(model || '').trim();
-  const windowDays = data?.resolved?.windowDays || 180;
-  const variants = Array.isArray(data?.variants) ? data.variants : [];
 
   useEffect(() => {
     let abort = false;
     async function go() {
-      if (!modelKey) return;
+      if (!model) return;
       setLoading(true);
+      setErr(null);
       try {
-        const url = `/api/variant-premiums?model=${encodeURIComponent(modelKey)}`;
+        const url = `/api/variant-premiums?model=${encodeURIComponent(model)}`;
         const res = await fetch(url, { cache: 'no-store' });
-        const j = await res.json();
-        if (!abort) setData(j);
+        const json = await res.json();
+        if (!abort) setData(json);
       } catch (e) {
-        if (!abort) setData({ ok: false, variants: [] });
+        if (!abort) setErr(e);
       } finally {
         if (!abort) setLoading(false);
       }
     }
     go();
     return () => { abort = true; };
-  }, [modelKey]);
+  }, [model]);
 
-  const items = useMemo(() => {
-    return variants.map(v => ({
-      label: v.label,
-      pct: Number(v.premiumPct || 0),
-      pctText: (Number(v.premiumPct || 0) * 100).toFixed(1) + '%',
-    }));
-  }, [variants]);
+  const { windowDays, variants } = useMemo(() => {
+    const rd = data?.resolved || {};
+    const variantsRaw = Array.isArray(data?.variants) ? data.variants : [];
+    // prefer decent samples; still show low-n with a badge
+    const sorted = variantsRaw.slice().sort((a, b) => b.premiumPct - a.premiumPct);
+    return {
+      windowDays: rd.windowDays ?? null,
+      variants: sorted.slice(0, limit),
+    };
+  }, [data, limit]);
 
-  if (!modelKey) return null;
-  if (!loading && items.length === 0) return null; // nothing to show
+  if (!model) return null;
+  if (loading) return null; // keep UI calm; your card already has other loaders
+  if (err) return null;
+  if (!variants?.length) return null;
+
+  const pillBase =
+    'inline-flex items-center gap-1 rounded-full px-2.5 py-1 text-xs font-medium border';
+  const pos = 'border-green-200 bg-green-50 text-green-800';
+  const neg = 'border-red-200 bg-red-50 text-red-800';
+  const flat = 'border-gray-200 bg-gray-50 text-gray-800';
 
   return (
-    <div className="mt-2 flex flex-wrap items-center gap-2 text-sm">
-      <span className="rounded-md bg-gray-100 px-2 py-1 text-gray-600">
-        Variants • Last {windowDays}d
-      </span>
-
-      {loading && <span className="text-gray-400">loading…</span>}
-
-      {!loading && items.map((it, i) => {
-        const pos = it.pct > 0.01;
-        const neg = it.pct < -0.01;
-        const chipClass = pos
-          ? 'bg-green-100 text-green-800 ring-1 ring-green-300'
-          : neg
-          ? 'bg-red-100 text-red-800 ring-1 ring-red-300'
-          : 'bg-gray-100 text-gray-700 ring-1 ring-gray-300';
-        const signText = pos ? `+${(it.pct*100).toFixed(1)}%` : `${(it.pct*100).toFixed(1)}%`;
+    <div className="mt-2 flex flex-wrap items-center gap-2">
+      {variants.map((v, i) => {
+        const pct = (v.premiumPct ?? 0);
+        const pctLabel = `${pct >= 0 ? '+' : ''}${(pct * 100).toFixed(1)}%`;
+        const tone = pct > 0.01 ? pos : pct < -0.01 ? neg : flat;
+        const lowN = v.lowSample ? (
+          <span
+            title="Small sample"
+            className="ml-1 inline-block h-1.5 w-1.5 rounded-full bg-amber-500"
+          />
+        ) : null;
 
         return (
-          <span key={i} className={`rounded-full px-2 py-1 ${chipClass}`}>
-            {it.label} {signText}
+          <span key={`${v.variantKey}-${i}`} className={`${pillBase} ${tone}`}>
+            <span className="truncate max-w-[14ch]">{v.label || 'Variant'}</span>
+            <span className="opacity-70">·</span>
+            <span className="tabular-nums">{pctLabel}</span>
+            {lowN}
           </span>
         );
       })}
+
+      {windowDays ? (
+        <span className="ml-1 text-[10px] text-gray-500">Last {windowDays}d</span>
+      ) : null}
     </div>
   );
 }
