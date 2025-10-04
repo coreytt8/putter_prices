@@ -4,7 +4,12 @@ export const runtime = 'nodejs';
 import { getSql } from '../../lib/db';
 import { normalizeModelKey, degradeKeyForKnownBugs } from '../../lib/normalize';
 
+<<<<<<< HEAD
 // --- helpers ---
+=======
+const WINDOWS = [180, 90, 60];
+
+>>>>>>> 2ebd5602262cd7e656d23bebf44cdfabd8988385
 function centsToDollars(v) {
   if (v === null || v === undefined) return null;
   const n = Number(v);
@@ -14,13 +19,8 @@ function isPos(n) {
   const x = Number(n);
   return Number.isFinite(x) && x > 0;
 }
-function parseWindow(req) {
-  const raw = String(req.query.window || '').trim();
-  if (!raw) return null;
-  const n = Number(raw);
-  return [60, 90, 180].includes(n) ? n : null;
-}
 
+<<<<<<< HEAD
 async function selectBaselineAny(sql, modelKey, prefWindow = null) {
   // try preferred window
   if (prefWindow) {
@@ -70,6 +70,34 @@ function formatTags(variantKey) {
     .map(t => TAG_LABELS.get(t) || t.replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase()))
     .join(' + ');
   return { tags, label };
+=======
+function prettyTag(tag) {
+  const map = new Map([
+    ['circle_t', 'Circle T'],
+    ['tour_only', 'Tour Only'],
+    ['gss', 'GSS'],
+    ['button_back', 'Button Back'],
+    ['tei3', 'TeI3'],
+    ['garage', 'Garage'],
+    ['limited', 'Limited'],
+    ['prototype', 'Prototype'],
+    ['small_slant', 'Small Slant'],
+  ]);
+  if (map.has(tag)) return map.get(tag);
+  // Title-case fallback
+  return tag
+    .split(/[_-]+/g)
+    .map((s) => s ? s[0].toUpperCase() + s.slice(1).toLowerCase() : s)
+    .join(' ');
+}
+
+function tagsFromVariantKey(model, variantKey) {
+  // variant_key is usually "model|tag|tag"
+  const parts = String(variantKey || '').split('|');
+  if (parts.length <= 1) return [];
+  const [, ...rawTags] = parts;
+  return rawTags.map(prettyTag);
+>>>>>>> 2ebd5602262cd7e656d23bebf44cdfabd8988385
 }
 
 export default async function handler(req, res) {
@@ -84,33 +112,70 @@ export default async function handler(req, res) {
     // Build candidate keys
     const requestedKey = normalizeModelKey(raw);
     const degraded = degradeKeyForKnownBugs(requestedKey);
+<<<<<<< HEAD
     const candidates = [requestedKey];
     if (degraded && degraded !== requestedKey) candidates.push(degraded);
 
     // 1) Find a baseline ANY median for the parent model
     let selectedKey = requestedKey;
     let baseline = null;
+=======
+    const candidates = Array.from(new Set([requestedKey, degraded].filter(Boolean)));
+
+    let selectedKey = null;
+    let baseline = null;
+    let windowDays = null;
+
+>>>>>>> 2ebd5602262cd7e656d23bebf44cdfabd8988385
     for (const key of candidates) {
-      const row = await selectBaselineAny(sql, key, prefWindow);
-      if (row) { selectedKey = key; baseline = row; break; }
+      for (const w of WINDOWS) {
+        const rows = await sql`
+          SELECT window_days, p50_cents
+          FROM aggregated_stats_variant
+          WHERE model = ${key}
+            AND COALESCE(variant_key,'') = ''
+            AND condition_band = 'ANY'
+            AND window_days = ${w}
+          LIMIT 1
+        `;
+        const row = rows?.[0];
+        if (row && row.p50_cents != null) {
+          selectedKey = key;
+          baseline = row;
+          windowDays = Number(row.window_days);
+          break;
+        }
+      }
+      if (baseline) break;
     }
+<<<<<<< HEAD
     if (!baseline) {
       // no direct parent baseline; return soft failure
+=======
+
+    if (!baseline || !selectedKey) {
+>>>>>>> 2ebd5602262cd7e656d23bebf44cdfabd8988385
       return res.status(200).json({
         ok: true,
-        requested: { modelKey: requestedKey, window: prefWindow },
+        requested: { modelKey: requestedKey, window: null },
         resolved: null,
         variantsCount: 0,
         variants: [],
       });
     }
 
+<<<<<<< HEAD
     const baselineMedian = centsToDollars(baseline.p50_cents);
     const windowDays = Number(baseline.window_days ?? 0);
     if (!isPos(baselineMedian)) {
+=======
+    const baseMedian = centsToDollars(baseline.p50_cents);
+    windowDays = Number(windowDays || baseline.window_days || 0);
+    if (!isPos(baseMedian)) {
+>>>>>>> 2ebd5602262cd7e656d23bebf44cdfabd8988385
       return res.status(200).json({
         ok: true,
-        requested: { modelKey: requestedKey, window: prefWindow },
+        requested: { modelKey: requestedKey, window: null },
         resolved: { modelKey: selectedKey, windowDays },
         variantsCount: 0,
         variants: [],
@@ -163,14 +228,17 @@ export default async function handler(req, res) {
         };
       })
       .filter(Boolean)
+<<<<<<< HEAD
       // drop variants that have zero price (shouldn't happen) or identical median to baseline
       .filter(v => v.median != null && Number.isFinite(v.premiumPct))
       // most interesting first
+=======
+>>>>>>> 2ebd5602262cd7e656d23bebf44cdfabd8988385
       .sort((a, b) => b.premiumPct - a.premiumPct);
 
     return res.status(200).json({
       ok: true,
-      requested: { modelKey: requestedKey, window: prefWindow },
+      requested: { modelKey: requestedKey, window: null },
       resolved: { modelKey: selectedKey, windowDays },
       variantsCount: variants.length,
       variants,

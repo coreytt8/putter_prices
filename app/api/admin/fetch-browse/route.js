@@ -5,6 +5,7 @@ import { NextResponse } from "next/server";
 import { getSql } from "@/lib/db";
 import { normalizeModelKey } from "@/lib/normalize";
 import { mapConditionIdToBand } from "@/lib/condition-band";
+import { detectVariantTags, buildVariantKey } from "@/lib/variant-detect";
 import { getEbayToken as getAccessToken } from "@/lib/ebay";
 
 const ADMIN_KEY = process.env.ADMIN_KEY || process.env.CRON_SECRET || "";
@@ -12,7 +13,6 @@ const BROWSE_BASE = "https://api.ebay.com/buy/browse/v1";
 const MARKETPLACE = process.env.EBAY_MARKETPLACE_ID || "EBAY_US";
 const CAT_PUTTERS = ["115280"]; // Golf Clubs
 
-const toIntCents = (n) => Math.round(Number(n || 0) * 100);
 const includesCi = (s, sub) => String(s || "").toLowerCase().includes(String(sub || "").toLowerCase());
 
 // Build the search URL
@@ -78,37 +78,47 @@ async function doBrowse(url, tokenInput) {
 function snapshotFromItem(item) {
   const title = String(item?.title || "");
   const model = normalizeModelKey(title);
+  const tags = detectVariantTags(title);
+  const variant_key = buildVariantKey(model, tags);
 
-  const priceV = item?.price?.value ?? item?.currentBidPrice?.value ?? null;
-  const shipV =
+  const priceRaw = item?.price?.value ?? item?.currentBidPrice?.value ?? null;
+  const price_cents = (() => {
+    if (priceRaw == null) return null;
+    const cents = Math.round(Number(priceRaw || 0) * 100);
+    return cents || null;
+  })();
+
+  const shipRaw =
     item?.shippingOptions?.[0]?.shippingCost?.value ??
     item?.shipping?.value ??
     0;
-
-  const price_cents = toIntCents(priceV);
-  const shipping_cents = toIntCents(shipV);
-  const total_cents = price_cents + shipping_cents;
+  const shipping_cents = Math.round(Number(shipRaw || 0) * 100) || 0;
+  const total_cents = price_cents !== null ? price_cents + shipping_cents : null;
 
   const conditionId = item?.conditionId ? String(item.conditionId) : null;
   const condition_band = mapConditionIdToBand(conditionId) || "ANY";
 
-  const whenIso = item?.itemCreationDate || item?.itemEndDate || null;
-  const ts = whenIso ? new Date(whenIso) : new Date();
-  const snapshot_day_iso = new Date(Date.UTC(ts.getUTCFullYear(), ts.getUTCMonth(), ts.getUTCDate()))
-    .toISOString()
-    .slice(0, 10);
+  const whenIso = item?.itemCreationDate || item?.itemOriginDate || null;
+  const snapshot_ts = whenIso ? new Date(whenIso) : new Date();
+  const snapshot_day = new Date(
+    Date.UTC(
+      snapshot_ts.getUTCFullYear(),
+      snapshot_ts.getUTCMonth(),
+      snapshot_ts.getUTCDate()
+    )
+  );
 
   return {
     item_id: String(item?.itemId || ""),
     model,
-    variant_key: "",
+    variant_key,
     price_cents,
     shipping_cents,
     total_cents,
     condition_id: conditionId,
     condition_band,
-    snapshot_ts: ts,
-    snapshot_day_iso,
+    snapshot_ts,
+    snapshot_day,
   };
 }
 
@@ -129,7 +139,7 @@ async function insertSnapshots(sql, rows) {
           (${r.item_id}, ${r.model}, ${r.variant_key},
            ${r.price_cents}, ${r.shipping_cents}, ${r.total_cents},
            ${r.condition_id}, ${r.condition_band},
-           ${r.snapshot_ts}, ${r.snapshot_day_iso}::date)
+           ${r.snapshot_ts}, ${r.snapshot_day}::date)
         ON CONFLICT (item_id, snapshot_day) DO NOTHING
       `;
       inserted++;
