@@ -4,6 +4,8 @@ export const runtime = 'nodejs';
 import { getSql } from '../../lib/db';
 import { normalizeModelKey, degradeKeyForKnownBugs } from '../../lib/normalize';
 
+const WINDOWS = [180, 90, 60];
+
 function centsToDollars(v) {
   const n = Number(v);
   return Number.isFinite(n) ? n / 100 : null;
@@ -11,12 +13,6 @@ function centsToDollars(v) {
 function isPos(n) {
   const x = Number(n);
   return Number.isFinite(x) && x > 0;
-}
-function parseWindow(req) {
-  const raw = String(req.query.window || '').trim();
-  if (!raw) return null;
-  const n = Number(raw);
-  return [60, 90, 180].includes(n) ? n : null;
 }
 
 function prettyTag(tag) {
@@ -47,31 +43,6 @@ function tagsFromVariantKey(model, variantKey) {
   return rawTags.map(prettyTag);
 }
 
-async function selectBaselineAny(sql, modelKey, prefWindow = null) {
-  if (prefWindow) {
-    const rows = await sql`
-      SELECT window_days, p50_cents
-      FROM aggregated_stats_variant
-      WHERE model = ${modelKey}
-        AND COALESCE(variant_key,'') = ''
-        AND condition_band = 'ANY'
-        AND window_days = ${prefWindow}
-      LIMIT 1
-    `;
-    if (rows?.length) return rows[0];
-  }
-  const rows2 = await sql`
-    SELECT window_days, p50_cents
-    FROM aggregated_stats_variant
-    WHERE model = ${modelKey}
-      AND COALESCE(variant_key,'') = ''
-      AND condition_band = 'ANY'
-    ORDER BY window_days DESC
-    LIMIT 1
-  `;
-  return rows2?.[0] || null;
-}
-
 export default async function handler(req, res) {
   try {
     const sql = getSql();
@@ -81,23 +52,38 @@ export default async function handler(req, res) {
 
     const requestedKey = normalizeModelKey(raw);
     const degraded = degradeKeyForKnownBugs(requestedKey);
-    const prefWindow = parseWindow(req);
+    const candidates = Array.from(new Set([requestedKey, degraded].filter(Boolean)));
 
-    const candidates = [requestedKey];
-    if (degraded && degraded !== requestedKey) candidates.push(degraded);
-
-    let selectedKey = requestedKey;
+    let selectedKey = null;
     let baseline = null;
+    let windowDays = null;
 
     for (const key of candidates) {
-      const row = await selectBaselineAny(sql, key, prefWindow);
-      if (row) { selectedKey = key; baseline = row; break; }
+      for (const w of WINDOWS) {
+        const rows = await sql`
+          SELECT window_days, p50_cents
+          FROM aggregated_stats_variant
+          WHERE model = ${key}
+            AND COALESCE(variant_key,'') = ''
+            AND condition_band = 'ANY'
+            AND window_days = ${w}
+          LIMIT 1
+        `;
+        const row = rows?.[0];
+        if (row && row.p50_cents != null) {
+          selectedKey = key;
+          baseline = row;
+          windowDays = Number(row.window_days);
+          break;
+        }
+      }
+      if (baseline) break;
     }
 
-    if (!baseline) {
+    if (!baseline || !selectedKey) {
       return res.status(200).json({
         ok: true,
-        requested: { modelKey: requestedKey, window: prefWindow },
+        requested: { modelKey: requestedKey, window: null },
         resolved: null,
         variants: [],
         variantsCount: 0
@@ -105,11 +91,11 @@ export default async function handler(req, res) {
     }
 
     const baseMedian = centsToDollars(baseline.p50_cents);
-    const windowDays = Number(baseline.window_days || 0);
+    windowDays = Number(windowDays || baseline.window_days || 0);
     if (!isPos(baseMedian)) {
       return res.status(200).json({
         ok: true,
-        requested: { modelKey: requestedKey, window: prefWindow },
+        requested: { modelKey: requestedKey, window: null },
         resolved: { modelKey: selectedKey, windowDays },
         variants: [],
         variantsCount: 0
@@ -144,14 +130,11 @@ export default async function handler(req, res) {
         };
       })
       .filter(Boolean)
-      // some minimum support so we don’t show 1-off variants:
-      .filter(v => v.sampleSize >= 2)
-      .sort((a, b) => b.premiumPct - a.premiumPct)
-      .slice(0, 8);
+      .sort((a, b) => b.premiumPct - a.premiumPct);
 
     return res.status(200).json({
       ok: true,
-      requested: { modelKey: requestedKey, window: prefWindow },
+      requested: { modelKey: requestedKey, window: null },
       resolved: { modelKey: selectedKey, windowDays },
       variants,
       variantsCount: variants.length
