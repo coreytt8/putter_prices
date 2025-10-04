@@ -93,101 +93,99 @@ async function backfillForModel(sql, {
 }
 
 async function refreshAggregates(sql, models) {
-  if (!models || models.length === 0) {
-    return { triggered: false, windows: [] };
-  }
+  const unique = Array.from(new Set((models || []).filter(Boolean)));
+  if (unique.length === 0) return { triggered: false, windows: [] };
 
   const windows = [60, 90, 180];
-  const uniqueModels = Array.from(new Set(models.filter(Boolean)));
-  if (uniqueModels.length === 0) {
-    return { triggered: false, windows: [] };
-  }
-
   const results = [];
-  const modelArray = sql.array(uniqueModels, "text");
 
   for (const windowDays of windows) {
-    const anyRows = await sql`
-      INSERT INTO aggregated_stats_variant
-        (model, variant_key, condition_band, window_days, n, p10_cents, p50_cents, p90_cents, dispersion_ratio, updated_at)
-      SELECT
-        s.model,
-        COALESCE(s.variant_key, '') AS variant_key,
-        'ANY'::text AS condition_band,
-        ${windowDays}::int AS window_days,
-        COUNT(*)::int AS n,
-        CAST(percentile_cont(0.10) WITHIN GROUP (ORDER BY s.price_cents) AS INT) AS p10_cents,
-        CAST(percentile_cont(0.50) WITHIN GROUP (ORDER BY s.price_cents) AS INT) AS p50_cents,
-        CAST(percentile_cont(0.90) WITHIN GROUP (ORDER BY s.price_cents) AS INT) AS p90_cents,
-        CASE
-          WHEN percentile_cont(0.50) WITHIN GROUP (ORDER BY s.price_cents) = 0 THEN NULL
-          ELSE (
-            percentile_cont(0.90) WITHIN GROUP (ORDER BY s.price_cents)::numeric
-            / NULLIF(percentile_cont(0.50) WITHIN GROUP (ORDER BY s.price_cents), 0)::numeric
-          )
-        END AS dispersion_ratio,
-        NOW() AS updated_at
-      FROM listing_snapshots s
-      WHERE s.snapshot_ts >= NOW() - make_interval(days => ${windowDays})
-        AND s.model = ANY(${modelArray})
-        AND s.price_cents IS NOT NULL
-      GROUP BY s.model, COALESCE(s.variant_key, '')
-      ON CONFLICT (model, variant_key, condition_band, window_days)
-      DO UPDATE SET
-        n = EXCLUDED.n,
-        p10_cents = EXCLUDED.p10_cents,
-        p50_cents = EXCLUDED.p50_cents,
-        p90_cents = EXCLUDED.p90_cents,
-        dispersion_ratio = EXCLUDED.dispersion_ratio,
-        updated_at = EXCLUDED.updated_at
-      RETURNING 1
-    `;
+    let updatedAny = 0;
+    let updatedBands = 0;
 
-    const bandRows = await sql`
-      INSERT INTO aggregated_stats_variant
-        (model, variant_key, condition_band, window_days, n, p10_cents, p50_cents, p90_cents, dispersion_ratio, updated_at)
-      SELECT
-        s.model,
-        COALESCE(s.variant_key, '') AS variant_key,
-        s.condition_band,
-        ${windowDays}::int AS window_days,
-        COUNT(*)::int AS n,
-        CAST(percentile_cont(0.10) WITHIN GROUP (ORDER BY s.price_cents) AS INT) AS p10_cents,
-        CAST(percentile_cont(0.50) WITHIN GROUP (ORDER BY s.price_cents) AS INT) AS p50_cents,
-        CAST(percentile_cont(0.90) WITHIN GROUP (ORDER BY s.price_cents) AS INT) AS p90_cents,
-        CASE
-          WHEN percentile_cont(0.50) WITHIN GROUP (ORDER BY s.price_cents) = 0 THEN NULL
-          ELSE (
-            percentile_cont(0.90) WITHIN GROUP (ORDER BY s.price_cents)::numeric
-            / NULLIF(percentile_cont(0.50) WITHIN GROUP (ORDER BY s.price_cents), 0)::numeric
-          )
-        END AS dispersion_ratio,
-        NOW() AS updated_at
-      FROM listing_snapshots s
-      WHERE s.snapshot_ts >= NOW() - make_interval(days => ${windowDays})
-        AND s.model = ANY(${modelArray})
-        AND s.price_cents IS NOT NULL
-      GROUP BY s.model, COALESCE(s.variant_key, ''), s.condition_band
-      ON CONFLICT (model, variant_key, condition_band, window_days)
-      DO UPDATE SET
-        n = EXCLUDED.n,
-        p10_cents = EXCLUDED.p10_cents,
-        p50_cents = EXCLUDED.p50_cents,
-        p90_cents = EXCLUDED.p90_cents,
-        dispersion_ratio = EXCLUDED.dispersion_ratio,
-        updated_at = EXCLUDED.updated_at
-      RETURNING 1
-    `;
+    for (const model of unique) {
+      const anyRows = await sql`
+        INSERT INTO aggregated_stats_variant
+          (model, variant_key, condition_band, window_days, n, p10_cents, p50_cents, p90_cents, dispersion_ratio, updated_at)
+        SELECT
+          s.model,
+          COALESCE(s.variant_key, '') AS variant_key,
+          'ANY'::text AS condition_band,
+          ${windowDays}::int AS window_days,
+          COUNT(*)::int AS n,
+          CAST(percentile_cont(0.10) WITHIN GROUP (ORDER BY s.price_cents) AS INT) AS p10_cents,
+          CAST(percentile_cont(0.50) WITHIN GROUP (ORDER BY s.price_cents) AS INT) AS p50_cents,
+          CAST(percentile_cont(0.90) WITHIN GROUP (ORDER BY s.price_cents) AS INT) AS p90_cents,
+          CASE
+            WHEN percentile_cont(0.50) WITHIN GROUP (ORDER BY s.price_cents) = 0 THEN NULL
+            ELSE (
+              percentile_cont(0.90) WITHIN GROUP (ORDER BY s.price_cents)::numeric
+              / NULLIF(percentile_cont(0.50) WITHIN GROUP (ORDER BY s.price_cents), 0)::numeric
+            )
+          END AS dispersion_ratio,
+          NOW() AS updated_at
+        FROM listing_snapshots s
+        WHERE s.snapshot_ts >= NOW() - make_interval(days => ${windowDays})
+          AND s.model = ${model}
+          AND s.price_cents IS NOT NULL
+        GROUP BY s.model, COALESCE(s.variant_key, '')
+        ON CONFLICT (model, variant_key, condition_band, window_days)
+        DO UPDATE SET
+          n = EXCLUDED.n,
+          p10_cents = EXCLUDED.p10_cents,
+          p50_cents = EXCLUDED.p50_cents,
+          p90_cents = EXCLUDED.p90_cents,
+          dispersion_ratio = EXCLUDED.dispersion_ratio,
+          updated_at = EXCLUDED.updated_at
+        RETURNING 1
+      `;
 
-    results.push({
-      windowDays,
-      updatedAny: anyRows?.length || 0,
-      updatedBands: bandRows?.length || 0,
-    });
+      const bandRows = await sql`
+        INSERT INTO aggregated_stats_variant
+          (model, variant_key, condition_band, window_days, n, p10_cents, p50_cents, p90_cents, dispersion_ratio, updated_at)
+        SELECT
+          s.model,
+          COALESCE(s.variant_key, '') AS variant_key,
+          s.condition_band,
+          ${windowDays}::int AS window_days,
+          COUNT(*)::int AS n,
+          CAST(percentile_cont(0.10) WITHIN GROUP (ORDER BY s.price_cents) AS INT) AS p10_cents,
+          CAST(percentile_cont(0.50) WITHIN GROUP (ORDER BY s.price_cents) AS INT) AS p50_cents,
+          CAST(percentile_cont(0.90) WITHIN GROUP (ORDER BY s.price_cents) AS INT) AS p90_cents,
+          CASE
+            WHEN percentile_cont(0.50) WITHIN GROUP (ORDER BY s.price_cents) = 0 THEN NULL
+            ELSE (
+              percentile_cont(0.90) WITHIN GROUP (ORDER BY s.price_cents)::numeric
+              / NULLIF(percentile_cont(0.50) WITHIN GROUP (ORDER BY s.price_cents), 0)::numeric
+            )
+          END AS dispersion_ratio,
+          NOW() AS updated_at
+        FROM listing_snapshots s
+        WHERE s.snapshot_ts >= NOW() - make_interval(days => ${windowDays})
+          AND s.model = ${model}
+          AND s.price_cents IS NOT NULL
+        GROUP BY s.model, COALESCE(s.variant_key, ''), s.condition_band
+        ON CONFLICT (model, variant_key, condition_band, window_days)
+        DO UPDATE SET
+          n = EXCLUDED.n,
+          p10_cents = EXCLUDED.p10_cents,
+          p50_cents = EXCLUDED.p50_cents,
+          p90_cents = EXCLUDED.p90_cents,
+          dispersion_ratio = EXCLUDED.dispersion_ratio,
+          updated_at = EXCLUDED.updated_at
+        RETURNING 1
+      `;
+
+      updatedAny  += anyRows?.length  || 0;
+      updatedBands += bandRows?.length || 0;
+    }
+
+    results.push({ windowDays, updatedAny, updatedBands });
   }
 
   return { triggered: true, windows: results };
 }
+
 
 export default async function handler(req, res) {
   try {
