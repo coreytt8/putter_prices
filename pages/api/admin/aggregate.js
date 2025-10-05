@@ -37,15 +37,18 @@ export default async function handler(req, res) {
     const sql = getSql();
     const onlyKey = onlyModel ? normalizeModelKey(String(onlyModel)) : null;
 
-    // Figure out which column to use for price
+    // Choose price column (supports schemas with either total_cents or total)
     const hasTotalCents = await columnExists(sql, 'listing_snapshots', 'total_cents');
     const hasTotal = await columnExists(sql, 'listing_snapshots', 'total');
+
     if (!hasTotalCents && !hasTotal) {
-      return res.status(500).json({ ok: false, error: 'listing_snapshots has neither total_cents nor total' });
+      return res.status(500).json({
+        ok: false,
+        error: 'listing_snapshots has neither total_cents nor total'
+      });
     }
 
-    // Build the CTE fragment that computes `cents`
-    // NOTE: this is inlined per-query because the column differs by DB schema
+    // Switch expression used in queries
     const centsExpr = hasTotalCents ? 'total_cents' : 'ROUND(total * 100)';
 
     const results = [];
@@ -55,7 +58,7 @@ export default async function handler(req, res) {
       let updatedBandsParent = 0;
       let updatedBandsVariants = 0;
 
-      // ---------- ANY band (parent + variants)
+      // ---------- ANY band for parent + variants
       const anyRows = await sql`
         WITH data AS (
           SELECT
@@ -107,7 +110,7 @@ export default async function handler(req, res) {
       `;
       updatedAny += anyRows.length;
 
-      // ---------- Condition bands (parent + variants)
+      // ---------- Condition bands for parent + variants
       const bandRows = await sql`
         WITH data AS (
           SELECT
