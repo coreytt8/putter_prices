@@ -6,14 +6,6 @@ import { normalizeModelKey } from '../../../lib/normalize.js';
 
 const WINDOWS = [60, 90, 180];
 
-// Map raw condition -> band
-function bandFromCondition(c) {
-  const s = String(c || '').toLowerCase();
-  if (s.includes('new') && !s.includes('like')) return 'NEW';
-  if (s.includes('like') || s.includes('open')) return 'LIKE_NEW';
-  return 'USED';
-}
-
 async function columnExists(sql, table, column) {
   const rows = await sql`
     SELECT 1
@@ -24,6 +16,15 @@ async function columnExists(sql, table, column) {
     LIMIT 1
   `;
   return rows?.length > 0;
+}
+
+async function pickTimeColumn(sql) {
+  const prefs = ['observed_at', 'snapshot_ts', 'created_at', 'inserted_at'];
+  for (const c of prefs) {
+    // eslint-disable-next-line no-await-in-loop
+    if (await columnExists(sql, 'listing_snapshots', c)) return c;
+  }
+  return null;
 }
 
 export default async function handler(req, res) {
@@ -37,19 +38,50 @@ export default async function handler(req, res) {
     const sql = getSql();
     const onlyKey = onlyModel ? normalizeModelKey(String(onlyModel)) : null;
 
-    // Choose price column (supports schemas with either total_cents or total)
-    const hasTotalCents = await columnExists(sql, 'listing_snapshots', 'total_cents');
-    const hasTotal = await columnExists(sql, 'listing_snapshots', 'total');
-
-    if (!hasTotalCents && !hasTotal) {
-      return res.status(500).json({
-        ok: false,
-        error: 'listing_snapshots has neither total_cents nor total'
-      });
+    // Choose time column
+    const timeCol = await pickTimeColumn(sql);
+    if (!timeCol) {
+      return res.status(500).json({ ok: false, error: 'listing_snapshots has no suitable time column (observed_at/snapshot_ts/created_at/inserted_at)' });
     }
 
-    // Switch expression used in queries
+    // Choose price column/expression
+    const hasTotalCents = await columnExists(sql, 'listing_snapshots', 'total_cents');
+    const hasTotal = await columnExists(sql, 'listing_snapshots', 'total');
+    if (!hasTotalCents && !hasTotal) {
+      return res.status(500).json({ ok: false, error: 'listing_snapshots has neither total_cents nor total' });
+    }
     const centsExpr = hasTotalCents ? 'total_cents' : 'ROUND(total * 100)';
+
+    // How to derive condition_band
+    const hasBandCol = await columnExists(sql, 'listing_snapshots', 'condition_band');
+    const hasCondText = await columnExists(sql, 'listing_snapshots', 'condition');
+    const hasCondId = await columnExists(sql, 'listing_snapshots', 'condition_id');
+
+    // Prefer stored condition_band; else derive from text; else derive from id; else default USED
+    let bandExpr = `"condition_band"`;
+    if (!hasBandCol) {
+      if (hasCondText) {
+        bandExpr = `
+          CASE
+            WHEN LOWER(COALESCE(condition,'')) LIKE '%new%' AND LOWER(COALESCE(condition,'')) NOT LIKE '%like%' THEN 'NEW'
+            WHEN LOWER(COALESCE(condition,'')) LIKE '%like%' OR LOWER(COALESCE(condition,'')) LIKE '%open%' THEN 'LIKE_NEW'
+            ELSE 'USED'
+          END
+        `;
+      } else if (hasCondId) {
+        // crude but practical mapping; tune as needed
+        bandExpr = `
+          CASE
+            WHEN condition_id IN (1000,1500) THEN 'NEW'              -- New / New other
+            WHEN condition_id IN (2010,2020) THEN 'LIKE_NEW'         -- Open box / Seller refurb ≈ like new
+            WHEN condition_id IN (3000,4000,5000,6000) THEN 'USED'   -- Used / Very good / Good / Acceptable
+            ELSE 'USED'
+          END
+        `;
+      } else {
+        bandExpr = `'USED'`;
+      }
+    }
 
     const results = [];
 
@@ -58,7 +90,7 @@ export default async function handler(req, res) {
       let updatedBandsParent = 0;
       let updatedBandsVariants = 0;
 
-      // ---------- ANY band for parent + variants
+      // ---------- ANY: parent + variants
       const anyRows = await sql`
         WITH data AS (
           SELECT
@@ -66,7 +98,7 @@ export default async function handler(req, res) {
             COALESCE(variant_key, '') AS variant_key,
             ${sql.unsafe(centsExpr)} AS cents
           FROM listing_snapshots
-          WHERE observed_at >= NOW() - ${wd} * INTERVAL '1 day'
+          WHERE ${sql.unsafe(`"${timeCol}"`)} >= NOW() - ${wd} * INTERVAL '1 day'
           ${onlyKey ? sql`AND model = ${onlyKey}` : sql``}
         ),
         agg AS (
@@ -110,29 +142,17 @@ export default async function handler(req, res) {
       `;
       updatedAny += anyRows.length;
 
-      // ---------- Condition bands for parent + variants
+      // ---------- Bands: parent + variants
       const bandRows = await sql`
         WITH data AS (
           SELECT
             LOWER(model) AS model,
             COALESCE(variant_key, '') AS variant_key,
-            LOWER(COALESCE(condition, '')) AS cond,
+            ${sql.unsafe(bandExpr)} AS condition_band,
             ${sql.unsafe(centsExpr)} AS cents
           FROM listing_snapshots
-          WHERE observed_at >= NOW() - ${wd} * INTERVAL '1 day'
+          WHERE ${sql.unsafe(`"${timeCol}"`)} >= NOW() - ${wd} * INTERVAL '1 day'
           ${onlyKey ? sql`AND model = ${onlyKey}` : sql``}
-        ),
-        labeled AS (
-          SELECT
-            model,
-            variant_key,
-            CASE
-              WHEN cond LIKE '%new%' AND cond NOT LIKE '%like%' THEN 'NEW'
-              WHEN cond LIKE '%like%' OR cond LIKE '%open%' THEN 'LIKE_NEW'
-              ELSE 'USED'
-            END AS condition_band,
-            cents
-          FROM data
         ),
         agg AS (
           SELECT
@@ -143,7 +163,7 @@ export default async function handler(req, res) {
             (percentile_cont(0.1) WITHIN GROUP (ORDER BY cents))::numeric AS p10d,
             (percentile_cont(0.5) WITHIN GROUP (ORDER BY cents))::numeric AS p50d,
             (percentile_cont(0.9) WITHIN GROUP (ORDER BY cents))::numeric AS p90d
-          FROM labeled
+          FROM data
           GROUP BY 1, 2, 3
         )
         INSERT INTO aggregated_stats_variant
@@ -188,7 +208,7 @@ export default async function handler(req, res) {
       });
     }
 
-    return res.status(200).json({ ok: true, onlyModel: onlyKey || null, results });
+    return res.status(200).json({ ok: true, onlyModel: onlyKey || null, timeColumn: timeCol, results });
   } catch (e) {
     return res.status(500).json({ ok: false, error: e.message });
   }
