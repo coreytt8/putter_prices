@@ -12,6 +12,31 @@ const BROWSE_BASE = "https://api.ebay.com/buy/browse/v1";
 const MARKETPLACE = "EBAY_US";
 const PUTTER_CAT = "115280"; // Golf Clubs
 
+const SCOTTY_PREFIXES = new Set([
+  "newport",
+  "select",
+  "phantom",
+  "009",
+  "009m",
+]);
+
+const SCOTTY_EXPANSIONS = [
+  "circle t",
+  "gss",
+  "009",
+  "009m",
+  "tour rat",
+  "champions choice",
+  "button back",
+  "jet set",
+  "tei3",
+  "t22",
+  "garage",
+];
+
+const ACCESSORY_ONLY_RE =
+  /\b(head ?covers? only|cover(?:s)? only|weight kits?|weights? only|shaft only|head only)\b/i;
+
 // -------------------------- utils --------------------------
 function ok(val) { return val !== null && val !== undefined; }
 function toInt(v, fallback = 0) {
@@ -121,7 +146,51 @@ async function browseSearch(token, params = {}, wantRefinements = false) {
   return { url: u.href, status, json, items };
 }
 
-async function followNextPages({ token, firstJson, maxPages = 1, attempts }) {
+function getItemKey(item) {
+  return (
+    item?.itemId ||
+    item?.legacyItemId ||
+    item?.itemWebUrl ||
+    item?.itemHref ||
+    null
+  );
+}
+
+function isAccessoryOnlyItem(item) {
+  const title = String(item?.title || "");
+  return ACCESSORY_ONLY_RE.test(title.toLowerCase());
+}
+
+function shouldExpandScotty(modelKey) {
+  if (!modelKey) return false;
+  const tokens = String(modelKey).split(/\s+/);
+  for (let i = 0; i < Math.min(tokens.length, 2); i++) {
+    if (SCOTTY_PREFIXES.has(tokens[i])) return true;
+  }
+  return false;
+}
+
+function mergeItems(baseItems = [], extraItems = []) {
+  const merged = [];
+  const seen = new Set();
+
+  const add = (item) => {
+    if (!item) return;
+    const key = getItemKey(item);
+    if (key) {
+      if (seen.has(key)) return;
+      seen.add(key);
+    }
+    merged.push(item);
+  };
+
+  for (const item of baseItems) add(item);
+  for (const item of extraItems) add(item);
+
+  return merged;
+}
+
+async function followNextPages({ token, firstJson, maxPages = 1, attempts, context }) {
   let items = Array.isArray(firstJson?.itemSummaries) ? firstJson.itemSummaries : [];
   let nextUrl = firstJson?.next || null;
   let page = 1;
@@ -138,6 +207,7 @@ async function followNextPages({ token, firstJson, maxPages = 1, attempts }) {
     const resp = await fetch(nextUrl, { method: "GET", headers });
     const j = await resp.json().catch(() => ({}));
     attempts?.push({
+      ...(context || {}),
       url: nextUrl,
       ok: resp.ok,
       count: Array.isArray(j?.itemSummaries) ? j.itemSummaries.length : 0,
@@ -199,6 +269,73 @@ async function runFallbackLadder(token, rawQuery, limit, filterBase, debug) {
     }
   }
   return { result: null, attempts };
+}
+
+async function runVariantExpansionQueries({
+  token,
+  rawQuery,
+  limit,
+  filterBase,
+  pages,
+  attempts,
+}) {
+  const out = [];
+  const seen = new Set();
+
+  for (const variant of SCOTTY_EXPANSIONS) {
+    const q = `${rawQuery} ${variant}`.trim();
+
+    const runAndCollect = async ({ withCategory }) => {
+      const params = {
+        q,
+        limit,
+        filter: filterBase,
+      };
+      if (withCategory) params.category_ids = PUTTER_CAT;
+
+      const res = await browseSearch(token, params, false);
+      attempts?.push({
+        kind: "variant",
+        expansion: variant,
+        scope: withCategory ? "category" : "no-category",
+        url: res.url,
+        ok: !!(Array.isArray(res?.items) ? res.items.length : 0),
+        count: Array.isArray(res?.items) ? res.items.length : 0,
+        status: res.status,
+        keys: Object.keys(res.json || {}).slice(0, 6),
+      });
+
+      if (!res?.json) {
+        return Array.isArray(res?.items) ? res.items : [];
+      }
+
+      return await followNextPages({
+        token,
+        firstJson: res.json,
+        maxPages: pages,
+        attempts,
+        context: { kind: "variant", expansion: variant, scope: withCategory ? "category" : "no-category" },
+      });
+    };
+
+    const withCatItems = await runAndCollect({ withCategory: true });
+    const withoutCatItems = await runAndCollect({ withCategory: false });
+
+    const pushItems = (items) => {
+      for (const item of items || []) {
+        if (isAccessoryOnlyItem(item)) continue;
+        const key = getItemKey(item);
+        if (key && seen.has(key)) continue;
+        if (key) seen.add(key);
+        out.push(item);
+      }
+    };
+
+    pushItems(withCatItems);
+    pushItems(withoutCatItems);
+  }
+
+  return out;
 }
 
 async function insertSnapshots(sql, modelKeyCanonical, items = []) {
@@ -291,12 +428,26 @@ async function handle(req) {
   }
 
   // Follow pagination to gather more items
-  const combinedItems = await followNextPages({
+  let combinedItems = await followNextPages({
     token,
     firstJson: result.json,
     maxPages: pages,
     attempts: debug ? attempts : null,
   });
+
+  if (shouldExpandScotty(requestedModelKey)) {
+    const extraItems = await runVariantExpansionQueries({
+      token,
+      rawQuery: rawModel,
+      limit,
+      filterBase,
+      pages,
+      attempts: debug ? attempts : null,
+    });
+    if (extraItems.length) {
+      combinedItems = mergeItems(combinedItems, extraItems);
+    }
+  }
 
   // Insert snapshots
   const write = await insertSnapshots(sql, requestedModelKey, combinedItems);
