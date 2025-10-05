@@ -92,6 +92,10 @@ export default async function Home() {
     const currency = item?.currency || item?.bestOffer?.currency || "USD";
     const savingsAmount = safeNumber(item?.savings?.amount);
     const savingsPercent = safeNumber(item?.savings?.percent);
+    const hasGrade = item && typeof item === "object" && item.grade && typeof item.grade === "object";
+    const gradeLetter = hasGrade && typeof item.grade.letter === "string" ? item.grade.letter : null;
+    const gradeSavingsAmount = safeNumber(item?.grade?.savingsAmount);
+    const gradeSavingsPct = safeNumber(item?.grade?.savingsPct);
     const roundedPct = Number.isFinite(savingsPercent) ? Math.round(savingsPercent * 100) : null;
     const blurb =
       item?.blurb ||
@@ -111,6 +115,13 @@ export default async function Home() {
       currency,
       image: item?.image || item?.bestOffer?.image || null,
       totalListings: safeNumber(item?.totalListings),
+      grade: hasGrade
+        ? {
+            letter: gradeLetter,
+            savingsAmount: Number.isFinite(gradeSavingsAmount) ? gradeSavingsAmount : null,
+            savingsPct: Number.isFinite(gradeSavingsPct) ? gradeSavingsPct : null,
+          }
+        : null,
       savings: {
         amount: Number.isFinite(savingsAmount) ? savingsAmount : null,
         percent: Number.isFinite(savingsPercent) ? savingsPercent : null,
@@ -303,6 +314,31 @@ export default async function Home() {
                   typeof deal?.bestOffer?.url === "string" && deal.bestOffer.url.trim().length > 0
                     ? deal.bestOffer.url
                     : "";
+                const gradeLetter =
+                  typeof deal?.grade?.letter === "string" ? deal.grade.letter : null;
+                const gradeSavingsPct =
+                  Number.isFinite(deal?.grade?.savingsPct) ? Number(deal.grade.savingsPct) : null;
+                const showGradeBadge = Boolean(gradeLetter && gradeLetter !== "—");
+                const gradeTooltip = showGradeBadge
+                  ? gradeLetter === "F"
+                    ? "At/above typical"
+                    : gradeSavingsPct !== null
+                      ? `~${Math.round(gradeSavingsPct * 100)}% below typical`
+                      : "Below typical"
+                  : null;
+                const gradeClassName = showGradeBadge
+                  ? `inline-flex items-center rounded px-2 py-0.5 text-xs font-medium ${
+                      gradeLetter === "A"
+                        ? "bg-green-600 text-white"
+                        : gradeLetter === "B"
+                          ? "bg-green-200 text-green-900"
+                          : gradeLetter === "C"
+                            ? "bg-slate-200 text-slate-900"
+                            : gradeLetter === "D"
+                              ? "bg-amber-100 text-amber-900"
+                              : "border border-slate-300 text-slate-700"
+                    }`
+                  : "";
                 return (
                   <HighlightCard key={deal.query}>
                     <div className="aspect-[3/2] w-full bg-slate-100">
@@ -323,11 +359,18 @@ export default async function Home() {
                         <div className="flex flex-wrap items-center justify-between gap-3">
                           <div>
                             <p className="text-xs uppercase tracking-wide text-slate-500">Best live ask</p>
-                            <p className="text-2xl font-semibold text-slate-900">
-                              {Number.isFinite(deal.bestPrice)
-                                ? formatCurrency(deal.bestPrice, deal.currency)
-                                : "Price updating"}
-                            </p>
+                            <div className="flex items-center gap-2">
+                              <span className="text-2xl font-semibold text-slate-900">
+                                {Number.isFinite(deal.bestPrice)
+                                  ? formatCurrency(deal.bestPrice, deal.currency)
+                                  : "Price updating"}
+                              </span>
+                              {showGradeBadge ? (
+                                <span className={gradeClassName} title={gradeTooltip}>
+                                  {gradeLetter}
+                                </span>
+                              ) : null}
+                            </div>
                           </div>
                           {Number.isFinite(deal.bestPrice) && (
                             <SmartPriceBadge
