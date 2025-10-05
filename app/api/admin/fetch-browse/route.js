@@ -121,6 +121,38 @@ async function browseSearch(token, params = {}, wantRefinements = false) {
   return { url: u.href, status, json, items };
 }
 
+async function followNextPages({ token, firstJson, maxPages = 1, attempts }) {
+  let items = Array.isArray(firstJson?.itemSummaries) ? firstJson.itemSummaries : [];
+  let nextUrl = firstJson?.next || null;
+  let page = 1;
+
+  if (maxPages < 2) return items;
+
+  const headers = {
+    "Authorization": `Bearer ${token}`,
+    "Content-Type": "application/json",
+    "X-EBAY-C-MARKETPLACE-ID": "EBAY_US",
+  };
+
+  while (nextUrl && page < maxPages) {
+    const resp = await fetch(nextUrl, { method: "GET", headers });
+    const j = await resp.json().catch(() => ({}));
+    attempts?.push({
+      url: nextUrl,
+      ok: resp.ok,
+      count: Array.isArray(j?.itemSummaries) ? j.itemSummaries.length : 0,
+      status: resp.status,
+      keys: Object.keys(j || {}).slice(0, 6),
+    });
+    if (Array.isArray(j?.itemSummaries) && j.itemSummaries.length) {
+      items = items.concat(j.itemSummaries);
+    }
+    nextUrl = j?.next || null;
+    page++;
+  }
+  return items;
+}
+
 // Ladder: try progressively broader/smarter patterns
 async function runFallbackLadder(token, rawQuery, limit, filterBase, debug) {
   const attempts = [];
@@ -228,6 +260,7 @@ async function handle(req) {
   const rawModel = url.searchParams.get("model") || url.searchParams.get("q") || "";
   const conditions = url.searchParams.get("conditions") || "";     // e.g. NEW or USED
   const conditionIds = url.searchParams.get("conditionIds") || ""; // e.g. 1000,3000
+  const pages = Math.max(1, Math.min(10, toInt(url.searchParams.get("pages"), 1))); // follow up to 10 pages
   const debug = parseBool(url.searchParams.get("debug"));
 
   if (!rawModel.trim()) {
@@ -257,24 +290,32 @@ async function handle(req) {
     });
   }
 
-  // Insert snapshots
-  const { items, json } = result;
-  const write = await insertSnapshots(sql, requestedModelKey, items);
+  // Follow pagination to gather more items
+  const combinedItems = await followNextPages({
+    token,
+    firstJson: result.json,
+    maxPages: pages,
+    attempts: debug ? attempts : null,
+  });
 
-  // Build histogram and sample
-  const histogram = summarizeHistogram(json);
-  const sample = items[0] || null;
+  // Insert snapshots
+  const write = await insertSnapshots(sql, requestedModelKey, combinedItems);
+
+  // Build histogram (first page) and sample (from combined)
+  const histogram = summarizeHistogram(result.json);
+  const sample = combinedItems[0] || null;
 
   return NextResponse.json({
     ok: true,
     model: requestedModelKey,
-    saw: items.length,
+    saw: combinedItems.length,
     inserted: write.inserted,
     skipped: write.skipped,
     firstError: write.firstError,
     histogram,
     usedUrl: result.url,
     sample,
+    pages,
     ...(debug ? { attempts } : {}),
   });
 }
