@@ -9,7 +9,11 @@ Scotty Cameron Phantom X 5
 Scotty Cameron Phantom X 7
 Scotty Cameron Phantom X 12
 Scotty Cameron Studio Stainless Newport 2
-
+Scotty Cameron Newport 2 circle t
+Scotty Cameron Newport 2 button back
+Scotty Cameron Newport 2 champions choice
+Scotty Cameron Newport 2 gss
+Scotty Cameron Phantom circle t
 # TaylorMade
 TaylorMade Spider Tour
 TaylorMade Spider Tour X
@@ -21,7 +25,8 @@ TaylorMade Spider S
 TaylorMade Spider Mini
 TaylorMade TP Reserve M21
 TaylorMade TP Reserve B11
-
+TaylorMade Spider Tour L-Neck
+TaylorMade Spider Tour Double Bend
 # Ping
 Ping Anser
 Ping Anser 2
@@ -31,6 +36,8 @@ Ping Tyne 4
 Ping DS72
 Ping Fetch
 Ping Tomcat 14
+Ping PLD Anser 2 WRX
+
 
 # Odyssey
 Odyssey White Hot OG Rossie
@@ -41,6 +48,9 @@ Odyssey Tri-Hot 5K Double Wide
 Odyssey Ai-One #1
 Odyssey Ai-One #7
 Toulon San Diego
+Odyssey White Hot OG Rossie Stroke Lab
+Toulon Las Vegas
+Toulon Garage San Diego
 
 # Bettinardi
 Bettinardi Queen B 6
@@ -49,6 +59,8 @@ Bettinardi Studio Stock 28
 Bettinardi Inovai 6.0
 Bettinardi Inovai 8.0
 Bettinardi BB1
+Bettinardi Queen B 6 Hive
+Bettinardi Queen BB
 
 # L.A.B. Golf
 LAB Golf DF 2.1
