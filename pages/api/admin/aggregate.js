@@ -1,8 +1,8 @@
 // pages/api/admin/aggregate.js
 export const runtime = 'nodejs';
 
-import { getSql } from '../../lib/db.js';
-import { normalizeModelKey } from '../../lib/normalize.js';
+import { getSql } from '../../../lib/db.js';
+import { normalizeModelKey } from '../../../lib/normalize.js';
 
 const WINDOWS = [60, 90, 180];
 
