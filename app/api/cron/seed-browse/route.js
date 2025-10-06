@@ -1,5 +1,7 @@
 // app/api/cron/seed-browse/route.js
-export const runtime = "nodejs";
+export const runtime = 'nodejs';
+export const dynamic = 'force-dynamic';
+export const maxDuration = 60;
 
 import { NextResponse } from "next/server";
 

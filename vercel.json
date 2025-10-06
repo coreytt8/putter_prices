@@ -1,9 +1,8 @@
 
     "functions": {
-        "api/cron/nightly.js": {
-            "maxDuration": 60,
-            "memory": 1024
-        }
+      "api/cron/nightly.js": { "maxDuration": 60, "memory": 1024 },
+      "app/api/cron/seed-browse/route.js": { "maxDuration": 60, "memory": 1024 },
+      "app/api/cron/aggregates/route.js": { "maxDuration": 60, "memory": 1024 }      }
     },
     "crons": [
         {
