@@ -13,16 +13,14 @@ import {
 import { decorateEbayUrl } from "../../lib/affiliate.js";
 import { gradeDeal } from "../../lib/deal-grade.js";
 
+// ---------- Catalog helpers ----------
 const CATALOG_LOOKUP = (() => {
   const map = new Map();
   for (const entry of PUTTER_CATALOG) {
     const key = normalizeModelKey(`${entry.brand} ${entry.model}`);
-    if (key) {
-      if (!map.has(key)) {
-        map.set(key, []);
-      }
-      map.get(key).push(entry);
-    }
+    if (!key) continue;
+    if (!map.has(key)) map.set(key, []);
+    map.get(key).push(entry);
   }
   return map;
 })();
@@ -33,88 +31,52 @@ function formatModelLabel(modelKey = "", brand = "", title = "") {
     const [first] = CATALOG_LOOKUP.get(normalized);
     if (first) return `${first.brand} ${first.model}`;
   }
-  const brandTitle = String(brand || "").trim();
-  if (brandTitle) {
-    return brandTitle;
-  }
-  if (title) {
-    return title;
-  }
+  if (brand) return String(brand);
+  if (title) return String(title);
   if (!normalized) return "Live Smart Price deal";
-  return normalized
-    .split(" ")
-    .map((part) => (part ? part[0].toUpperCase() + part.slice(1) : ""))
-    .join(" ");
+  return normalized.split(" ").map(p => p ? p[0].toUpperCase() + p.slice(1) : "").join(" ");
 }
 
-function toNumber(value) {
-  const num = Number(value);
-  return Number.isFinite(num) ? num : null;
+// ---------- number utils ----------
+function toNumber(v) {
+  const n = Number(v);
+  return Number.isFinite(n) ? n : null;
+}
+function centsToNumber(v) {
+  const n = toNumber(v);
+  return n === null ? null : n / 100;
 }
 
-function centsToNumber(value) {
-  const num = toNumber(value);
-  if (num === null) return null;
-  return num / 100;
-}
-
+// ---------- query shaping ----------
 function ensurePutterQuery(text = "") {
   let s = String(text || "").trim();
   if (!s) return "golf putter";
   s = s.replace(/\bputters\b/gi, "putter");
-  if (!/\bputter\b/i.test(s)) {
-    s = `${s} putter`;
-  }
+  if (!/\bputter\b/i.test(s)) s = `${s} putter`;
   return s.replace(/\s+/g, " ").trim();
 }
 
 const DEFAULT_LOOKBACK_WINDOWS_HOURS = [24, 72, 168];
 
-const CONNECTOR_TOKENS = new Set([
-  "for",
-  "with",
-  "and",
-  "the",
-  "a",
-  "to",
-  "of",
-  "by",
-  "from",
-  "in",
-  "on",
-  "at",
-  "&",
-  "+",
-  "plus",
-  "or",
-]);
+function parseWindows(q) {
+  const raw = q?.lookbackWindowHours;
+  if (!raw) return DEFAULT_LOOKBACK_WINDOWS_HOURS;
+  const parts = String(Array.isArray(raw) ? raw[0] : raw)
+    .split(",")
+    .map(s => Number(s.trim()))
+    .filter(n => Number.isFinite(n) && n > 0 && n <= 24 * 60);
+  return parts.length ? parts : DEFAULT_LOOKBACK_WINDOWS_HOURS;
+}
 
+// ---------- accessory filter (keeps noisy packs/adapters out) ----------
+const CONNECTOR_TOKENS = new Set(["for","with","and","the","a","to","of","by","from","in","on","at","&","+","plus","or"]);
 const NUMERIC_TOKEN_PATTERN = /^\d+(?:\.\d+)?$/;
 const MEASUREMENT_TOKEN_PATTERN = /^\d+(?:\.\d+)?(?:in|cm|mm|g|gram|grams)$/;
 const PACK_TOKEN_PATTERN = /^(?:\d+(?:\/\d+)?(?:pc|pcs|pack)s?|\d+(?:pcs?)|pcs?|pack)$/;
-const ACCESSORY_COMBO_TOKENS = new Set([
-  "weight",
-  "weights",
-  "counterweight",
-  "counterweights",
-  "fit",
-  "fits",
-  "fitting",
-  "compatible",
-  "compatibility",
-  "adapter",
-  "adapters",
-  "kit",
-  "kits",
-  "wrench",
-  "wrenches",
-  "tool",
-  "tools",
-]);
+const ACCESSORY_COMBO_TOKENS = new Set(["weight","weights","counterweight","counterweights","fit","fits","fitting","compatible","compatibility","adapter","adapters","kit","kits","wrench","wrenches","tool","tools"]);
 
 function isAccessoryDominatedTitle(title = "") {
   if (!title) return false;
-
   const raw = String(title);
   let hasHeadcoverSignal = HEAD_COVER_TEXT_RX.test(raw);
   const hasPutterToken = /\bputter\b/i.test(raw);
@@ -125,79 +87,51 @@ function isAccessoryDominatedTitle(title = "") {
   const analysisTokens = [];
 
   for (const token of tokens) {
-    const normalizedToken = token.replace(/[^a-z0-9]/gi, "").toLowerCase();
-    if (!normalizedToken) continue;
-    if (HEAD_COVER_TOKEN_VARIANTS.has(normalizedToken)) {
-      hasHeadcoverSignal = true;
-      continue;
-    }
-    const isNumeric = NUMERIC_TOKEN_PATTERN.test(normalizedToken);
-    const isMeasurement = MEASUREMENT_TOKEN_PATTERN.test(normalizedToken);
-    const isConnector = CONNECTOR_TOKENS.has(normalizedToken);
-    const isPutter = normalizedToken === "putter";
-    const isFiller =
-      isPutter || isConnector || isNumeric || isMeasurement;
+    const normalized = token.replace(/[^a-z0-9]/gi, "").toLowerCase();
+    if (!normalized) continue;
+    if (HEAD_COVER_TOKEN_VARIANTS.has(normalized)) { hasHeadcoverSignal = true; continue; }
+    const isNumeric = NUMERIC_TOKEN_PATTERN.test(normalized);
+    const isMeasurement = MEASUREMENT_TOKEN_PATTERN.test(normalized);
+    const isConnector = CONNECTOR_TOKENS.has(normalized);
+    const isPutter = normalized === "putter";
+    const isFiller = isPutter || isConnector || isNumeric || isMeasurement;
     const isAccessory = !isPutter && containsAccessoryToken(token);
-    if (isAccessory) {
-      accessoryCount++;
-    } else if (!isFiller) {
-      substantiveCount++;
-    }
-    analysisTokens.push({
-      normalized: normalizedToken,
-      isAccessory,
-      isFiller,
-    });
+    if (isAccessory) accessoryCount++; else if (!isFiller) substantiveCount++;
+    analysisTokens.push({ normalized, isAccessory, isFiller });
   }
 
   const strippedTokens = stripAccessoryTokens(raw)
     .split(/\s+/)
-    .map((token) => token.replace(/[^a-z0-9]/gi, "").toLowerCase())
-    .filter(
-      (token) =>
-        token &&
-        token !== "putter" &&
-        !HEAD_COVER_TOKEN_VARIANTS.has(token) &&
-        !CONNECTOR_TOKENS.has(token) &&
-        !NUMERIC_TOKEN_PATTERN.test(token) &&
-        !MEASUREMENT_TOKEN_PATTERN.test(token)
+    .map(t => t.replace(/[^a-z0-9]/gi, "").toLowerCase())
+    .filter(t =>
+      t && t !== "putter" &&
+      !HEAD_COVER_TOKEN_VARIANTS.has(t) &&
+      !CONNECTOR_TOKENS.has(t) &&
+      !NUMERIC_TOKEN_PATTERN.test(t) &&
+      !MEASUREMENT_TOKEN_PATTERN.test(t)
     );
   const remainingCount = strippedTokens.length;
 
   let leadingAccessoryCount = 0;
   let seenSubstantive = false;
-  for (const token of analysisTokens) {
-    if (token.isFiller) continue;
-    if (token.isAccessory) {
-      if (seenSubstantive) {
-        break;
-      }
-      leadingAccessoryCount++;
-    } else {
-      seenSubstantive = true;
-    }
+  for (const t of analysisTokens) {
+    if (t.isFiller) continue;
+    if (t.isAccessory) { if (seenSubstantive) break; leadingAccessoryCount++; }
+    else { seenSubstantive = true; }
   }
 
   let hasFitToken = false;
   let hasWeightToken = false;
   let packTokenCount = 0;
   let accessoryCueTokenCount = 0;
-  for (const token of analysisTokens) {
-    const normalized = token.normalized;
-    if (!normalized) continue;
-    if (!hasFitToken && (normalized === "fit" || normalized === "fits" || normalized === "fitting" || normalized.startsWith("compat"))) {
-      hasFitToken = true;
-    }
-    if (!hasWeightToken && /weight/.test(normalized)) {
-      hasWeightToken = true;
-    }
-    const isPackToken = PACK_TOKEN_PATTERN.test(normalized);
-    if (isPackToken) {
-      packTokenCount++;
-    }
-    if (ACCESSORY_COMBO_TOKENS.has(normalized) || isPackToken) {
-      accessoryCueTokenCount++;
-    }
+  for (const t of analysisTokens) {
+    const n = t.normalized;
+    if (!n) continue;
+    if (!hasFitToken && (n === "fit" || n === "fits" || n === "fitting" || n.startsWith("compat"))) hasFitToken = true;
+    if (!hasWeightToken && /weight/.test(n)) hasWeightToken = true;
+    const isPack = PACK_TOKEN_PATTERN.test(n);
+    if (isPack) packTokenCount++;
+    if (ACCESSORY_COMBO_TOKENS.has(n) || isPack) accessoryCueTokenCount++;
   }
 
   const strongAccessoryCombo =
@@ -207,37 +141,34 @@ function isAccessoryDominatedTitle(title = "") {
       (hasWeightToken && hasFitToken) ||
       accessoryCueTokenCount >= 3);
 
-  if (hasHeadcoverSignal) {
-    return false;
-  }
-
-  if (strongAccessoryCombo) {
-    return true;
-  }
-
-  if (!remainingCount) {
-    return true;
-  }
-
+  if (hasHeadcoverSignal) return false;
+  if (strongAccessoryCombo) return true;
+  if (!remainingCount) return true;
   if (!hasPutterToken && accessoryCount) {
-    if (accessoryCount >= remainingCount || accessoryCount >= 2) {
-      return true;
-    }
+    if (accessoryCount >= remainingCount || accessoryCount >= 2) return true;
   }
-
-  if (!accessoryCount) {
-    return false;
-  }
-
-  if (substantiveCount && accessoryCount < substantiveCount) {
-    return false;
-  }
-
+  if (!accessoryCount) return false;
+  if (substantiveCount && accessoryCount < substantiveCount) return false;
   return accessoryCount >= remainingCount;
 }
 
-async function queryTopDeals(sql, since) {
-  return sql`
+// ---------- DB helpers ----------
+async function hasTable(sql, qualifiedName) {
+  try {
+    const rows = await sql`SELECT to_regclass(${qualifiedName}) as r`;
+    return !!rows?.[0]?.r;
+  } catch {
+    return false;
+  }
+}
+
+// When item_prices exists, we pull latest totals per item from there.
+// Otherwise, we fallback to items as the “live” price source.
+async function queryTopDeals(sql, since, modelKey = null) {
+  const haveItemPrices = await hasTable(sql, "public.item_prices");
+
+  if (haveItemPrices) {
+    return sql`
       WITH latest_prices AS (
         SELECT DISTINCT ON (p.item_id)
           p.item_id,
@@ -271,6 +202,7 @@ async function queryTopDeals(sql, since) {
         FROM latest_prices lp
         JOIN items i ON i.item_id = lp.item_id
         WHERE i.model_key IS NOT NULL AND i.model_key <> ''
+          ${modelKey ? sql`AND i.model_key = ${modelKey}` : sql``}
         GROUP BY i.model_key
       )
       SELECT
@@ -308,6 +240,7 @@ async function queryTopDeals(sql, since) {
         live_stats.latest_observed_at AS live_updated_at
       FROM latest_prices lp
       JOIN items i ON i.item_id = lp.item_id
+      ${modelKey ? sql`AND i.model_key = ${modelKey}` : sql``}
       LEFT JOIN base_stats stats ON stats.model = i.model_key
       LEFT JOIN LATERAL (
         SELECT
@@ -331,22 +264,101 @@ async function queryTopDeals(sql, since) {
           FROM latest_prices lp2
           JOIN items i2 ON i2.item_id = lp2.item_id
           WHERE i2.model_key = i.model_key
-            AND lp2.total IS NOT NULL
-            AND lp2.total > 0
+            AND lp2.total IS NOT NULL AND lp2.total > 0
+            ${modelKey ? sql`` : sql``}
         ) AS live_totals
       ) AS live_stats ON TRUE
       LEFT JOIN model_counts mc ON mc.model_key = i.model_key
-      WHERE i.model_key IS NOT NULL
-        AND i.model_key <> ''
-        AND lp.total IS NOT NULL
-        AND lp.total > 0
-        AND (
-          stats.p50_cents IS NOT NULL
-          OR live_stats.live_p50_cents IS NOT NULL
-        )
+      WHERE i.model_key IS NOT NULL AND i.model_key <> ''
+        AND lp.total IS NOT NULL AND lp.total > 0
+        AND (stats.p50_cents IS NOT NULL OR live_stats.live_p50_cents IS NOT NULL)
     `;
+  }
+
+  // ---- Fallback: use items as the live price source ----
+  // Choose a timestamp column that exists on your schema; default to snapshot_ts.
+  const timeColumn = "snapshot_ts";
+  return sql`
+    WITH latest_items AS (
+      SELECT *
+      FROM items
+      WHERE ${sql(timeColumn)} >= ${since}
+        AND model_key IS NOT NULL AND model_key <> ''
+        AND total IS NOT NULL AND total > 0
+        ${modelKey ? sql`AND model_key = ${modelKey}` : sql``}
+    ),
+    base_stats AS (
+      SELECT DISTINCT ON (model)
+        model,
+        window_days,
+        n,
+        p10_cents,
+        p50_cents,
+        p90_cents,
+        dispersion_ratio,
+        updated_at
+      FROM aggregated_stats_variant
+      WHERE variant_key = ''
+        AND condition_band = 'ANY'
+        AND n >= 5
+      ORDER BY model, window_days DESC, updated_at DESC
+    ),
+    model_counts AS (
+      SELECT model_key, COUNT(*) AS listing_count
+      FROM latest_items
+      GROUP BY model_key
+    )
+    SELECT
+      i.model_key,
+      i.brand,
+      i.title,
+      i.image_url,
+      i.url,
+      i.currency,
+      i.head_type,
+      i.dexterity,
+      i.length_in,
+      i.item_id,
+      i.price,
+      i.shipping,
+      i.total,
+      i.${sql(timeColumn)} AS observed_at,
+      i.condition,
+      COALESCE(stats.n, live_stats.live_n) AS n,
+      stats.window_days,
+      COALESCE(stats.p10_cents, live_stats.live_p10_cents) AS p10_cents,
+      COALESCE(stats.p50_cents, live_stats.live_p50_cents) AS p50_cents,
+      COALESCE(stats.p90_cents, live_stats.live_p90_cents) AS p90_cents,
+      COALESCE(stats.dispersion_ratio, live_stats.live_dispersion_ratio) AS dispersion_ratio,
+      COALESCE(stats.updated_at, live_stats.latest_observed_at) AS updated_at,
+      mc.listing_count,
+      CASE
+        WHEN stats.p50_cents IS NOT NULL THEN 'aggregated'
+        WHEN live_stats.live_p50_cents IS NOT NULL THEN 'live'
+        ELSE NULL
+      END AS stats_source,
+      stats.n AS aggregated_n,
+      stats.updated_at AS aggregated_updated_at,
+      live_stats.live_n,
+      live_stats.latest_observed_at AS live_updated_at
+    FROM latest_items i
+    LEFT JOIN base_stats stats ON stats.model = i.model_key
+    LEFT JOIN LATERAL (
+      SELECT
+        COUNT(*) AS live_n,
+        percentile_cont(0.1) WITHIN GROUP (ORDER BY i2.total) * 100 AS live_p10_cents,
+        percentile_cont(0.5) WITHIN GROUP (ORDER BY i2.total) * 100 AS live_p50_cents,
+        percentile_cont(0.9) WITHIN GROUP (ORDER BY i2.total) * 100 AS live_p90_cents,
+        MAX(i2.${sql(timeColumn)}) AS latest_observed_at
+      FROM latest_items i2
+      WHERE i2.model_key = i.model_key AND i2.total IS NOT NULL AND i2.total > 0
+    ) AS live_stats ON TRUE
+    LEFT JOIN model_counts mc ON mc.model_key = i.model_key
+    WHERE (stats.p50_cents IS NOT NULL OR live_stats.live_p50_cents IS NOT NULL)
+  `;
 }
 
+// ---------- deal assembly ----------
 export function buildDealsFromRows(rows, limit, lookbackHours = null) {
   const grouped = new Map();
 
@@ -354,9 +366,7 @@ export function buildDealsFromRows(rows, limit, lookbackHours = null) {
     const modelKey = row.model_key || "";
     if (!modelKey) continue;
 
-    if (isAccessoryDominatedTitle(row?.title || "")) {
-      continue;
-    }
+    if (isAccessoryDominatedTitle(row?.title || "")) continue;
 
     const total = toNumber(row.total);
     const price = toNumber(row.price);
@@ -369,17 +379,12 @@ export function buildDealsFromRows(rows, limit, lookbackHours = null) {
     if (!Number.isFinite(savingsPercent) || savingsPercent <= 0) continue;
 
     const current = grouped.get(modelKey);
-    if (!current || savingsPercent > current.savingsPercent || (savingsPercent === current.savingsPercent && total < current.total)) {
-      grouped.set(modelKey, {
-        modelKey,
-        row,
-        total,
-        price,
-        shipping,
-        median,
-        savingsAmount,
-        savingsPercent,
-      });
+    if (
+      !current ||
+      savingsPercent > current.savingsPercent ||
+      (savingsPercent === current.savingsPercent && total < current.total)
+    ) {
+      grouped.set(modelKey, { modelKey, row, total, price, shipping, median, savingsAmount, savingsPercent });
     }
   }
 
@@ -398,26 +403,26 @@ export function buildDealsFromRows(rows, limit, lookbackHours = null) {
   return ranked.map((entry) => {
     const { row, total, price, shipping, median, savingsAmount, savingsPercent } = entry;
     const label = formatModelLabel(row.model_key, row.brand, row.title);
-    const sanitized = sanitizeModelKey(row.model_key, {
-      storedBrand: row.brand,
-    });
+
+    const sanitized = sanitizeModelKey(row.model_key, { storedBrand: row.brand });
     const {
       query: canonicalQuery,
       queryVariants: canonicalVariants = {},
       rawLabel: rawLabelWithAccessories,
       cleanLabel: cleanLabelWithoutAccessories,
     } = sanitized;
+
     let cleanQuery = canonicalQuery || null;
     let accessoryQuery = canonicalVariants.accessory || null;
     let query = cleanQuery;
+
     const fallbackCandidates = [
       formatModelLabel(row.model_key, row.brand, row.title),
       [row.brand, row.title].filter(Boolean).join(" ").trim(),
     ].filter(Boolean);
+
     if (!query && row.brand) {
-      const brandBacked = sanitizeModelKey(`${row.brand} ${row.model_key}`, {
-        storedBrand: row.brand,
-      });
+      const brandBacked = sanitizeModelKey(`${row.brand} ${row.model_key}`, { storedBrand: row.brand });
       if (brandBacked?.query) {
         query = brandBacked.query;
         cleanQuery = cleanQuery || brandBacked.query;
@@ -428,9 +433,7 @@ export function buildDealsFromRows(rows, limit, lookbackHours = null) {
     }
     if (!query) {
       for (const candidate of fallbackCandidates) {
-        const candidateSanitized = sanitizeModelKey(candidate, {
-          storedBrand: row.brand,
-        });
+        const candidateSanitized = sanitizeModelKey(candidate, { storedBrand: row.brand });
         if (candidateSanitized?.query) {
           query = candidateSanitized.query;
           cleanQuery = cleanQuery || candidateSanitized.query;
@@ -444,26 +447,19 @@ export function buildDealsFromRows(rows, limit, lookbackHours = null) {
     if (!query) {
       const base = stripAccessoryTokens(`${row.brand || ""} ${label}`.trim());
       query = ensurePutterQuery(base || label || row.brand || "");
-      if (!cleanQuery) {
-        cleanQuery = query;
-      }
+      if (!cleanQuery) cleanQuery = query;
       const accessoryBase = `${row.brand || ""} ${label}`.trim();
-      if (!accessoryQuery && accessoryBase) {
-        accessoryQuery = ensurePutterQuery(accessoryBase);
-      }
+      if (!accessoryQuery && accessoryBase) accessoryQuery = ensurePutterQuery(accessoryBase);
     }
 
     const labelWasAccessoryOnly = Boolean(rawLabelWithAccessories) && !cleanLabelWithoutAccessories;
-    const shouldPromoteAccessoryQuery =
-      Boolean(accessoryQuery) && labelWasAccessoryOnly && !cleanQuery;
-    if (shouldPromoteAccessoryQuery) {
-      query = accessoryQuery;
-    } else if (cleanQuery) {
-      query = cleanQuery;
-    }
+    const shouldPromoteAccessoryQuery = Boolean(accessoryQuery) && labelWasAccessoryOnly && !cleanQuery;
+    if (shouldPromoteAccessoryQuery) query = accessoryQuery;
+    else if (cleanQuery) query = cleanQuery;
 
     const currency = row.currency || "USD";
     const statsSource = row.stats_source || null;
+
     const stats = {
       p10: centsToNumber(row.p10_cents),
       p50: median,
@@ -487,6 +483,7 @@ export function buildDealsFromRows(rows, limit, lookbackHours = null) {
     if (statsSource === "live" && lookbackHours != null) {
       statsMeta.lookbackHours = lookbackHours;
     }
+
     const bestOffer = {
       itemId: row.item_id,
       title: row.title,
@@ -507,13 +504,7 @@ export function buildDealsFromRows(rows, limit, lookbackHours = null) {
       brand: row.brand || null,
     };
 
-    const grade = gradeDeal({
-      total,
-      p10: stats.p10,
-      p50: stats.p50,
-      p90: stats.p90,
-      dispersionRatio: stats.dispersionRatio,
-    });
+    const grade = gradeDeal({ total, p10: stats.p10, p50: stats.p50, p90: stats.p90, dispersionRatio: stats.dispersionRatio });
 
     return {
       modelKey: row.model_key,
@@ -536,41 +527,48 @@ export function buildDealsFromRows(rows, limit, lookbackHours = null) {
         amount: Number.isFinite(savingsAmount) ? savingsAmount : null,
         percent: Number.isFinite(savingsPercent) ? savingsPercent : null,
       },
-      queryVariants: {
-        clean: cleanQuery || null,
-        accessory: accessoryQuery || null,
-      },
+      queryVariants: { clean: cleanQuery || null, accessory: accessoryQuery || null },
     };
   });
 }
 
-export async function loadRankedDeals(sql, limit, lookbackWindows = DEFAULT_LOOKBACK_WINDOWS_HOURS) {
-  const windows = Array.isArray(lookbackWindows) && lookbackWindows.length > 0 ? lookbackWindows : DEFAULT_LOOKBACK_WINDOWS_HOURS;
+// Walk windows until we have results.
+export async function loadRankedDeals(sql, limit, lookbackWindows, modelKey = null) {
+  const windows = Array.isArray(lookbackWindows) && lookbackWindows.length > 0
+    ? lookbackWindows
+    : DEFAULT_LOOKBACK_WINDOWS_HOURS;
 
   let deals = [];
   let windowHours = windows[windows.length - 1] ?? null;
 
   for (const hours of windows) {
     const since = new Date(Date.now() - hours * 60 * 60 * 1000);
-    const rows = await queryTopDeals(sql, since);
+    const rows = await queryTopDeals(sql, since, modelKey);
     const computed = buildDealsFromRows(rows, limit, hours);
     deals = computed;
     windowHours = hours;
-    if (computed.length > 0) {
-      break;
-    }
+    if (computed.length > 0) break;
   }
 
   return { deals, windowHours };
 }
 
+// ---------- handler ----------
 export default async function handler(req, res) {
   try {
     const sql = getSql();
-    const limitParam = Array.isArray(req.query.limit) ? req.query.limit[0] : req.query.limit;
+
+    const qp = req.query || {};
+    const limitParam = Array.isArray(qp.limit) ? qp.limit[0] : qp.limit;
     const parsedLimit = toNumber(limitParam);
     const limit = Math.min(12, Math.max(3, parsedLimit ?? 6));
-    const { deals, windowHours } = await loadRankedDeals(sql, limit);
+
+    const modelParam = Array.isArray(qp.model) ? qp.model[0] : qp.model;
+    const modelKey = modelParam ? normalizeModelKey(String(modelParam)) : null;
+
+    const windows = parseWindows(qp);
+
+    const { deals, windowHours } = await loadRankedDeals(sql, limit, windows, modelKey);
 
     return res.status(200).json({
       ok: true,
@@ -580,6 +578,7 @@ export default async function handler(req, res) {
         limit,
         modelCount: deals.length,
         lookbackWindowHours: windowHours,
+        modelKey,
       },
     });
   } catch (err) {
