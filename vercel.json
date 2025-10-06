@@ -1,17 +1,13 @@
 {
   "functions": {
-    "pages/api/cron/nightly.js": { "maxDuration": 60, "memory": 1024 },
-    "app/api/cron/seed-browse/route.js": { "maxDuration": 60, "memory": 1024 },
-    "pages/api/admin/aggregate.js": { "maxDuration": 60, "memory": 1024 }
+    "api/cron/collect-prices.js": { "maxDuration": 300, "memory": 1536 },
+    "api/cron/nightly.js": { "maxDuration": 300, "memory": 1536 },
+    "app/api/cron/seed-browse/route.js": { "maxDuration": 300, "memory": 1536 },
+    "app/api/cron/aggregates/route.js": { "maxDuration": 300, "memory": 1536 }
   },
   "crons": [
-    {
-      "path": "/api/cron/collect-prices?key=12qwaszx!@QWASZX",
-      "schedule": "30 3 * * *"
-    },
-    {
-      "path": "/api/cron/nightly?secret=12qwaszx!@QWASZX",
-      "schedule": "0 4 * * *"
-    }
+    { "path": "/api/cron/collect-prices?key=12qwaszx!@QWASZX", "schedule": "30 3 * * *" },
+    { "path": "/api/cron/nightly?secret=12qwaszx!@QWASZX", "schedule": "0 4 * * *" }
   ]
 }
+
