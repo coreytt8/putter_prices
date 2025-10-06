@@ -225,28 +225,55 @@ async function upsertItem(sql, snapshot) {
   `;
 }
 
-async function upsertPriceSnapshot(sql, snapshot, observedAtInput = null) {
+async function upsertPriceSnapshot(sql, snapshot, { forceTouchObserved = false } = {}) {
   const { itemId, price, shipping, total, condition, locationCc } = snapshot;
-  if (price == null) return { changed: false, skipped: true };
 
-  const observedAt = observedAtInput || new Date().toISOString();
+  if (price == null) {
+    return { changed: false, skipped: true };
+  }
 
-  await sql/* sql */`
-    INSERT INTO item_prices (
-      item_id, observed_at, price, shipping, total, condition, location_cc
-    )
-    VALUES (
-      ${itemId}, ${observedAt}, ${price}, ${shipping}, ${total}, ${condition}, ${locationCc}
-    )
-    ON CONFLICT (item_id, observed_at) DO UPDATE
-      SET price      = EXCLUDED.price,
-          shipping   = EXCLUDED.shipping,
-          total      = EXCLUDED.total,
-          condition  = EXCLUDED.condition,
-          location_cc= EXCLUDED.location_cc
+  // 1) Try UPDATE first (fast path)
+  const updated = await sql`
+    UPDATE item_prices
+       SET price = ${price},
+           shipping = ${shipping},
+           total = ${total},
+           condition = ${condition},
+           location_cc = ${locationCc},
+           observed_at = NOW()
+     WHERE item_id = ${itemId}
+     RETURNING 1
   `;
-  return { changed: true, skipped: false };
+  if (updated.length > 0) {
+    return { changed: true, skipped: false };
+  }
+
+  // 2) Not present → INSERT. If a concurrent insert wins, retry UPDATE.
+  try {
+    await sql`
+      INSERT INTO item_prices (item_id, price, shipping, total, condition, location_cc, observed_at)
+      VALUES (${itemId}, ${price}, ${shipping}, ${total}, ${condition}, ${locationCc}, NOW())
+    `;
+    return { changed: true, skipped: false };
+  } catch (e) {
+    // Unique violation (23505) → someone inserted in-between; do an UPDATE.
+    if (String(e.code) === '23505') {
+      await sql`
+        UPDATE item_prices
+           SET price = ${price},
+               shipping = ${shipping},
+               total = ${total},
+               condition = ${condition},
+               location_cc = ${locationCc},
+               observed_at = NOW()
+         WHERE item_id = ${itemId}
+      `;
+      return { changed: true, skipped: false };
+    }
+    throw e;
+  }
 }
+
 
 // ---- eBay fetchers ----
 
