@@ -11,7 +11,7 @@ import {
   HEAD_COVER_TEXT_RX,
 } from "../../lib/sanitizeModelKey.js";
 import { decorateEbayUrl } from "../../lib/affiliate.js";
-import { dealGrade } from "../../lib/deal-grade.js";
+import { gradeDeal } from "../../lib/deal-grade.js";
 
 const CATALOG_LOOKUP = (() => {
   const map = new Map();
@@ -507,7 +507,13 @@ export function buildDealsFromRows(rows, limit, lookbackHours = null) {
       brand: row.brand || null,
     };
 
-    const grade = dealGrade(total, row.p50_cents);
+    const grade = gradeDeal({
+      total,
+      p10: stats.p10,
+      p50: stats.p50,
+      p90: stats.p90,
+      dispersionRatio: stats.dispersionRatio,
+    });
 
     return {
       modelKey: row.model_key,
@@ -522,8 +528,9 @@ export function buildDealsFromRows(rows, limit, lookbackHours = null) {
       totalListings: toNumber(row.listing_count),
       grade: {
         letter: typeof grade.letter === "string" ? grade.letter : null,
-        savingsAmount: Number.isFinite(grade.savingsAmount) ? grade.savingsAmount : null,
-        savingsPct: Number.isFinite(grade.savingsPct) ? grade.savingsPct : null,
+        label: typeof grade.label === "string" ? grade.label : null,
+        color: typeof grade.color === "string" ? grade.color : null,
+        deltaPct: Number.isFinite(grade.deltaPct) ? grade.deltaPct : null,
       },
       savings: {
         amount: Number.isFinite(savingsAmount) ? savingsAmount : null,

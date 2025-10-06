@@ -1,6 +1,7 @@
 import Link from "next/link";
 import { headers } from "next/headers";
 import SmartPriceBadge from "@/components/SmartPriceBadge";
+import DealGradeBadge from "@/components/DealGradeBadge";
 import MarketSnapshot from "@/components/MarketSnapshot";
 import HeroSection from "@/components/HeroSection";
 import SectionWrapper from "@/components/SectionWrapper";
@@ -94,8 +95,9 @@ export default async function Home() {
     const savingsPercent = safeNumber(item?.savings?.percent);
     const hasGrade = item && typeof item === "object" && item.grade && typeof item.grade === "object";
     const gradeLetter = hasGrade && typeof item.grade.letter === "string" ? item.grade.letter : null;
-    const gradeSavingsAmount = safeNumber(item?.grade?.savingsAmount);
-    const gradeSavingsPct = safeNumber(item?.grade?.savingsPct);
+    const gradeLabel = hasGrade && typeof item.grade.label === "string" ? item.grade.label : null;
+    const gradeColor = hasGrade && typeof item.grade.color === "string" ? item.grade.color : null;
+    const gradeDeltaPct = safeNumber(item?.grade?.deltaPct);
     const roundedPct = Number.isFinite(savingsPercent) ? Math.round(savingsPercent * 100) : null;
     const blurb =
       item?.blurb ||
@@ -118,8 +120,9 @@ export default async function Home() {
       grade: hasGrade
         ? {
             letter: gradeLetter,
-            savingsAmount: Number.isFinite(gradeSavingsAmount) ? gradeSavingsAmount : null,
-            savingsPct: Number.isFinite(gradeSavingsPct) ? gradeSavingsPct : null,
+            label: gradeLabel,
+            color: gradeColor,
+            deltaPct: Number.isFinite(gradeDeltaPct) ? gradeDeltaPct : null,
           }
         : null,
       savings: {
@@ -239,13 +242,16 @@ export default async function Home() {
                       : "We compare every listing against recent live listing percentiles. Smart Price highlights the standouts as soon as fresh baseline data confirms the savings."}
                   </p>
                 </div>
-                <SmartPriceBadge
-                  price={smartExample.bestPrice}
-                  baseStats={smartExample.stats}
-                  title={smartExample.bestOffer?.title}
-                  specs={smartExample.bestOffer?.specs}
-                  brand={smartExample.bestOffer?.brand}
-                />
+                <div className="flex flex-col items-start gap-2">
+                  <SmartPriceBadge
+                    price={smartExample.bestPrice}
+                    baseStats={smartExample.stats}
+                    title={smartExample.bestOffer?.title}
+                    specs={smartExample.bestOffer?.specs}
+                    brand={smartExample.bestOffer?.brand}
+                  />
+                  {smartExample.grade ? <DealGradeBadge grade={smartExample.grade} /> : null}
+                </div>
               </div>
             </div>
           ) : (
@@ -314,31 +320,7 @@ export default async function Home() {
                   typeof deal?.bestOffer?.url === "string" && deal.bestOffer.url.trim().length > 0
                     ? deal.bestOffer.url
                     : "";
-                const gradeLetter =
-                  typeof deal?.grade?.letter === "string" ? deal.grade.letter : null;
-                const gradeSavingsPct =
-                  Number.isFinite(deal?.grade?.savingsPct) ? Number(deal.grade.savingsPct) : null;
-                const showGradeBadge = Boolean(gradeLetter && gradeLetter !== "—");
-                const gradeTooltip = showGradeBadge
-                  ? gradeLetter === "F"
-                    ? "At/above typical"
-                    : gradeSavingsPct !== null
-                      ? `~${Math.round(gradeSavingsPct * 100)}% below typical`
-                      : "Below typical"
-                  : null;
-                const gradeClassName = showGradeBadge
-                  ? `inline-flex items-center rounded px-2 py-0.5 text-xs font-medium ${
-                      gradeLetter === "A"
-                        ? "bg-green-600 text-white"
-                        : gradeLetter === "B"
-                          ? "bg-green-200 text-green-900"
-                          : gradeLetter === "C"
-                            ? "bg-slate-200 text-slate-900"
-                            : gradeLetter === "D"
-                              ? "bg-amber-100 text-amber-900"
-                              : "border border-slate-300 text-slate-700"
-                    }`
-                  : "";
+                const grade = deal && typeof deal.grade === "object" ? deal.grade : null;
                 return (
                   <HighlightCard key={deal.query}>
                     <div className="aspect-[3/2] w-full bg-slate-100">
@@ -365,11 +347,7 @@ export default async function Home() {
                                   ? formatCurrency(deal.bestPrice, deal.currency)
                                   : "Price updating"}
                               </span>
-                              {showGradeBadge ? (
-                                <span className={gradeClassName} title={gradeTooltip}>
-                                  {gradeLetter}
-                                </span>
-                              ) : null}
+                              {grade ? <DealGradeBadge grade={grade} /> : null}
                             </div>
                           </div>
                           {Number.isFinite(deal.bestPrice) && (
