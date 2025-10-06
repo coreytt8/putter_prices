@@ -1,17 +1,17 @@
 // pages/api/cron/collect-prices.js
 export const runtime = 'nodejs';
 
-import { getSql } from '../../../lib/db';
-import { getEbayToken } from '../../../lib/ebayAuth';
-import { normalizeModelKey } from '../../../lib/normalize';
+import { getSql } from '../../../lib/db.js';
+import { getEbayToken } from '../../../lib/ebayAuth.js';
+import { normalizeModelKey } from '../../../lib/normalize.js';
 import {
   detectCanonicalBrand,
   containsAccessoryToken,
   stripAccessoryTokens,
   HEAD_COVER_TOKEN_VARIANTS,
   HEAD_COVER_TEXT_RX,
-} from '../../../lib/sanitizeModelKey';
-import { PUTTER_SEED_QUERIES } from '../../../lib/data/putterCatalog';
+} from '../../../lib/sanitizeModelKey.js';
+import { PUTTER_SEED_QUERIES } from '../../../lib/data/putterCatalog.js';
 
 // --- simple auth: header or query param must match CRON_SECRET ---
 function isAuthorized(req) {
@@ -24,10 +24,8 @@ function isAuthorized(req) {
 // Seed queries are derived from the shared catalog so everything stays in sync.
 const SEED_QUERIES = PUTTER_SEED_QUERIES;
 
-// TODO: A follow-on cron can iterate over existing items.updated_at and call the
-// Browse get_item endpoint to refresh stale listings so high-savings deals stay
-// aligned with the live ask.
-
+// Heuristic: skip accessory-dominated titles (weights/kits/etc.) but
+// don't auto-skip if we detect a headcover signal (we sell putters w/ covers).
 function shouldSkipAccessoryDominatedTitle(title = '') {
   if (!title) return false;
 
@@ -67,39 +65,59 @@ function shouldSkipAccessoryDominatedTitle(title = '') {
   if (hasHeadcoverSignal) {
     return false;
   }
-
-  if (!remainingCount) {
-    return true;
-  }
+  if (!remainingCount) return true;
 
   if (!hasPutterToken && accessoryCount) {
     if (accessoryCount >= remainingCount || accessoryCount >= 2) {
       return true;
     }
   }
-
-  if (!accessoryCount) {
-    return false;
-  }
-
-  if (substantiveCount && accessoryCount < substantiveCount) {
-    return false;
-  }
+  if (!accessoryCount) return false;
+  if (substantiveCount && accessoryCount < substantiveCount) return false;
 
   return accessoryCount >= remainingCount;
 }
 
-// Small helpers to read price/shipping safely
+// ---- small helpers ----
 function readNumber(n) {
   const x = Number(n);
   return Number.isFinite(x) ? x : null;
 }
+
 function pickShipping(item) {
   const so = item?.shippingOptions?.[0];
   const v = so?.shippingCost?.value ?? so?.shippingCost?.convertedFromValue;
   return readNumber(v);
 }
 
+function normalizeSpecsFromTitle(title = '') {
+  const t = (title || '').toLowerCase();
+
+  // length like 33/34/35/36"
+  let length = null;
+  const mLen = t.match(/(\d{2}(?:\.\d)?)\s*(?:in|inch|\"|\”)/i);
+  if (mLen) length = readNumber(mLen[1]);
+
+  // head type
+  let headType = null;
+  if (/\bmallet\b/i.test(title)) headType = 'MALLET';
+  if (/\bblade\b/i.test(title)) headType = headType || 'BLADE';
+
+  // dexterity
+  let dexterity = null;
+  if (/\b(left|lh)\b/i.test(title)) dexterity = 'LEFT';
+  if (/\b(right|rh)\b/i.test(title)) dexterity = dexterity || 'RIGHT';
+
+  // shaft style (light)
+  let shaft = null;
+  if (/center\s*-?\s*shaft/i.test(title)) shaft = 'center-shaft';
+  // headcover mention (for future enrichment)
+  const hasHeadcover = /\b(hc|head\s*cover|headcover)\b/i.test(title);
+
+  return { length, headType, dexterity, shaft, hasHeadcover };
+}
+
+// Convert eBay item to our snapshot shape
 function extractListingSnapshot(raw) {
   const itemId = raw?.itemId || raw?.item_id;
   if (!itemId) return null;
@@ -108,6 +126,7 @@ function extractListingSnapshot(raw) {
   if (title && shouldSkipAccessoryDominatedTitle(title)) {
     return null;
   }
+
   const currency = raw?.price?.currency || raw?.price?.convertedFromCurrency || 'USD';
   const price =
     readNumber(raw?.price?.value) ?? readNumber(raw?.price?.convertedFromValue);
@@ -117,7 +136,6 @@ function extractListingSnapshot(raw) {
   const url = raw?.itemWebUrl || raw?.itemAffiliateWebUrl || null;
   const imageUrl =
     raw?.image?.imageUrl ||
-    raw?.image?.imageUrl ||
     (Array.isArray(raw?.additionalImages) ? raw.additionalImages[0]?.imageUrl : null) ||
     null;
   const sellerUser = raw?.seller?.username || raw?.seller?.userId || null;
@@ -126,28 +144,34 @@ function extractListingSnapshot(raw) {
   const locationCc = raw?.itemLocation?.country || null;
 
   const specs = normalizeSpecsFromTitle(title || '');
-  const model_key = normalizeModelKey(title || '');
+  const model_key = normalizeModelKey(title || '') || null;
   const canonicalBrand = detectCanonicalBrand(title || '') || null;
 
   return {
+    // core
     itemId,
     title,
+    url,
+    imageUrl,
+    // economics
     currency,
     price,
     shipping,
     total,
     condition,
-    url,
-    imageUrl,
+    locationCc,
+    // seller
     sellerUser,
     sellerScore,
     sellerPct,
-    locationCc,
-    specs,
-    model_key,
+    // derived
     canonicalBrand,
+    model_key,
+    specs,
   };
 }
+
+// ---- DB upserts ----
 
 async function upsertItem(sql, snapshot) {
   const {
@@ -164,134 +188,67 @@ async function upsertItem(sql, snapshot) {
     imageUrl,
   } = snapshot;
 
-  await sql`
-    INSERT INTO items (item_id, title, brand, model_key, head_type, dexterity, length_in, currency,
-                       seller_user, seller_score, seller_pct, url, image_url)
+  const headType = specs?.headType ?? null;
+  const dexterity = specs?.dexterity ?? null;
+  const lengthIn = specs?.length ?? null;
+
+  await sql/* sql */`
+    INSERT INTO items (
+      item_id, url, title, image_url, brand, model_key,
+      head_type, dexterity, length_in,
+      currency, retailer,
+      seller_user, seller_score, seller_pct,
+      updated_at
+    )
     VALUES (
-      ${itemId},
-      ${title},
-      ${canonicalBrand},
-      ${model_key},
-      ${specs.headType},
-      ${specs.dexterity},
-      ${specs.length},
-      ${currency},
-      ${sellerUser},
-      ${sellerScore},
-      ${sellerPct},
-      ${url},
-      ${imageUrl}
+      ${itemId}, ${url}, ${title}, ${imageUrl}, ${canonicalBrand}, ${model_key},
+      ${headType}, ${dexterity}, ${lengthIn},
+      ${currency}, 'eBay',
+      ${sellerUser}, ${sellerScore}, ${sellerPct},
+      NOW()
     )
     ON CONFLICT (item_id) DO UPDATE
-      SET title = EXCLUDED.title,
-          brand = COALESCE(EXCLUDED.brand, items.brand),
-          model_key = EXCLUDED.model_key,
-          head_type = EXCLUDED.head_type,
-          dexterity = EXCLUDED.dexterity,
-          length_in = EXCLUDED.length_in,
-          currency = EXCLUDED.currency,
+      SET url         = EXCLUDED.url,
+          title       = EXCLUDED.title,
+          image_url   = EXCLUDED.image_url,
+          brand       = EXCLUDED.brand,
+          model_key   = EXCLUDED.model_key,
+          head_type   = EXCLUDED.head_type,
+          dexterity   = EXCLUDED.dexterity,
+          length_in   = EXCLUDED.length_in,
+          currency    = EXCLUDED.currency,
+          retailer    = 'eBay',
           seller_user = EXCLUDED.seller_user,
-          seller_score = EXCLUDED.seller_score,
-          seller_pct = EXCLUDED.seller_pct,
-          url = EXCLUDED.url,
-          image_url = EXCLUDED.image_url,
-          updated_at = NOW()
+          seller_score= EXCLUDED.seller_score,
+          seller_pct  = EXCLUDED.seller_pct,
+          updated_at  = NOW()
   `;
 }
 
-async function upsertPriceSnapshot(sql, snapshot, { existing, forceTouchObserved = false } = {}) {
+async function upsertPriceSnapshot(sql, snapshot, observedAtInput = null) {
   const { itemId, price, shipping, total, condition, locationCc } = snapshot;
+  if (price == null) return { changed: false, skipped: true };
 
-  if (price == null) {
-    return { changed: false, skipped: true };
-  }
+  const observedAt = observedAtInput || new Date().toISOString();
 
-  if (!existing) {
-    await sql`
-      INSERT INTO item_prices (item_id, price, shipping, total, condition, location_cc)
-      VALUES (
-        ${itemId},
-        ${price},
-        ${shipping},
-        ${total},
-        ${condition},
-        ${locationCc}
-      )
-      ON CONFLICT (item_id)
-      DO UPDATE
-        SET price = EXCLUDED.price,
-            shipping = EXCLUDED.shipping,
-            total = EXCLUDED.total,
-            condition = EXCLUDED.condition,
-            location_cc = EXCLUDED.location_cc,
-            observed_at = NOW()
-    `;
-    return { changed: true, skipped: false };
-  }
-
-  const prevPrice = existing.price != null ? readNumber(existing.price) : null;
-  const prevShipping = existing.shipping != null ? readNumber(existing.shipping) : null;
-  const prevTotal = existing.total != null ? readNumber(existing.total) : null;
-  const prevCondition = existing.condition || null;
-  const prevLocation = existing.location_cc || null;
-
-  const changed =
-    prevPrice !== price ||
-    prevShipping !== shipping ||
-    prevTotal !== total ||
-    prevCondition !== condition ||
-    prevLocation !== locationCc;
-
-  if (changed) {
-    await sql`
-      UPDATE item_prices
-         SET price = ${price},
-             shipping = ${shipping},
-             total = ${total},
-             condition = ${condition},
-             location_cc = ${locationCc},
-             observed_at = NOW()
-       WHERE item_id = ${itemId}
-    `;
-  } else if (forceTouchObserved) {
-    await sql`
-      UPDATE item_prices
-         SET observed_at = NOW()
-       WHERE item_id = ${itemId}
-    `;
-  }
-
-  return { changed, skipped: false };
+  await sql/* sql */`
+    INSERT INTO item_prices (
+      item_id, observed_at, price, shipping, total, condition, location_cc
+    )
+    VALUES (
+      ${itemId}, ${observedAt}, ${price}, ${shipping}, ${total}, ${condition}, ${locationCc}
+    )
+    ON CONFLICT (item_id, observed_at) DO UPDATE
+      SET price      = EXCLUDED.price,
+          shipping   = EXCLUDED.shipping,
+          total      = EXCLUDED.total,
+          condition  = EXCLUDED.condition,
+          location_cc= EXCLUDED.location_cc
+  `;
+  return { changed: true, skipped: false };
 }
-function normalizeSpecsFromTitle(title = '') {
-  // very light extraction; you can enrich later
-  const t = (title || '').toLowerCase();
 
-  // length like 33/34/35/36"
-  let length = null;
-  const mLen = t.match(/(\d{2}(?:\.\d)?)\s*(?:in|inch|\"|\”)/i);
-  if (mLen) length = readNumber(mLen[1]);
-
-  // head type
-  let headType = null;
-  if (/\bmallet\b/i.test(title)) headType = 'MALLET';
-  if (/\bblade\b/i.test(title)) headType = headType || 'BLADE';
-
-  // dex
-  let dexterity = null;
-  if (/\b(left|lh)\b/i.test(title)) dexterity = 'LEFT';
-  if (/\b(right|rh)\b/i.test(title)) dexterity = dexterity || 'RIGHT';
-
-  // shaft (very rough)
-  let shaft = null;
-  if (/shafted/i.test(title)) shaft = 'shafted';
-  if (/center\s*-?\s*shaft/i.test(title)) shaft = 'center-shaft';
-
-  // headcover
-  const hasHeadcover = /\b(hc|head\s*cover|headcover)\b/i.test(title);
-
-  return { length, headType, dexterity, shaft, hasHeadcover };
-}
+// ---- eBay fetchers ----
 
 async function fetchEbayPage(token, q, { offset = 0, limit = 50, includeRefreshSort = true } = {}) {
   const sorts = ['NEWLY_LISTED'];
@@ -328,9 +285,7 @@ async function fetchEbayPage(token, q, { offset = 0, limit = 50, includeRefreshS
 
     const data = await res.json();
     const items = Array.isArray(data?.itemSummaries) ? data.itemSummaries : [];
-    if (i === 0) {
-      primaryCount = items.length;
-    }
+    if (i === 0) primaryCount = items.length;
 
     for (const item of items) {
       const itemId = item?.itemId || item?.item_id;
@@ -352,9 +307,7 @@ async function fetchEbayItem(token, itemId) {
     },
   });
 
-  if (res.status === 404) {
-    return { item: null, callCount: 1 };
-  }
+  if (res.status === 404) return { item: null, callCount: 1 };
 
   if (!res.ok) {
     const txt = await res.text().catch(() => '');
@@ -365,6 +318,8 @@ async function fetchEbayItem(token, itemId) {
   return { item: data, callCount: 1 };
 }
 
+// ---- API handler ----
+
 export default async function handler(req, res) {
   try {
     if (!isAuthorized(req)) {
@@ -372,7 +327,7 @@ export default async function handler(req, res) {
     }
 
     const sql = await getSql();
-    const token = await getEbayToken(); // Must be working; otherwise you’ll see a 401 in results.
+    const token = await getEbayToken();
 
     // Optional: run a single manual query with ?q=...
     const manualQ = (req.query?.q || '').trim() || null;
@@ -382,11 +337,12 @@ export default async function handler(req, res) {
     const out = [];
     let totalCalls = 0;
 
+    // Refresh mode: re-ping stale stored items via Browse get_item
     if (refreshMode) {
       const limitParam = Number.parseInt(req.query?.limit, 10);
       const refreshLimit = Number.isFinite(limitParam) && limitParam > 0 ? Math.min(limitParam, 200) : 50;
 
-      const rows = await sql`
+      const rows = await sql/* sql */`
         SELECT i.item_id,
                i.title,
                i.brand,
@@ -408,7 +364,13 @@ export default async function handler(req, res) {
                ip.location_cc,
                ip.observed_at
           FROM items i
-     LEFT JOIN item_prices ip ON ip.item_id = i.item_id
+     LEFT JOIN LATERAL (
+           SELECT ip.*
+             FROM item_prices ip
+            WHERE ip.item_id = i.item_id
+            ORDER BY ip.observed_at DESC
+            LIMIT 1
+        ) ip ON TRUE
          ORDER BY COALESCE(ip.observed_at, i.updated_at) ASC NULLS FIRST
          LIMIT ${refreshLimit}
       `;
@@ -438,25 +400,12 @@ export default async function handler(req, res) {
               status = 'skipped';
             } else {
               await upsertItem(sql, snapshot);
-              const existingPrice = row.observed_at
-                ? {
-                    price: row.price,
-                    shipping: row.shipping,
-                    total: row.total,
-                    condition: row.condition,
-                    location_cc: row.location_cc,
-                  }
-                : null;
-              const { changed: hasChanged } = await upsertPriceSnapshot(sql, snapshot, {
-                existing: existingPrice,
-                forceTouchObserved: true,
-              });
-
+              // Always insert a new observation (observed_at = now)
+              const { changed: hasChanged } = await upsertPriceSnapshot(sql, snapshot);
               if (hasChanged) {
                 priceChanged = true;
                 changed++;
               }
-
               refreshed++;
             }
           }
@@ -482,16 +431,15 @@ export default async function handler(req, res) {
       });
     }
 
+    // Normal crawl: iterate seed queries, fetch 2 pages each (0 / 50)
     for (const q of queries) {
       let inserted = 0;
       let found = 0;
       let error = null;
 
       try {
-        // Pull up to 2 pages (100 items) per query. Tune as needed.
         const pages = [0, 50];
         let allItems = [];
-
         const seenIds = new Set();
 
         for (const offset of pages) {
@@ -509,21 +457,16 @@ export default async function handler(req, res) {
             allItems.push(item);
           }
 
-          // stop early if the primary sort returns less than the requested page size
-          if (primaryCount < 50) break;
+          if (primaryCount < 50) break; // fewer than a full page → stop early
         }
 
         found = allItems.length;
 
-        // Begin transaction for this query’s batch
         await sql`BEGIN`;
 
-        for (const it of allItems) {
-          const snapshot = extractListingSnapshot(it);
-
-          if (!snapshot || snapshot.price == null) {
-            continue; // skip incomplete
-          }
+        for (const raw of allItems) {
+          const snapshot = extractListingSnapshot(raw);
+          if (!snapshot || snapshot.price == null) continue;
 
           await upsertItem(sql, snapshot);
           await upsertPriceSnapshot(sql, snapshot);
@@ -542,6 +485,6 @@ export default async function handler(req, res) {
 
     return res.status(200).json({ ok: true, calls: totalCalls, manualQ, results: out });
   } catch (err) {
-    return res.status(500).json({ ok: false, error: err.message });
+    return res.status(500).json({ ok: false, error: err.message || String(err) });
   }
 }
