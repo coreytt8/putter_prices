@@ -1,12 +1,15 @@
 {
+  "functions": {
+    "api/cron/nightly.js": { "maxDuration": 300, "memory": 1024 }
+  },
   "crons": [
-    {
-      "path": "/api/cron/nightly?secret=12qwaszx!@QWASZX",
-      "schedule": "15 9 * * *"
-    },
     {
       "path": "/api/cron/collect-prices?key=12qwaszx!@QWASZX",
       "schedule": "30 3 * * *"
+    },
+    {
+      "path": "/api/cron/nightly?secret=12qwaszx!@QWASZX&maxModels=12&pages=1&limit=50",
+      "schedule": "0 4 * * *"
     }
   ]
 }
