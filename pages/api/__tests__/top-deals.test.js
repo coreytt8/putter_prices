@@ -73,7 +73,9 @@ test("loadRankedDeals returns listings observed before midnight when window is r
     assert.equal(Math.round(deal.savings.percent * 100) / 100, 0.4);
     assert.ok(deal.grade);
     assert.equal(deal.grade.letter, "A");
-    assert.equal(Math.round(deal.grade.savingsPct * 100) / 100, 0.4);
+    assert.equal(deal.grade.label, "Great");
+    assert.equal(deal.grade.color, "green");
+    assert.equal(Math.round(deal.grade.deltaPct * 100) / 100, 0.4);
   } finally {
     Date.now = originalNow;
   }
@@ -189,7 +191,9 @@ test("buildDealsFromRows decorates URLs with affiliate params when configured", 
     assert.equal(decorated.searchParams.get("foo"), "bar");
     assert.ok(deal.grade);
     assert.equal(deal.grade.letter, "A");
-    assert.equal(Math.round(deal.grade.savingsPct * 100) / 100, 0.4);
+    assert.equal(deal.grade.label, "Great");
+    assert.equal(deal.grade.color, "green");
+    assert.equal(Math.round(deal.grade.deltaPct * 100) / 100, 0.4);
   } finally {
     process.env.EPN_CAMPID = originalEnv.campid;
     process.env.EPN_CUSTOMID = originalEnv.customid;
