@@ -1,4 +1,4 @@
-import SmartPriceBadge from "@/components/SmartPriceBadge";
+import DealGradeBadge from "@/components/DealGradeBadge";
 
 function formatCurrency(value, currency = "USD") {
   if (typeof value !== "number" || !Number.isFinite(value)) return "—";
@@ -42,6 +42,7 @@ export default function PriceComparisonTable({ deals = [] }) {
           rawSavings,
           hasPositiveSavings,
           percentSavings,
+          grade: deal && typeof deal.grade === "object" ? deal.grade : null,
         };
       })
     : [];
@@ -82,13 +83,14 @@ export default function PriceComparisonTable({ deals = [] }) {
                     Listings
                   </th>
                   <th scope="col" className="px-6 py-3 text-xs font-semibold uppercase tracking-wide text-slate-500">
-                    Tier
+                    Grade
                   </th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-200">
                 {rows.map((row) => {
-                  const { deal, label, bestPrice, median, rawSavings, hasPositiveSavings, percentSavings, totalListings } = row;
+                  const { label, bestPrice, median, rawSavings, hasPositiveSavings, percentSavings, totalListings, grade } =
+                    row;
                   const savingsLabel = hasPositiveSavings
                     ? `${formatCurrency(rawSavings, row.currency)}${
                         percentSavings ? ` (${formatPercent(percentSavings)})` : ""
@@ -114,17 +116,7 @@ export default function PriceComparisonTable({ deals = [] }) {
                         {Number.isFinite(totalListings) ? totalListings : "—"}
                       </td>
                       <td className="px-6 py-4 text-sm">
-                        {Number.isFinite(bestPrice) ? (
-                          <SmartPriceBadge
-                            price={bestPrice}
-                            baseStats={deal?.stats}
-                            title={deal?.bestOffer?.title}
-                            specs={deal?.bestOffer?.specs}
-                            brand={deal?.bestOffer?.brand}
-                          />
-                        ) : (
-                          <span className="text-slate-400">—</span>
-                        )}
+                        {grade ? <DealGradeBadge grade={grade} /> : <span className="text-slate-400">—</span>}
                       </td>
                     </tr>
                   );
@@ -135,7 +127,7 @@ export default function PriceComparisonTable({ deals = [] }) {
 
           <div className="space-y-4 p-4 md:hidden">
             {rows.map((row) => {
-              const { deal, label, bestPrice, median, rawSavings, hasPositiveSavings, percentSavings, totalListings } = row;
+              const { label, bestPrice, median, rawSavings, hasPositiveSavings, percentSavings, totalListings, grade } = row;
               const savingsLabel = hasPositiveSavings
                 ? `${formatCurrency(rawSavings, row.currency)}${
                     percentSavings ? ` (${formatPercent(percentSavings)})` : ""
@@ -151,15 +143,7 @@ export default function PriceComparisonTable({ deals = [] }) {
                         <p className="mt-1 text-xs text-slate-500">Tracking {totalListings} live listings</p>
                       )}
                     </div>
-                    {Number.isFinite(bestPrice) ? (
-                      <SmartPriceBadge
-                        price={bestPrice}
-                        baseStats={deal?.stats}
-                        title={deal?.bestOffer?.title}
-                        specs={deal?.bestOffer?.specs}
-                        brand={deal?.bestOffer?.brand}
-                      />
-                    ) : null}
+                    {grade ? <DealGradeBadge grade={grade} /> : null}
                   </div>
                   <dl className="mt-4 grid grid-cols-1 gap-3 text-sm sm:grid-cols-2">
                     <div>
