@@ -1,127 +1,141 @@
 // pages/api/cron/nightly.js
-export const config = { api: { bodyParser: false } };
+// Nightly runner (Pages Router) that:
+// 1) Calls /api/cron/seed-browse in small chunks using data/seed-models.txt
+// 2) Stays under Vercel’s 60s cap by using a time budget + resume cursor
+// 3) Triggers /api/admin/aggregate at the end
 
-import fs from "node:fs";
-import path from "node:path";
+export const config = {
+  api: {
+    bodyParser: false,
+  },
+};
 
-function sleep(ms) {
-  return new Promise((r) => setTimeout(r, ms));
+function okAuth(req) {
+  const secret = req.query?.secret || req.headers["x-cron-secret"];
+  return !!process.env.CRON_SECRET && secret === process.env.CRON_SECRET;
 }
 
-function resolveBaseUrl(req) {
-  // Prefer explicit base, then Vercel URL, then request host, then fallback
-  const envBase =
-    process.env.NEXT_PUBLIC_BASE_URL ||
-    process.env.SITE_BASE_URL ||
-    process.env.VERCEL_URL;
-  if (envBase) {
-    return envBase.startsWith("http") ? envBase : `https://${envBase}`;
+function normalizeBase(input, req) {
+  const fallback =
+    (req.headers["x-forwarded-proto"] || "https") +
+    "://" +
+    (req.headers["x-forwarded-host"] || req.headers.host || "localhost:3000");
+
+  let raw =
+    (input ??
+      process.env.NEXT_PUBLIC_SITE_URL ??
+      process.env.NEXT_PUBLIC_BASE_URL ??
+      process.env.VERCEL_URL ??
+      fallback) + "";
+
+  raw = raw.trim();
+  try {
+    const u = new URL(/^https?:\/\//i.test(raw) ? raw : "https://" + raw);
+    return `${u.protocol}//${u.host}`.replace(/\/+$/, "");
+  } catch {
+    return fallback.replace(/\/+$/, "");
   }
-  const host = req?.headers?.host;
-  return host ? `http://${host}` : "http://localhost:3000";
 }
 
-function loadSeedModels() {
-  // Try repo path (works on Vercel + local)
-  const p = path.join(process.cwd(), "data", "seed-models.txt");
-  if (fs.existsSync(p)) {
-    const raw = fs.readFileSync(p, "utf8");
-    return raw
-      .split(/\r?\n/)
-      .map((s) => s.trim())
-      .filter(Boolean);
+async function callSeed({ base, secret, offset, count, limit, pages, budgetMs }) {
+  const url = new URL(`${base}/api/cron/seed-browse`);
+  url.searchParams.set("secret", secret);
+  url.searchParams.set("useFile", "1");           // read data/seed-models.txt
+  url.searchParams.set("offset", String(offset)); // which row to start at
+  url.searchParams.set("count", String(count));   // how many models this call
+  url.searchParams.set("limit", String(limit));   // items per model page
+  url.searchParams.set("pages", String(pages));   // pages to walk per model
+  url.searchParams.set("budgetMs", String(budgetMs));
+
+  const res = await fetch(url.toString(), { method: "POST" });
+  let json = {};
+  try {
+    json = await res.json();
+  } catch {
+    json = { ok: false, error: `non-JSON (${res.status})` };
   }
-  // Fallback small set so the function still runs
-  return [
-    "Scotty Cameron Newport 2",
-    "TaylorMade Spider Tour",
-    "Ping Anser",
-    "Odyssey White Hot OG Rossie",
-  ];
+  return json;
+}
+
+async function callAggregates(base, secret) {
+  try {
+    const aurl = new URL(`${base}/api/admin/aggregate`);
+    aurl.searchParams.set("secret", secret);
+    const res = await fetch(aurl.toString(), { method: "GET" });
+    const json = await res.json().catch(() => ({ ok: false, error: `non-JSON (${res.status})` }));
+    return json;
+  } catch (e) {
+    return { ok: false, error: e.message };
+  }
 }
 
 export default async function handler(req, res) {
-  try {
-    // Simple auth
-    const secret = String(req.query.secret || "");
-    if (!secret || secret !== process.env.CRON_SECRET) {
-      return res.status(401).json({ ok: false, error: "unauthorized" });
-    }
-
-    const base = resolveBaseUrl(req);
-    const adminKey = process.env.ADMIN_KEY || process.env.ADMIN_SECRET;
-    if (!adminKey) {
-      return res
-        .status(500)
-        .json({ ok: false, error: "missing ADMIN_KEY/ADMIN_SECRET env" });
-    }
-
-    // Tunables via query (optional)
-    const pages = Math.max(1, Number(req.query.pages || 2));
-    const limit = Math.max(10, Number(req.query.limit || 50));
-    const pause = Math.max(200, Number(req.query.pause || 1200));
-    const debug = String(req.query.debug || "") === "1";
-
-    const models = loadSeedModels();
-    const results = [];
-
-    // Seed loop — fetch multiple pages per model
-    for (const model of models) {
-      const perModel = { model, pagesTried: 0, saw: 0, inserted: 0, attempts: [] };
-
-      for (let p = 0; p < pages; p++) {
-        perModel.pagesTried++;
-        const url = `${base}/api/admin/fetch-browse?limit=${limit}&model=${encodeURIComponent(
-          model
-        )}&page=${p + 1}`;
-        const r = await fetch(url, {
-          method: "POST",
-          headers: { "X-ADMIN-KEY": adminKey },
-          body: "", // POST body not used; just to avoid 405 on some configs
-        });
-
-        const text = await r.text();
-        let json = null;
-        try {
-          json = JSON.parse(text);
-        } catch {
-          if (debug) perModel.attempts.push({ url, status: r.status, badJson: text?.slice(0, 200) });
-          continue;
-        }
-
-        if (debug) perModel.attempts.push({ url, status: r.status, usedUrl: json.usedUrl || "" });
-        if (json?.ok) {
-          perModel.saw += Number(json.saw || 0);
-          perModel.inserted += Number(json.inserted || 0);
-        }
-
-        // Gentle pause to avoid hammering the origin
-        await sleep(pause);
-      }
-
-      results.push(perModel);
-    }
-
-    // Aggregate after seeding
-    const aggUrl = `${base}/api/admin/aggregate?secret=${encodeURIComponent(secret)}`;
-    const aggRes = await fetch(aggUrl);
-    let aggregates = {};
-    try {
-      aggregates = await aggRes.json();
-    } catch {
-      aggregates = { ok: false, error: "aggregate returned non-JSON" };
-    }
-
-    return res.status(200).json({
-      ok: true,
-      base,
-      pages,
-      limit,
-      pause,
-      seeded: results,
-      aggregates,
-    });
-  } catch (err) {
-    return res.status(500).json({ ok: false, error: err.message });
+  if (!okAuth(req)) {
+    res.status(401).json({ ok: false, error: "unauthorized" });
+    return;
   }
+
+  const base = normalizeBase(req.query.base, req);
+  const secret = process.env.CRON_SECRET;
+
+  // knobs (safe defaults; override via querystring)
+  const totalBudgetMs = Math.max(10_000, Number(req.query.budgetMs ?? 55_000)); // total time for this invocation
+  const perRunBudget = Math.max(5_000, Number(req.query.runBudgetMs ?? 35_000)); // time per seed call
+  const count = Math.max(1, Number(req.query.count ?? 8));          // models per seed call
+  const limit = Math.max(10, Number(req.query.limit ?? 40));        // items per page
+  const pages = Math.max(1, Number(req.query.pages ?? 1));          // pages per model
+  let offset = Math.max(0, Number(req.query.offset ?? 0));          // start row in seed-models.txt
+
+  const t0 = Date.now();
+  const deadline = t0 + totalBudgetMs;
+
+  const seedRuns = [];
+  let processedTotal = 0;
+
+  // Loop chunked seeding until out of time or there’s nothing left to do
+  // Each iteration calls /api/cron/seed-browse with its own smaller budget.
+  while (Date.now() + 3000 < deadline) {
+    const runBudget = Math.min(perRunBudget, deadline - Date.now() - 1000);
+    if (runBudget < 5000) break;
+
+    const s = await callSeed({
+      base,
+      secret,
+      offset,
+      count,
+      limit,
+      pages,
+      budgetMs: runBudget,
+    });
+
+    seedRuns.push(s);
+
+    if (!s?.ok) break;
+
+    processedTotal += s.processed ?? 0;
+
+    if (!s.nextOffset || s.nextOffset >= (s.totalModels ?? offset + count)) {
+      // either we’re done with the file, or seed route didn’t provide a next offset
+      break;
+    }
+
+    // resume from nextOffset
+    offset = s.nextOffset;
+  }
+
+  // Kick aggregates after seeding
+  const aggregate = await callAggregates(base, secret);
+
+  res.json({
+    ok: true,
+    base,
+    totalBudgetMs,
+    count,
+    limit,
+    pages,
+    startOffset: Number(req.query.offset ?? 0),
+    endOffset: offset,
+    seedRuns,
+    aggregate,
+  });
 }
