@@ -632,56 +632,68 @@ export default async function handler(req, res) {
     // Optional: write computed payload into cache (for nightly cron)
     const cacheWrite = String(req.query.cacheWrite || '') === '1';
    // after you compute `deals` and `payload`
-const okAuth = req.headers['x-cron-secret'] === process.env.CRON_SECRET;
-const shouldWrite = Array.isArray(deals) && deals.length > 0;
+  // --- CONDITIONAL CACHE WRITE (skip empty) -----------------------
+  const okAuth = req.headers['x-cron-secret'] === process.env.CRON_SECRET;
+  const shouldWrite =
+    cacheWrite &&
+    okAuth &&
+    Array.isArray(deals) &&
+    deals.length > 0;
 
-if (cacheWrite && okAuth && shouldWrite) {
-  await sql/* sql */`
-    INSERT INTO top_deals_cache (cache_key, payload)
-    VALUES ('default', ${payload}::jsonb)
-    ON CONFLICT (cache_key) DO UPDATE
-    SET payload = EXCLUDED.payload, generated_at = now()
-  `;
-}
-
-        await sql/* sql */`
-          INSERT INTO top_deals_cache (cache_key, payload)
-          VALUES ('default', ${{
-            ok: true,
-            generatedAt: new Date().toISOString(),
-            deals,
-            meta: {
-              limit,
-              modelCount: deals.length,
-              lookbackWindowHours: windowHours,
-              modelKey,
-              filters: usedFilters,
-              verified: verify,
-              fallbackUsed,
-            },
-          }}::jsonb)
-          ON CONFLICT (cache_key) DO UPDATE
-          SET payload = EXCLUDED.payload, generated_at = now()
-        `;
-      } catch { /* ignore cache errors */ }
-    }
-
-    return res.status(200).json({
+  if (shouldWrite) {
+    const payload = {
       ok: true,
       generatedAt: new Date().toISOString(),
       deals,
       meta: {
         limit,
-        modelCount: deals.length,
-        lookbackWindowHours: windowHours,
-        modelKey,
-        filters: usedFilters,
-        verified: verify,
-        fallbackUsed,
+        modelCount,
+        lookbackWindowHours,
+        modelKey: modelKey || null,
+        filters: {
+          freshnessHours,
+          minSample,
+          maxDispersion,
+          minSavingsPct,
+        },
+        verified: !!verified,
+        fallbackUsed: !!fallbackUsed,
       },
-    });
-  } catch (err) {
-    console.error(err);
-    return res.status(500).json({ ok: false, error: err.message || String(err) });
+    };
+
+    // NOTE: make sure every template/backtick closes properly:
+    await sql/* sql */`
+      INSERT INTO top_deals_cache (cache_key, payload)
+      VALUES ('default', ${JSON.stringify(payload)}::jsonb)
+      ON CONFLICT (cache_key) DO UPDATE
+      SET payload = EXCLUDED.payload,
+          generated_at = now()
+    `;
   }
+
+  // --- RESPONSE ---------------------------------------------------
+  return res.status(200).json({
+    ok: true,
+    generatedAt: new Date().toISOString(),
+    deals,
+    meta: {
+      limit,
+      modelCount,
+      lookbackWindowHours,
+      modelKey: modelKey || null,
+      filters: {
+        freshnessHours,
+        minSample,
+        maxDispersion,
+        minSavingsPct,
+      },
+      verified: !!verified,
+      fallbackUsed: !!fallbackUsed,
+    },
+  });
+} catch (err) {
+  console.error(err);
+  return res
+    .status(500)
+    .json({ ok: false, error: err?.message || String(err) });
 }
