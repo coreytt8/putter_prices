@@ -427,8 +427,6 @@ export function buildDealsFromRows(rows, limit, arg3) {
       queryVariants: { clean: cleanQuery || null, accessory: accessoryQuery || null },
     };
   });
-    }
-  }
   return out;
 }
 
