@@ -119,7 +119,7 @@ function isAccessoryDominatedTitle(title = '') {
   }
 
   const strongCombo = accessoryCount >= 2 && (leadingAccessory >= 2 || (packCount > 0 && (hasWeight || hasFit)) || (hasWeight && hasFit) || cueCount >= 3);
-  if (hasHeadcoverSignal) return false;
+  if (hasHeadcoverSignal) return true;
   if (strongCombo) return true;
   if (!remainingCount) return true;
   if (!hasPutterToken && accessoryCount) {
@@ -230,6 +230,9 @@ export function buildDealsFromRows(rows, limit, arg3) {
   const grouped = new Map();
 
   for (const row of rows) {
+    // Require 'putter' token to reduce accessory noise
+    if (!/\bputter\b/i.test(row?.title || '')) continue;
+
     const modelKey = row.model_key || '';
     if (!modelKey) continue;
 
@@ -444,7 +447,7 @@ export default async function handler(req, res) {
     const sql = getSql();
 
     // parse query params
-    const limit = Math.min(12, Math.max(3, toNumber(req.query.limit) ?? 6));
+    const limit = Math.min(12, Math.max(3, toNumber(req.query.limit) ?? 12));
     const lookback = toNumber(req.query.lookbackWindowHours) || null;
     const windows = lookback ? [lookback] : DEFAULT_LOOKBACK_WINDOWS_HOURS;
 
@@ -457,10 +460,10 @@ export default async function handler(req, res) {
     const modelKey = modelParam ? normalizeModelKey(modelParam) : null;
 
     const filters = {
-      freshnessHours: Number.isFinite(freshnessHours) ? freshnessHours : null,
-      minSample: Number.isFinite(minSample) ? minSample : null,
-      maxDispersion: Number.isFinite(maxDispersion) ? maxDispersion : null,
-      minSavingsPct: Number.isFinite(minSavingsPct) ? minSavingsPct : 0,
+      freshnessHours: Number.isFinite(freshnessHours) ? freshnessHours : 24,
+      minSample: Number.isFinite(minSample) ? minSample : 10,
+      maxDispersion: Number.isFinite(maxDispersion) ? maxDispersion : 3,
+      minSavingsPct: Number.isFinite(minSavingsPct) ? minSavingsPct : 0.25,
     };
 
     const { deals: baseDeals, windowHours } = await loadRankedDeals(sql, limit, windows, filters, modelKey);
