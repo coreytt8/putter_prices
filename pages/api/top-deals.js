@@ -52,17 +52,55 @@ const CATALOG_LOOKUP = (() => {
   return map;
 })();
 
-function formatModelLabel(modelKey = '', brand = '', title = '') {
+function formatModelLabel(modelKey = '', brand = '', title = '', sanitizedOverride = null) {
   const normalized = String(modelKey || '').trim();
   if (normalized && CATALOG_LOOKUP.has(normalized)) {
     const [first] = CATALOG_LOOKUP.get(normalized);
-    if (first) return `${first.brand} ${first.model}`;
+    if (first) return `${first.brand} ${first.model}`.trim();
   }
-  const brandTitle = String(brand || '').trim();
-  if (brandTitle) return brandTitle;
-  if (title) return title;
+
+  const safeBrand = typeof brand === 'string' ? brand.trim() : '';
+  const sanitized =
+    sanitizedOverride && typeof sanitizedOverride === 'object'
+      ? sanitizedOverride
+      : sanitizeModelKey(modelKey, { storedBrand: brand });
+
+  const brandForLabel =
+    (typeof sanitized?.brand === 'string' && sanitized.brand.trim()) || safeBrand;
+
+  const labelCandidates = [];
+  const pushCandidate = (value) => {
+    if (typeof value !== 'string') return;
+    const trimmed = value.trim();
+    if (!trimmed) return;
+    if (!labelCandidates.includes(trimmed)) labelCandidates.push(trimmed);
+  };
+
+  pushCandidate(sanitized?.cleanLabel);
+  pushCandidate(sanitized?.label);
+  pushCandidate(sanitized?.rawLabel);
+
+  for (const candidate of labelCandidates) {
+    const lowerCandidate = candidate.toLowerCase();
+    if (brandForLabel) {
+      const lowerBrand = brandForLabel.toLowerCase();
+      if (lowerCandidate.includes(lowerBrand)) {
+        return candidate;
+      }
+      return `${brandForLabel} ${candidate}`.trim();
+    }
+    return candidate;
+  }
+
+  if (brandForLabel && normalized) {
+    return `${brandForLabel} ${normalized}`.trim();
+  }
+
+  if (brandForLabel) return brandForLabel;
+  if (title) return String(title).trim();
   if (!normalized) return 'Live Smart Price deal';
-  return normalized.split(' ')
+  return normalized
+    .split(' ')
     .map((p) => (p ? p[0].toUpperCase() + p.slice(1) : ''))
     .join(' ');
 }
@@ -345,8 +383,8 @@ export function buildDealsFromRows(rows, limit, arg3) {
     .slice(0, limit);
 
   return ranked.map(({ row, total, price, shipping, median, savingsAmount, savingsPercent }) => {
-    const label = formatModelLabel(row.model_key, row.brand, row.title);
     const sanitized = sanitizeModelKey(row.model_key, { storedBrand: row.brand });
+    const label = formatModelLabel(row.model_key, row.brand, row.title, sanitized);
     const {
       query: canonicalQuery,
       queryVariants: canonicalVariants = {},
@@ -359,7 +397,7 @@ export function buildDealsFromRows(rows, limit, arg3) {
     let query = cleanQuery;
 
     const fallbackCandidates = [
-      formatModelLabel(row.model_key, row.brand, row.title),
+      label,
       [row.brand, row.title].filter(Boolean).join(' ').trim(),
     ].filter(Boolean);
 
