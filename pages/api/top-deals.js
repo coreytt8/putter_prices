@@ -631,16 +631,19 @@ export default async function handler(req, res) {
 
     // Optional: write computed payload into cache (for nightly cron)
     const cacheWrite = String(req.query.cacheWrite || '') === '1';
-    const okAuth = (req.headers['x-cron-secret'] && process.env.CRON_SECRET && req.headers['x-cron-secret'] === process.env.CRON_SECRET);
-    if (cacheWrite && okAuth) {
-      try {
-        await sql/* sql */`
-          CREATE TABLE IF NOT EXISTS top_deals_cache (
-            cache_key TEXT PRIMARY KEY,
-            payload   JSONB NOT NULL,
-            generated_at TIMESTAMPTZ NOT NULL DEFAULT now()
-          )
-        `;
+   // after you compute `deals` and `payload`
+const okAuth = req.headers['x-cron-secret'] === process.env.CRON_SECRET;
+const shouldWrite = Array.isArray(deals) && deals.length > 0;
+
+if (cacheWrite && okAuth && shouldWrite) {
+  await sql/* sql */`
+    INSERT INTO top_deals_cache (cache_key, payload)
+    VALUES ('default', ${payload}::jsonb)
+    ON CONFLICT (cache_key) DO UPDATE
+    SET payload = EXCLUDED.payload, generated_at = now()
+  `;
+}
+
         await sql/* sql */`
           INSERT INTO top_deals_cache (cache_key, payload)
           VALUES ('default', ${{
