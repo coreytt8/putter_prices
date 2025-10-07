@@ -153,8 +153,12 @@ async function queryTopDeals(sql, since, modelKey = null) {
       ORDER BY model, window_days DESC, updated_at DESC
     ),
     model_counts AS (
-      SELECT i.model_key, COUNT(*) AS listing_count
-      FROM latest_prices lp
+      SELECT i.model_key, COUNT(*) AS listing_count,
+
+      av.var_n, av.var_p50_cents, av.var_window,
+      am.mod_n, am.mod_p50_cents, am.mod_window
+
+FROM latest_prices lp
       JOIN items i ON i.item_id = lp.item_id
       WHERE i.model_key IS NOT NULL AND i.model_key <> ''
       GROUP BY i.model_key
@@ -181,6 +185,25 @@ async function queryTopDeals(sql, since, modelKey = null) {
     FROM latest_prices lp
     JOIN items i ON i.item_id = lp.item_id
     LEFT JOIN base_stats stats ON stats.model = i.model_key
+    LEFT JOIN LATERAL (
+      SELECT n AS var_n, p50_cents AS var_p50_cents, window_days AS var_window
+      FROM aggregated_stats_variant a
+      WHERE a.model = i.model_key
+        AND a.variant_key = COALESCE(i.variant_key, '')
+        AND a.condition_band = 'ANY'
+      ORDER BY a.window_days DESC
+      LIMIT 1
+    ) av ON TRUE
+    LEFT JOIN LATERAL (
+      SELECT n AS mod_n, p50_cents AS mod_p50_cents, window_days AS mod_window
+      FROM aggregated_stats_variant a2
+      WHERE a2.model = i.model_key
+        AND a2.variant_key = ''
+        AND a2.condition_band = 'ANY'
+      ORDER BY a2.window_days DESC
+      LIMIT 1
+    ) am ON TRUE
+
     LEFT JOIN LATERAL (
       SELECT
         COUNT(*) AS live_n,
@@ -241,7 +264,20 @@ export function buildDealsFromRows(rows, limit, arg3) {
     const total = toNumber(row.total);
     const price = toNumber(row.price);
     const shipping = toNumber(row.shipping);
-    const median = centsToNumber(row.p50_cents);
+    const varMedian = centsToNumber(row.var_p50_cents);
+    const varN = toNumber(row.var_n);
+    const modMedian = centsToNumber(row.mod_p50_cents);
+    const modN = toNumber(row.mod_n);
+    const liveMedian = centsToNumber(row.p50_cents);
+    let median = null;
+    if (Number.isFinite(varN) && varN >= (minSample ?? 0) && Number.isFinite(varMedian)) {
+      median = varMedian;
+    } else if (Number.isFinite(modN) && modN >= (minSample ?? 0) && Number.isFinite(modMedian)) {
+      median = modMedian;
+    } else {
+      median = liveMedian;
+    }
+    
     if (!Number.isFinite(total) || !Number.isFinite(median) || median <= 0) continue;
 
     // Stats gates
@@ -391,21 +427,7 @@ export function buildDealsFromRows(rows, limit, arg3) {
       queryVariants: { clean: cleanQuery || null, accessory: accessoryQuery || null },
     };
   });
-}
-
-// ---------- verify candidate items are still active (optional) ----------
-async function verifyDealsActive(deals) {
-  if (!deals?.length) return deals;
-  let token;
-  try { token = await getEbayToken(); } catch { return deals; } // fail-open if token missing
-  const out = [];
-  for (const d of deals) {
-    const id = d?.bestOffer?.itemId;
-    if (!id) continue;
-    try {
-      const r = await fetch(`https://api.ebay.com/buy/browse/v1/item/${id}`, {
-        headers: {
-          Authorization: `Bearer ${token}`,
+er ${token}`,
           'Content-Type': 'application/json',
           'X-EBAY-C-MARKETPLACE-ID': 'EBAY_US',
         },
