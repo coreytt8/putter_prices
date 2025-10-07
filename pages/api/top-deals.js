@@ -16,18 +16,20 @@ import { gradeDeal } from '../../lib/deal-grade';
 
 // ---------- Hobby-friendly performance knobs ----------
 const TIME_BUDGET_MS = 7500;                  // well under Hobby cap (~10s)
-const FAST_WINDOWS = [72, 168];               // fewer windows for ?fast=1
+const FAST_WINDOWS = [72, 168, 336, 720];               // fewer windows for ?fast=1
 
 // Default windows (strict → broader)
 const DEFAULT_LOOKBACK_WINDOWS_HOURS = [24, 72, 168, 336, 720];
 
 // Auto-relax ladder so the endpoint rarely returns empty
 const FALLBACK_TRIES = [
-  { freshnessHours: 48, minSample: 8, minSavingsPct: 0.20, maxDispersion: 5 },
-  { freshnessHours: 48, minSample: 6, minSavingsPct: 0.20, maxDispersion: 5 },
-  { freshnessHours: 48, minSample: 5, minSavingsPct: 0.15, maxDispersion: 5 },
-  { lookbackWindowHours: 720, freshnessHours: 72, minSample: 5, minSavingsPct: 0.15, maxDispersion: 5 },
+  { freshnessHours: 48,  minSample: 8, minSavingsPct: 0.20, maxDispersion: 5 },
+  { freshnessHours: 48,  minSample: 6, minSavingsPct: 0.20, maxDispersion: 5 },
+  { freshnessHours: 48,  minSample: 5, minSavingsPct: 0.15, maxDispersion: 5 },
+  { lookbackWindowHours: 168, freshnessHours: 72, minSample: 5, minSavingsPct: 0.15, maxDispersion: 5 },
+  { lookbackWindowHours: 336, freshnessHours: 72, minSample: 4, minSavingsPct: 0.12, maxDispersion: 5.5 },
   { lookbackWindowHours: 720, freshnessHours: 72, minSample: 3, minSavingsPct: 0.10, maxDispersion: 6 },
+  { lookbackWindowHours: 720, freshnessHours: 96, minSample: 0,  minSavingsPct: 0.00, maxDispersion: 8 } // last resort so cache isn't empty
 ];
 
 // ---------- Catalog label helper ----------
