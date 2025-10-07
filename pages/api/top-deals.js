@@ -8,39 +8,29 @@ import { normalizeModelKey } from '../../lib/normalize';
 import {
   sanitizeModelKey,
   stripAccessoryTokens,
-  containsAccessoryToken,
   HEAD_COVER_TOKEN_VARIANTS,
   HEAD_COVER_TEXT_RX,
 } from '../../lib/sanitizeModelKey';
 import { decorateEbayUrl } from '../../lib/affiliate';
 import { gradeDeal } from '../../lib/deal-grade';
 
-// --- Hobby plan performance knobs ---
-const TIME_BUDGET_MS = 7500;             // stay under Hobby (~10s) cap
-const FAST_WINDOWS = [72, 168];          // smaller ladder when fast=1
+// ---------- Hobby-friendly performance knobs ----------
+const TIME_BUDGET_MS = 7500;                  // well under Hobby cap (~10s)
+const FAST_WINDOWS = [72, 168];               // fewer windows for ?fast=1
 
-const DEFAULT_LOOKBACK_WINDOWS_HOURS = [24, 72, 168, 336, 720]; // broadened
-const CONNECTOR_TOKENS = new Set(['for','with','and','the','a','to','of','by','from','in','on','at','&','+','plus','or']);
-const NUMERIC_TOKEN_PATTERN = /^\d+(?:\.\d+)?$/;
-const MEASUREMENT_TOKEN_PATTERN = /^\d+(?:\.\d+)?(?:in|cm|mm|g|gram|grams)$/;
-const PACK_TOKEN_PATTERN = /^(?:\d+(?:\/\d+)?(?:pc|pcs|pack)s?|\d+(?:pcs?)|pcs?|pack)$/;
-const ACCESSORY_COMBO_TOKENS = new Set(['weight','weights','counterweight','counterweights','fit','fits','fitting','compatible','compatibility','adapter','adapters','kit','kits','wrench','wrenches','tool','tools']);
+// Default windows (strict → broader)
+const DEFAULT_LOOKBACK_WINDOWS_HOURS = [24, 72, 168, 336, 720];
 
-// -----------------------------------------------------------------------------
-// Auto-relax profiles (only used if strict settings return zero)
-// -----------------------------------------------------------------------------
+// Auto-relax ladder so the endpoint rarely returns empty
 const FALLBACK_TRIES = [
-  { freshnessHours: 48 },
-  { freshnessHours: 48, minSample: 8 },
-  { freshnessHours: 48, minSample: 5 },
-  { freshnessHours: 48, minSample: 5, minSavingsPct: 0.20 },
-  { freshnessHours: 48, minSample: 5, minSavingsPct: 0.15 },
-  { freshnessHours: 48, minSample: 5, minSavingsPct: 0.15, maxDispersion: 4 },
+  { freshnessHours: 48, minSample: 8, minSavingsPct: 0.20, maxDispersion: 5 },
+  { freshnessHours: 48, minSample: 6, minSavingsPct: 0.20, maxDispersion: 5 },
   { freshnessHours: 48, minSample: 5, minSavingsPct: 0.15, maxDispersion: 5 },
-  { lookbackWindowHours: 720, freshnessHours: 48, minSample: 5, minSavingsPct: 0.15, maxDispersion: 5 },
+  { lookbackWindowHours: 720, freshnessHours: 72, minSample: 5, minSavingsPct: 0.15, maxDispersion: 5 },
+  { lookbackWindowHours: 720, freshnessHours: 72, minSample: 3, minSavingsPct: 0.10, maxDispersion: 6 },
 ];
 
-// ---------- catalog lookup for pretty labels ----------
+// ---------- Catalog label helper ----------
 const CATALOG_LOOKUP = (() => {
   const map = new Map();
   for (const entry of PUTTER_CATALOG) {
@@ -52,62 +42,24 @@ const CATALOG_LOOKUP = (() => {
   return map;
 })();
 
-function formatModelLabel(modelKey = '', brand = '', title = '', sanitizedOverride = null) {
+function formatModelLabel(modelKey = '', brand = '', title = '') {
   const normalized = String(modelKey || '').trim();
   if (normalized && CATALOG_LOOKUP.has(normalized)) {
     const [first] = CATALOG_LOOKUP.get(normalized);
-    if (first) return `${first.brand} ${first.model}`.trim();
+    if (first) return `${first.brand} ${first.model}`;
   }
-
-  const safeBrand = typeof brand === 'string' ? brand.trim() : '';
-  const sanitized =
-    sanitizedOverride && typeof sanitizedOverride === 'object'
-      ? sanitizedOverride
-      : sanitizeModelKey(modelKey, { storedBrand: brand });
-
-  const brandForLabel =
-    (typeof sanitized?.brand === 'string' && sanitized.brand.trim()) || safeBrand;
-
-  const labelCandidates = [];
-  const pushCandidate = (value) => {
-    if (typeof value !== 'string') return;
-    const trimmed = value.trim();
-    if (!trimmed) return;
-    if (!labelCandidates.includes(trimmed)) labelCandidates.push(trimmed);
-  };
-
-  pushCandidate(sanitized?.cleanLabel);
-  pushCandidate(sanitized?.label);
-  pushCandidate(sanitized?.rawLabel);
-
-  for (const candidate of labelCandidates) {
-    const lowerCandidate = candidate.toLowerCase();
-    if (brandForLabel) {
-      const lowerBrand = brandForLabel.toLowerCase();
-      if (lowerCandidate.includes(lowerBrand)) {
-        return candidate;
-      }
-      return `${brandForLabel} ${candidate}`.trim();
-    }
-    return candidate;
-  }
-
-  if (brandForLabel && normalized) {
-    return `${brandForLabel} ${normalized}`.trim();
-  }
-
-  if (brandForLabel) return brandForLabel;
-  if (title) return String(title).trim();
+  const brandTitle = String(brand || '').trim();
+  if (brandTitle) return brandTitle;
+  if (title) return title;
   if (!normalized) return 'Live Smart Price deal';
-  return normalized
-    .split(' ')
+  return normalized.split(' ')
     .map((p) => (p ? p[0].toUpperCase() + p.slice(1) : ''))
     .join(' ');
 }
 
+// ---------- small utils ----------
 function toNumber(v) { const n = Number(v); return Number.isFinite(n) ? n : null; }
 function centsToNumber(v) { const n = toNumber(v); return n == null ? null : n / 100; }
-
 function ensurePutterQuery(text = '') {
   let s = String(text || '').trim();
   if (!s) return 'golf putter';
@@ -116,31 +68,25 @@ function ensurePutterQuery(text = '') {
   return s.replace(/\s+/g, ' ').trim();
 }
 
-// ---------- helper: is this title likely a real putter? ----------
+// ---------- likely putter title (so we don't require literal "putter") ----------
 function isLikelyPutterTitle(title = '') {
   const t = String(title || '').toLowerCase();
   if (/\bputter\b/i.test(t)) return true;
-  const modelHintRx =
-    /\b(newport|phantom\s?x|anser|spider|odyssey|rossie|squareback|fastback|del\s*mar|studio|sigma|tomcat|monza|monte|er[ -]?\d)\b/i;
-  if (modelHintRx.test(t)) return true;
+  if (/\b(newport|phantom\s?x|anser|spider|odyssey|rossie|squareback|fastback|del\s*mar|studio|sigma|tomcat|monza|monte|er[ -]?\d)\b/i.test(t)) return true;
   if (/\b(32|33|34|35|36)\s?(in|inch|")\b/.test(t)) return true;
   if (/\b(blade|mallet|center\s?shaft(ed)?|face\s?balanced|milled)\b/i.test(t)) return true;
   return false;
 }
 
-// ---------- accessory dominated title filter (refined) ----------
+// ---------- accessory dominated title filter (hardened but tolerant) ----------
 function isAccessoryDominatedTitle(title = '') {
   if (!title) return false;
   const raw = String(title);
 
-  // 1) Hard-block headcovers by text signal
-  let hasHeadcoverSignal = HEAD_COVER_TEXT_RX.test(raw);
-  if (hasHeadcoverSignal) return true;
+  // 1) If headcover tokens in free text → drop
+  if (HEAD_COVER_TEXT_RX.test(raw)) return true;
 
-  // 2) Tokenize once
   const tokens = raw.split(/\s+/).filter(Boolean);
-
-  // 3) Accessory vocabulary (beyond headcovers)
   const ACCESSORY_TOKENS = new Set([
     'weight','weights','screw','screws','wrench','tool','tools','kit','adapter',
     'plate','plates','sole','soleplate','cap','plug','plugs','bumper',
@@ -148,7 +94,6 @@ function isAccessoryDominatedTitle(title = '') {
     'cover','headcover','head-cover','head','plate',
   ]);
 
-  // 4) Counters
   let accessoryCount = 0;
   let substantiveCount = 0;
 
@@ -156,16 +101,8 @@ function isAccessoryDominatedTitle(title = '') {
     const norm = token.replace(/[^a-z0-9]/gi, '').toLowerCase();
     if (!norm) continue;
 
-    if (HEAD_COVER_TOKEN_VARIANTS.has(norm)) {
-      hasHeadcoverSignal = true;
-      accessoryCount++;
-      continue;
-    }
-
-    if (ACCESSORY_TOKENS.has(norm)) {
-      accessoryCount++;
-      continue;
-    }
+    if (HEAD_COVER_TOKEN_VARIANTS.has(norm)) { accessoryCount++; continue; }
+    if (ACCESSORY_TOKENS.has(norm)) { accessoryCount++; continue; }
 
     if (
       /\b(32|33|34|35|36)\b/.test(norm) ||
@@ -173,20 +110,16 @@ function isAccessoryDominatedTitle(title = '') {
       /blade|mallet|milled|center|face|balanced/.test(norm)
     ) {
       substantiveCount++;
-      continue;
     }
   }
 
-  if (hasHeadcoverSignal) return true;
-
-  const likelyPutter = isLikelyPutterTitle(raw);
-  if (likelyPutter && accessoryCount <= substantiveCount + 1) return false;
-  if (accessoryCount >= 2 && !likelyPutter) return true;
-
+  const likely = isLikelyPutterTitle(raw);
+  if (likely && accessoryCount <= substantiveCount + 1) return false;
+  if (!likely && accessoryCount >= 2) return true;
   return false;
 }
 
-// ---------- helper for fast=1 ----------
+// ---------- fast=1 helper: if aggregates exist, ignore live_* fields afterwards ----------
 function fastRows(rows) {
   return rows.map(r =>
     r.stats_source === 'aggregated'
@@ -195,7 +128,7 @@ function fastRows(rows) {
   );
 }
 
-// ---------- DB query ----------
+// ---------- Main SQL ----------
 async function queryTopDeals(sql, since, modelKey = null) {
   const rows = await sql/* sql */`
     WITH latest_prices AS (
@@ -241,12 +174,23 @@ async function queryTopDeals(sql, since, modelKey = null) {
       stats.updated_at AS aggregated_updated_at,
       live.live_n,
       live.latest_observed_at AS live_updated_at,
+
+      -- ANY medians (variant/model)
       av.var_n, av.var_p50_cents, av.var_window,
-      am.mod_n, am.mod_p50_cents, am.mod_window
+      am.mod_n, am.mod_p50_cents, am.mod_window,
+
+      -- BAND medians (variant/model)
+      avb.var_band_n, avb.var_band_p50_cents, avb.var_band_window,
+      amb.mod_band_n, amb.mod_band_p50_cents, amb.mod_band_window,
+
+      -- Which band this listing is in
+      c.cond_band
+
     FROM latest_prices lp
     JOIN items i ON i.item_id = lp.item_id
     LEFT JOIN base_stats stats ON stats.model = i.model_key
 
+    -- latest variant_key for this item
     LEFT JOIN LATERAL (
       SELECT ls.variant_key
       FROM listing_snapshots ls
@@ -257,6 +201,20 @@ async function queryTopDeals(sql, since, modelKey = null) {
       LIMIT 1
     ) v ON TRUE
 
+    -- Map eBay conditionId -> band for this row
+    LEFT JOIN LATERAL (
+      SELECT CASE
+        WHEN lp.condition IN (1000) THEN 'NEW'
+        WHEN lp.condition IN (1500,2000,2500,2750) THEN 'MINT'
+        WHEN lp.condition IN (3000) THEN 'USED'
+        WHEN lp.condition IN (4000) THEN 'VERY_GOOD'
+        WHEN lp.condition IN (5000) THEN 'GOOD'
+        WHEN lp.condition IN (6000) THEN 'ACCEPTABLE'
+        ELSE 'ANY'
+      END AS cond_band
+    ) c ON TRUE
+
+    -- Variant + ANY
     LEFT JOIN LATERAL (
       SELECT n AS var_n, p50_cents AS var_p50_cents, window_days AS var_window
       FROM aggregated_stats_variant a
@@ -267,6 +225,18 @@ async function queryTopDeals(sql, since, modelKey = null) {
       LIMIT 1
     ) av ON TRUE
 
+    -- Variant + BAND (preferred)
+    LEFT JOIN LATERAL (
+      SELECT n AS var_band_n, p50_cents AS var_band_p50_cents, window_days AS var_band_window
+      FROM aggregated_stats_variant a
+      WHERE a.model = i.model_key
+        AND a.variant_key = COALESCE(v.variant_key, '')
+        AND a.condition_band = c.cond_band
+      ORDER BY a.window_days DESC
+      LIMIT 1
+    ) avb ON TRUE
+
+    -- Model + ANY
     LEFT JOIN LATERAL (
       SELECT n AS mod_n, p50_cents AS mod_p50_cents, window_days AS mod_window
       FROM aggregated_stats_variant a2
@@ -277,6 +247,18 @@ async function queryTopDeals(sql, since, modelKey = null) {
       LIMIT 1
     ) am ON TRUE
 
+    -- Model + BAND
+    LEFT JOIN LATERAL (
+      SELECT n AS mod_band_n, p50_cents AS mod_band_p50_cents, window_days AS mod_band_window
+      FROM aggregated_stats_variant a2
+      WHERE a2.model = i.model_key
+        AND a2.variant_key = ''
+        AND a2.condition_band = c.cond_band
+      ORDER BY a2.window_days DESC
+      LIMIT 1
+    ) amb ON TRUE
+
+    -- Live percentiles ONLY when aggregates missing (cheap gate)
     LEFT JOIN LATERAL (
       SELECT
         COUNT(*) AS live_n,
@@ -295,7 +277,7 @@ async function queryTopDeals(sql, since, modelKey = null) {
       JOIN items i2 ON i2.item_id = lp2.item_id
       WHERE i2.model_key = i.model_key
         AND lp2.total IS NOT NULL AND lp2.total > 0
-        AND (stats.p50_cents IS NULL) -- only compute live stats when aggregates are missing
+        AND (stats.p50_cents IS NULL) -- do not compute live if aggregated exists
     ) AS live ON TRUE
 
     LEFT JOIN model_counts mc ON mc.model_key = i.model_key
@@ -307,7 +289,7 @@ async function queryTopDeals(sql, since, modelKey = null) {
   return rows;
 }
 
-// ---------- deal building + filters ----------
+// ---------- Deal computation ----------
 export function buildDealsFromRows(rows, limit, arg3) {
   const opts = (typeof arg3 === 'number' || arg3 == null)
     ? { lookbackHours: (typeof arg3 === 'number' ? arg3 : null) }
@@ -326,21 +308,40 @@ export function buildDealsFromRows(rows, limit, arg3) {
 
   for (const row of rows) {
     if (!isLikelyPutterTitle(row?.title || '')) continue;
+    if (isAccessoryDominatedTitle(row?.title || '')) continue;
+
     const modelKey = row.model_key || '';
     if (!modelKey) continue;
-    if (isAccessoryDominatedTitle(row?.title || '')) continue;
 
     const total = toNumber(row.total);
     const price = toNumber(row.price);
     const shipping = toNumber(row.shipping);
+
+    // ANY-band medians
     const varMedian = centsToNumber(row.var_p50_cents);
     const varN = toNumber(row.var_n);
     const modMedian = centsToNumber(row.mod_p50_cents);
     const modN = toNumber(row.mod_n);
+
+    // BAND-specific medians
+    const varBandMedian = centsToNumber(row.var_band_p50_cents);
+    const varBandN = toNumber(row.var_band_n);
+    const modBandMedian = centsToNumber(row.mod_band_p50_cents);
+    const modBandN = toNumber(row.mod_band_n);
+    const usedBand = row.cond_band || null;
+
     const liveMedian = centsToNumber(row.p50_cents);
 
+    // Choose median by fallback: variant+band → model+band → variant+ANY → model+ANY → live
     let median = null;
-    if (Number.isFinite(varN) && varN >= (minSample ?? 0) && Number.isFinite(varMedian)) {
+    let bandSample = null;
+    let bandUsed = null;
+
+    if (Number.isFinite(varBandN) && varBandN >= (minSample ?? 0) && Number.isFinite(varBandMedian)) {
+      median = varBandMedian; bandSample = varBandN; bandUsed = usedBand;
+    } else if (Number.isFinite(modBandN) && modBandN >= (minSample ?? 0) && Number.isFinite(modBandMedian)) {
+      median = modBandMedian; bandSample = modBandN; bandUsed = usedBand;
+    } else if (Number.isFinite(varN) && varN >= (minSample ?? 0) && Number.isFinite(varMedian)) {
       median = varMedian;
     } else if (Number.isFinite(modN) && modN >= (minSample ?? 0) && Number.isFinite(modMedian)) {
       median = modMedian;
@@ -350,11 +351,13 @@ export function buildDealsFromRows(rows, limit, arg3) {
 
     if (!Number.isFinite(total) || !Number.isFinite(median) || median <= 0) continue;
 
+    // Global sample/dispersion gates (from aggregate/live row)
     const sampleSize = toNumber(row.n);
     const dispersion = toNumber(row.dispersion_ratio);
     if (minSample != null && sampleSize != null && sampleSize < minSample) continue;
     if (maxDispersion != null && dispersion != null && dispersion > maxDispersion) continue;
 
+    // Freshness gate on THIS listing
     if (freshnessHours != null && row.observed_at) {
       const obs = new Date(row.observed_at);
       if (now - obs > freshnessHours * 3600 * 1000) continue;
@@ -366,7 +369,10 @@ export function buildDealsFromRows(rows, limit, arg3) {
 
     const current = grouped.get(modelKey);
     if (!current || savingsPercent > current.savingsPercent || (savingsPercent === current.savingsPercent && total < current.total)) {
-      grouped.set(modelKey, { row, total, price, shipping, median, savingsAmount, savingsPercent });
+      grouped.set(modelKey, {
+        row, total, price, shipping, median, savingsAmount, savingsPercent,
+        bandUsed, bandSample
+      });
     }
   }
 
@@ -382,44 +388,29 @@ export function buildDealsFromRows(rows, limit, arg3) {
     })
     .slice(0, limit);
 
-  return ranked.map(({ row, total, price, shipping, median, savingsAmount, savingsPercent }) => {
+  return ranked.map(({ row, total, price, shipping, median, savingsAmount, savingsPercent, bandUsed, bandSample }) => {
+    const label = formatModelLabel(row.model_key, row.brand, row.title);
     const sanitized = sanitizeModelKey(row.model_key, { storedBrand: row.brand });
-    const label = formatModelLabel(row.model_key, row.brand, row.title, sanitized);
-    const {
-      query: canonicalQuery,
-      queryVariants: canonicalVariants = {},
-      rawLabel: rawWithAccessories,
-      cleanLabel: cleanWithoutAccessories,
-    } = sanitized;
+    const { query: canonicalQuery, queryVariants: canonicalVariants = {}, rawLabel: rawWithAccessories, cleanLabel: cleanWithoutAccessories } = sanitized;
 
     let cleanQuery = canonicalQuery || null;
     let accessoryQuery = canonicalVariants.accessory || null;
     let query = cleanQuery;
 
     const fallbackCandidates = [
-      label,
+      formatModelLabel(row.model_key, row.brand, row.title),
       [row.brand, row.title].filter(Boolean).join(' ').trim(),
     ].filter(Boolean);
 
     if (!query && row.brand) {
       const brandBacked = sanitizeModelKey(`${row.brand} ${row.model_key}`, { storedBrand: row.brand });
-      if (brandBacked?.query) {
-        query = brandBacked.query;
-        cleanQuery = cleanQuery || brandBacked.query;
-      }
-      if (!accessoryQuery && brandBacked?.queryVariants?.accessory) {
-        accessoryQuery = brandBacked.queryVariants.accessory;
-      }
+      if (brandBacked?.query) { query = brandBacked.query; cleanQuery = cleanQuery || brandBacked.query; }
+      if (!accessoryQuery && brandBacked?.queryVariants?.accessory) accessoryQuery = brandBacked.queryVariants.accessory;
     }
     if (!query) {
       for (const candidate of fallbackCandidates) {
         const s = sanitizeModelKey(candidate, { storedBrand: row.brand });
-        if (s?.query) {
-          query = s.query;
-          cleanQuery = cleanQuery || s.query;
-          if (!accessoryQuery && s?.queryVariants?.accessory) accessoryQuery = s.queryVariants.accessory;
-          break;
-        }
+        if (s?.query) { query = s.query; cleanQuery = cleanQuery || s.query; if (!accessoryQuery && s?.queryVariants?.accessory) accessoryQuery = s.queryVariants.accessory; break; }
       }
     }
     if (!query) {
@@ -444,12 +435,18 @@ export function buildDealsFromRows(rows, limit, arg3) {
       n: toNumber(row.n),
       dispersionRatio: toNumber(row.dispersion_ratio),
       source: statsSource,
+      usedBand: bandUsed,                 // NEW: band used for median, e.g., 'USED', 'NEW', ...
     };
     const statsMeta = {
       source: statsSource,
       windowDays: statsSource === 'aggregated' ? toNumber(row.window_days) : null,
-      updatedAt: statsSource === 'aggregated' ? (row.aggregated_updated_at || row.updated_at || null) : (row.live_updated_at || row.updated_at || null),
-      sampleSize: statsSource === 'aggregated' ? toNumber(row.aggregated_n ?? row.n) : toNumber(row.live_n ?? row.n),
+      updatedAt: statsSource === 'aggregated'
+        ? (row.aggregated_updated_at || row.updated_at || null)
+        : (row.live_updated_at || row.updated_at || null),
+      sampleSize: statsSource === 'aggregated'
+        ? toNumber(row.aggregated_n ?? row.n)
+        : toNumber(row.live_n ?? row.n),
+      bandSampleSize: bandSample,         // NEW: n used for the banded p50
     };
     if (statsSource === 'live' && lookbackHours != null) statsMeta.lookbackHours = lookbackHours;
 
@@ -469,7 +466,13 @@ export function buildDealsFromRows(rows, limit, arg3) {
       brand: row.brand || null,
     };
 
-    const grade = gradeDeal({ total, p10: stats.p10, p50: stats.p50, p90: stats.p90, dispersionRatio: stats.dispersionRatio });
+    const grade = gradeDeal({
+      total,
+      p10: stats.p10,
+      p50: stats.p50,
+      p90: stats.p90,
+      dispersionRatio: stats.dispersionRatio
+    });
 
     return {
       modelKey: row.model_key,
@@ -497,8 +500,7 @@ export function buildDealsFromRows(rows, limit, arg3) {
   });
 }
 
-
-// ---------- optional 404 verification against eBay (fail-open) ----------
+// ---------- Optional 404 verification against eBay (fail-open) ----------
 async function verifyDealsActive(deals = []) {
   try {
     const token = await getEbayToken();
@@ -527,7 +529,7 @@ async function verifyDealsActive(deals = []) {
   }
 }
 
-// ---------- main loader ----------
+// ---------- Loader that tries windows with time budget ----------
 async function loadRankedDeals(sql, limit, windows, filters, modelKey = null, fast = false, startTime = Date.now()) {
   const windowsToTry = Array.isArray(windows) && windows.length ? windows : DEFAULT_LOOKBACK_WINDOWS_HOURS;
   let deals = [];
@@ -548,18 +550,18 @@ async function loadRankedDeals(sql, limit, windows, filters, modelKey = null, fa
 }
 export { loadRankedDeals };
 
-
-// ---------- handler ----------
+// ---------- API handler ----------
 export default async function handler(req, res) {
   try {
     const sql = getSql();
 
-    // parse query params
+    // Parse query
     const limit = Math.min(12, Math.max(3, toNumber(req.query.limit) ?? 12));
     const lookback = toNumber(req.query.lookbackWindowHours) || null;
     const verify = String(req.query.verify || '') === '1';
     const modelParam = (req.query.model || '').trim();
     const modelKey = modelParam ? normalizeModelKey(modelParam) : null;
+
     const startTime = Date.now();
     const fast = String(req.query.fast || '') === '1';
     const windows = lookback ? [lookback] : (fast ? FAST_WINDOWS : DEFAULT_LOOKBACK_WINDOWS_HOURS);
@@ -569,7 +571,7 @@ export default async function handler(req, res) {
     const maxDispersion = toNumber(req.query.maxDispersion);
     const minSavingsPct = toNumber(req.query.minSavingsPct);
 
-    // Serve cached payload first (Hobby-friendly): enabled by default
+    // Serve cached payload first (enabled by default)
     const useCache = String(req.query.cache || '1') === '1';
     if (useCache && !modelKey && !verify) {
       try {
@@ -582,24 +584,22 @@ export default async function handler(req, res) {
             meta: { ...(cached.payload.meta || {}), cache: { key: 'default', generatedAt: cached.generated_at } }
           });
         }
-      } catch (e) {
-        // fall through
-      }
+      } catch { /* fall through */ }
     }
 
-    // strict defaults (good UX), but we will auto-relax if empty
+    // Friendlier defaults while aggregates deepen (keeps homepage populated)
     const filters = {
-      freshnessHours: Number.isFinite(freshnessHours) ? freshnessHours : 24,
-      minSample: Number.isFinite(minSample) ? minSample : 10,
-      maxDispersion: Number.isFinite(maxDispersion) ? maxDispersion : 4.5,
-      minSavingsPct: Number.isFinite(minSavingsPct) ? minSavingsPct : 0.25,
+      freshnessHours: Number.isFinite(freshnessHours) ? freshnessHours : 48,
+      minSample:     Number.isFinite(minSample) ? minSample : 6,
+      maxDispersion: Number.isFinite(maxDispersion) ? maxDispersion : 5,
+      minSavingsPct: Number.isFinite(minSavingsPct) ? minSavingsPct : 0.20,
     };
 
-    // 1) Try with strict filters
+    // Try strict-ish first
     let { deals: baseDeals, windowHours } = await loadRankedDeals(sql, limit, windows, filters, modelKey, fast, startTime);
     let deals = verify ? await verifyDealsActive(baseDeals) : baseDeals;
 
-    // 2) Auto-relax progressively if empty
+    // Auto-relax progressively if empty
     let usedFilters = { ...filters };
     let fallbackUsed = false;
 
@@ -656,7 +656,7 @@ export default async function handler(req, res) {
           ON CONFLICT (cache_key) DO UPDATE
           SET payload = EXCLUDED.payload, generated_at = now()
         `;
-      } catch {}
+      } catch { /* ignore cache errors */ }
     }
 
     return res.status(200).json({
