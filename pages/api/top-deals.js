@@ -435,6 +435,8 @@ async function loadRankedDeals(sql, limit, windows, filters, modelKey = null) {
 
   return { deals, windowHours: usedWindow };
 }
+export { loadRankedDeals };
+
 
 // ---------- handler ----------
 export default async function handler(req, res) {
