@@ -50,13 +50,104 @@ function formatModelLabel(modelKey = '', brand = '', title = '') {
     const [first] = CATALOG_LOOKUP.get(normalized);
     if (first) return `${first.brand} ${first.model}`;
   }
+
   const brandTitle = String(brand || '').trim();
+  const listingTitle = String(title || '').trim();
+
+  if (brandTitle && listingTitle) {
+    const lowerBrand = brandTitle.toLowerCase();
+    const lowerTitle = listingTitle.toLowerCase();
+    if (lowerTitle.startsWith(lowerBrand)) {
+      return listingTitle;
+    }
+    return `${brandTitle} ${listingTitle}`.replace(/\s+/g, ' ').trim();
+  }
+
+  if (listingTitle) return listingTitle;
   if (brandTitle) return brandTitle;
-  if (title) return title;
   if (!normalized) return 'Live Smart Price deal';
   return normalized.split(' ')
     .map((p) => (p ? p[0].toUpperCase() + p.slice(1) : ''))
     .join(' ');
+}
+
+function normalizeForComparison(value = '') {
+  return String(value || '')
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '');
+}
+
+function combineBrandAndLabel(brand = '', label = '') {
+  const brandText = String(brand || '').trim();
+  const labelText = String(label || '').trim();
+  if (!brandText && !labelText) return '';
+  if (!brandText) return labelText;
+  if (!labelText) return brandText;
+
+  const lowerBrand = brandText.toLowerCase();
+  const lowerLabel = labelText.toLowerCase();
+  if (lowerLabel.startsWith(lowerBrand)) {
+    return labelText;
+  }
+  return `${brandText} ${labelText}`.replace(/\s+/g, ' ').trim();
+}
+
+function composeDealLabel(row = {}, sanitized = null) {
+  const cleanLabel = typeof sanitized?.cleanLabel === 'string' ? sanitized.cleanLabel.trim() : '';
+  const sanitizedLabel = typeof sanitized?.label === 'string' ? sanitized.label.trim() : '';
+  let modelLabel = cleanLabel || sanitizedLabel;
+
+  if (!modelLabel && row?.title) {
+    const fromTitle = sanitizeModelKey(row.title, { storedBrand: row.brand });
+    const fromTitleClean = typeof fromTitle?.cleanLabel === 'string' ? fromTitle.cleanLabel.trim() : '';
+    const fromTitleLabel = typeof fromTitle?.label === 'string' ? fromTitle.label.trim() : '';
+    modelLabel = fromTitleClean || fromTitleLabel || '';
+  }
+
+  const brandCandidate = typeof sanitized?.brand === 'string' ? sanitized.brand.trim() : '';
+  const fallbackBrand = typeof row?.brand === 'string' ? row.brand.trim() : '';
+  const brand = brandCandidate || fallbackBrand;
+
+  const normalizedBrand = normalizeForComparison(brand);
+  let normalizedModel = normalizeForComparison(modelLabel);
+
+  if (normalizedBrand && normalizedBrand === normalizedModel) {
+    const additionalCandidates = [];
+    if (typeof row?.model === 'string') additionalCandidates.push(row.model);
+    if (typeof row?.title === 'string') additionalCandidates.push(row.title);
+
+    for (const candidate of additionalCandidates) {
+      const candidateSanitized = sanitizeModelKey(candidate, { storedBrand: row.brand });
+      const candidateLabel =
+        (typeof candidateSanitized?.cleanLabel === 'string' && candidateSanitized.cleanLabel.trim()) ||
+        (typeof candidateSanitized?.label === 'string' && candidateSanitized.label.trim()) ||
+        '';
+
+      if (!candidateLabel) continue;
+
+      const normalizedCandidate = normalizeForComparison(candidateLabel);
+      if (normalizedCandidate && normalizedCandidate !== normalizedBrand) {
+        modelLabel = candidateLabel;
+        normalizedModel = normalizedCandidate;
+        break;
+      }
+    }
+
+    if (normalizedBrand === normalizedModel) {
+      modelLabel = '';
+    }
+  }
+
+  let label = combineBrandAndLabel(brand, modelLabel);
+  if (!label) {
+    label = formatModelLabel(row?.model_key, row?.brand, row?.title);
+  }
+
+  return {
+    label: label || 'Live Smart Price deal',
+    brand: brand || null,
+    modelLabel: modelLabel || '',
+  };
 }
 
 // ---------- small utils ----------
@@ -186,7 +277,9 @@ async function queryTopDeals(sql, since, modelKey = null) {
       amb.mod_band_n, amb.mod_band_p50_cents, amb.mod_band_window,
 
       -- Which band this listing is in
-      c.cond_band
+      c.cond_band,
+
+      COALESCE(v.variant_key, '') AS variant_key
 
     FROM latest_prices lp
     JOIN items i ON i.item_id = lp.item_id
@@ -306,20 +399,50 @@ export function buildDealsFromRows(rows, limit, arg3) {
     maxDispersion = null,
     minSavingsPct = 0,
     lookbackHours = null,
+    debugAccessoryList = null,
+    captureAccessoryDrops = false,
   } = opts;
 
   const grouped = new Map();
 
-  for (const row of rows) {
-    if (!isLikelyPutterTitle(row?.title || '')) continue;
-    if (isAccessoryDominatedTitle(row?.title || '')) continue;
+  const debugSink = Array.isArray(debugAccessoryList) ? debugAccessoryList : null;
 
+  for (const row of rows) {
+    const title = row?.title || '';
     const modelKey = row.model_key || '';
+    const knownModel = Boolean(modelKey);
+    const hasPutterToken = /\bputter\b/i.test(title);
+    const likelyTitle = isLikelyPutterTitle(title);
+
+    const recordDrop = (reason) => {
+      if (!captureAccessoryDrops || !debugSink) return;
+      const payload = { reason, title };
+      if (row?.item_id) payload.itemId = row.item_id;
+      if (row?.model_key) payload.modelKey = row.model_key;
+      debugSink.push(payload);
+    };
+
+    if (!hasPutterToken && !knownModel) {
+      recordDrop('missing_putter_token');
+      continue;
+    }
+
+    if (!likelyTitle && !knownModel) {
+      recordDrop('not_putter_title');
+      continue;
+    }
+
+    if (isAccessoryDominatedTitle(title)) {
+      recordDrop('accessory_dominated');
+      continue;
+    }
+
     if (!modelKey) continue;
 
     const total = toNumber(row.total);
     const price = toNumber(row.price);
     const shipping = toNumber(row.shipping);
+    const variantKey = typeof row.variant_key === 'string' ? row.variant_key : '';
 
     // ANY-band medians
     const varMedian = centsToNumber(row.var_p50_cents);
@@ -340,17 +463,34 @@ export function buildDealsFromRows(rows, limit, arg3) {
     let median = null;
     let bandSample = null;
     let bandUsed = null;
+    let medianSource = null;
+    let medianSample = null;
+
 
     if (Number.isFinite(varBandN) && varBandN >= (minSample ?? 0) && Number.isFinite(varBandMedian)) {
-      median = varBandMedian; bandSample = varBandN; bandUsed = usedBand;
+      median = varBandMedian;
+      bandSample = varBandN;
+      bandUsed = usedBand;
+      medianSource = 'variant_band';
+      medianSample = varBandN;
     } else if (Number.isFinite(modBandN) && modBandN >= (minSample ?? 0) && Number.isFinite(modBandMedian)) {
-      median = modBandMedian; bandSample = modBandN; bandUsed = usedBand;
+      median = modBandMedian;
+      bandSample = modBandN;
+      bandUsed = usedBand;
+      medianSource = 'model_band';
+      medianSample = modBandN;
     } else if (Number.isFinite(varN) && varN >= (minSample ?? 0) && Number.isFinite(varMedian)) {
       median = varMedian;
+      medianSource = 'variant_any';
+      medianSample = varN;
     } else if (Number.isFinite(modN) && modN >= (minSample ?? 0) && Number.isFinite(modMedian)) {
       median = modMedian;
+      medianSource = 'model_any';
+      medianSample = modN;
     } else {
       median = liveMedian;
+      medianSource = 'live';
+      medianSample = toNumber(row.n);
     }
 
     if (!Number.isFinite(total) || !Number.isFinite(median) || median <= 0) continue;
@@ -375,7 +515,7 @@ export function buildDealsFromRows(rows, limit, arg3) {
     if (!current || savingsPercent > current.savingsPercent || (savingsPercent === current.savingsPercent && total < current.total)) {
       grouped.set(modelKey, {
         row, total, price, shipping, median, savingsAmount, savingsPercent,
-        bandUsed, bandSample
+        bandUsed, bandSample, medianSource, medianSample
       });
     }
   }
@@ -392,9 +532,10 @@ export function buildDealsFromRows(rows, limit, arg3) {
     })
     .slice(0, limit);
 
-  return ranked.map(({ row, total, price, shipping, median, savingsAmount, savingsPercent, bandUsed, bandSample }) => {
-    const label = formatModelLabel(row.model_key, row.brand, row.title);
+  return ranked.map(({ row, total, price, shipping, median, savingsAmount, savingsPercent, bandUsed, bandSample, medianSource, medianSample }) => {
     const sanitized = sanitizeModelKey(row.model_key, { storedBrand: row.brand });
+    const { label, brand: displayBrand } = composeDealLabel(row, sanitized);
+    const variantKey = typeof row.variant_key === 'string' ? row.variant_key : '';
     const { query: canonicalQuery, queryVariants: canonicalVariants = {}, rawLabel: rawWithAccessories, cleanLabel: cleanWithoutAccessories } = sanitized;
 
     let cleanQuery = canonicalQuery || null;
@@ -402,6 +543,7 @@ export function buildDealsFromRows(rows, limit, arg3) {
     let query = cleanQuery;
 
     const fallbackCandidates = [
+      label,
       formatModelLabel(row.model_key, row.brand, row.title),
       [row.brand, row.title].filter(Boolean).join(' ').trim(),
     ].filter(Boolean);
@@ -432,6 +574,7 @@ export function buildDealsFromRows(rows, limit, arg3) {
     const currency = row.currency || 'USD';
     const statsSource = row.stats_source || null;
 
+    const resolvedCondition = bandUsed || (row.cond_band || null);
     const stats = {
       p10: centsToNumber(row.p10_cents),
       p50: median,
@@ -439,7 +582,10 @@ export function buildDealsFromRows(rows, limit, arg3) {
       n: toNumber(row.n),
       dispersionRatio: toNumber(row.dispersion_ratio),
       source: statsSource,
-      usedBand: bandUsed,                 // NEW: band used for median, e.g., 'USED', 'NEW', ...
+      usedBand: resolvedCondition,
+      conditionBand: resolvedCondition,
+      variantKey: variantKey || null,
+      medianSource,
     };
     const statsMeta = {
       source: statsSource,
@@ -451,6 +597,10 @@ export function buildDealsFromRows(rows, limit, arg3) {
         ? toNumber(row.aggregated_n ?? row.n)
         : toNumber(row.live_n ?? row.n),
       bandSampleSize: bandSample,         // NEW: n used for the banded p50
+      medianSource,
+      conditionBand: resolvedCondition,
+      variantKey: variantKey || null,
+      medianSampleSize: Number.isFinite(medianSample) ? medianSample : null,
     };
     if (statsSource === 'live' && lookbackHours != null) statsMeta.lookbackHours = lookbackHours;
 
@@ -465,18 +615,36 @@ export function buildDealsFromRows(rows, limit, arg3) {
       image: row.image_url,
       observedAt: row.observed_at || null,
       condition: row.condition || null,
+      conditionBand: resolvedCondition,
       retailer: 'eBay',
       specs: { headType: row.head_type || null, dexterity: row.dexterity || null, length: toNumber(row.length_in) },
-      brand: row.brand || null,
+      brand: displayBrand || row.brand || null,
     };
 
     const grade = gradeDeal({
-      total,
-      p10: stats.p10,
-      p50: stats.p50,
-      p90: stats.p90,
-      dispersionRatio: stats.dispersionRatio
+      savingsPct: Number.isFinite(savingsPercent) ? savingsPercent : null,
     });
+
+    const conditionBand = resolvedCondition;
+    const sampleLabel = Number.isFinite(medianSample) && medianSample > 0 ? ` (n=${medianSample})` : '';
+    let gradeReason = null;
+    switch (medianSource) {
+      case 'variant_band':
+        gradeReason = `variant ${conditionBand || 'ANY'} median${sampleLabel}`;
+        break;
+      case 'model_band':
+        gradeReason = `model ${conditionBand || 'ANY'} median${sampleLabel}`;
+        break;
+      case 'variant_any':
+        gradeReason = `fallback: variant p50${sampleLabel}`;
+        break;
+      case 'model_any':
+        gradeReason = `fallback: model p50${sampleLabel}`;
+        break;
+      default:
+        gradeReason = `fallback: live p50${sampleLabel}`;
+        break;
+    }
 
     return {
       modelKey: row.model_key,
@@ -489,6 +657,14 @@ export function buildDealsFromRows(rows, limit, arg3) {
       stats,
       statsMeta,
       totalListings: toNumber(row.listing_count),
+      brand: row.brand || null,
+      model: row.model_key || null,
+      conditionBand,
+      variantKey: variantKey || null,
+      dealGrade: typeof grade.letter === 'string' ? grade.letter : null,
+      gradeReason,
+      savingsPct: Number.isFinite(savingsPercent) ? savingsPercent : null,
+      medianPrice: Number.isFinite(median) ? median : null,
       grade: {
         letter: typeof grade.letter === 'string' ? grade.letter : null,
         label: typeof grade.label === 'string' ? grade.label : null,
@@ -565,6 +741,8 @@ export default async function handler(req, res) {
     const verify = String(req.query.verify || '') === '1';
     const modelParam = (req.query.model || '').trim();
     const modelKey = modelParam ? normalizeModelKey(modelParam) : null;
+    const debugAccessories = String(req.query.debugAccessories || '') === '1';
+    const accessoryDebug = [];
 
     const startTime = Date.now();
     const fast = String(req.query.fast || '') === '1';
@@ -576,7 +754,7 @@ export default async function handler(req, res) {
     const minSavingsPct = toNumber(req.query.minSavingsPct);
 
     // Serve cached payload first (enabled by default)
-    const useCache = String(req.query.cache || '1') === '1';
+    const useCache = String(req.query.cache || '1') === '1' && !debugAccessories;
     if (useCache && !modelKey && !verify) {
       try {
         const [cached] = await sql/* sql */`
@@ -597,6 +775,8 @@ export default async function handler(req, res) {
       minSample:     Number.isFinite(minSample) ? minSample : 6,
       maxDispersion: Number.isFinite(maxDispersion) ? maxDispersion : 5,
       minSavingsPct: Number.isFinite(minSavingsPct) ? minSavingsPct : 0.20,
+      captureAccessoryDrops: debugAccessories,
+      debugAccessoryList: accessoryDebug,
     };
 
     // Try strict-ish first
@@ -611,6 +791,7 @@ export default async function handler(req, res) {
       for (const bump of FALLBACK_TRIES) {
         if (Date.now() - startTime > TIME_BUDGET_MS) break;
         const mergedFilters = {
+          ...usedFilters,
           freshnessHours: bump.freshnessHours ?? usedFilters.freshnessHours,
           minSample: bump.minSample ?? usedFilters.minSample,
           maxDispersion: bump.maxDispersion ?? usedFilters.maxDispersion,
@@ -672,7 +853,7 @@ export default async function handler(req, res) {
   }
 
   // --- RESPONSE ---------------------------------------------------
-  return res.status(200).json({
+  const payload = {
     ok: true,
     generatedAt: new Date().toISOString(),
     deals,
@@ -690,7 +871,15 @@ export default async function handler(req, res) {
       verified: !!verified,
       fallbackUsed: !!fallbackUsed,
     },
-  });
+  };
+
+  if (debugAccessories) {
+    payload.meta.debug = {
+      accessoryDrops: accessoryDebug,
+    };
+  }
+
+  return res.status(200).json(payload);
 } catch (err) {
   console.error(err);
   return res
