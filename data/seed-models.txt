@@ -45,6 +45,9 @@ TaylorMade TP Reserve M21
 TaylorMade TP Reserve B11
 TaylorMade Spider Tour L-Neck
 TaylorMade Spider Tour Double Bend
+TaylorMade Spider Blade
+TaylorMade Spider Mallet
+TaylorMade Spider Scheffler
 # Ping
 Ping Anser
 Ping Anser 2
