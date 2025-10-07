@@ -145,24 +145,23 @@ export default async function handler(req, res) {
     offset = s.nextOffset;
   }
 
+// After seeding: refresh → backfill → aggregate
 const refresh  = await callRefresh(base, process.env.CRON_SECRET || "");
 const backfill = await callBackfill(base, process.env.ADMIN_KEY || "");
-const aggregate = await callAggregates(base, process.env.ADMIN_SECRET || "");
+const aggregateResult = await callAggregates(base, process.env.ADMIN_SECRET || "");
 
+res.json({
+  ok: true,
+  base,
+  totalBudgetMs,
+  count,
+  limit,
+  pages,
+  startOffset: Number(req.query.offset ?? 0),
+  endOffset: offset,
+  seedRuns,
+  refresh,
+  backfill,
+  aggregate: aggregateResult,
+});
 
-  // Kick aggregates after seeding
-  const aggregate = await callAggregates(base, secret);
-
-  res.json({
-    ok: true,
-    base,
-    totalBudgetMs,
-    count,
-    limit,
-    pages,
-    startOffset: Number(req.query.offset ?? 0),
-    endOffset: offset,
-    seedRuns,
-    aggregate,
-  });
-}
