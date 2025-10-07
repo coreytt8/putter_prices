@@ -153,10 +153,8 @@ async function queryTopDeals(sql, since, modelKey = null) {
       ORDER BY model, window_days DESC, updated_at DESC
     ),
     model_counts AS (
-      SELECT i.model_key, COUNT(*) AS listing_count,
-
-
-FROM latest_prices lp
+      SELECT i.model_key, COUNT(*) AS listing_count
+    FROM latest_prices lp
       JOIN items i ON i.item_id = lp.item_id
       WHERE i.model_key IS NOT NULL AND i.model_key <> ''
       GROUP BY i.model_key
@@ -427,7 +425,6 @@ export function buildDealsFromRows(rows, limit, arg3) {
       queryVariants: { clean: cleanQuery || null, accessory: accessoryQuery || null },
     };
   });
-  return out;
 }
 
 
