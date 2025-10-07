@@ -15,6 +15,10 @@ import {
 import { decorateEbayUrl } from '../../lib/affiliate';
 import { gradeDeal } from '../../lib/deal-grade';
 
+// --- Hobby plan performance knobs ---
+const TIME_BUDGET_MS = 7500;             // stay under Hobby (~10s) cap
+const FAST_WINDOWS = [72, 168];          // smaller ladder when fast=1
+
 const DEFAULT_LOOKBACK_WINDOWS_HOURS = [24, 72, 168, 336, 720]; // broadened
 const CONNECTOR_TOKENS = new Set(['for','with','and','the','a','to','of','by','from','in','on','at','&','+','plus','or']);
 const NUMERIC_TOKEN_PATTERN = /^\d+(?:\.\d+)?$/;
@@ -26,7 +30,6 @@ const ACCESSORY_COMBO_TOKENS = new Set(['weight','weights','counterweight','coun
 // Auto-relax profiles (only used if strict settings return zero)
 // -----------------------------------------------------------------------------
 const FALLBACK_TRIES = [
-  // NOTE: try current defaults first (implicit); then widen step-by-step
   { freshnessHours: 48 },
   { freshnessHours: 48, minSample: 8 },
   { freshnessHours: 48, minSample: 5 },
@@ -78,21 +81,12 @@ function ensurePutterQuery(text = '') {
 // ---------- helper: is this title likely a real putter? ----------
 function isLikelyPutterTitle(title = '') {
   const t = String(title || '').toLowerCase();
-
-  // direct keyword
   if (/\bputter\b/i.test(t)) return true;
-
-  // common model/head names that imply a putter
   const modelHintRx =
     /\b(newport|phantom\s?x|anser|spider|odyssey|rossie|squareback|fastback|del\s*mar|studio|sigma|tomcat|monza|monte|er[ -]?\d)\b/i;
   if (modelHintRx.test(t)) return true;
-
-  // length hints (33–36 inches etc.)
   if (/\b(32|33|34|35|36)\s?(in|inch|")\b/.test(t)) return true;
-
-  // shape cues
   if (/\b(blade|mallet|center\s?shaft(ed)?|face\s?balanced|milled)\b/i.test(t)) return true;
-
   return false;
 }
 
@@ -100,7 +94,6 @@ function isLikelyPutterTitle(title = '') {
 function isAccessoryDominatedTitle(title = '') {
   if (!title) return false;
   const raw = String(title);
-  const t = raw.toLowerCase();
 
   // 1) Hard-block headcovers by text signal
   let hasHeadcoverSignal = HEAD_COVER_TEXT_RX.test(raw);
@@ -125,7 +118,6 @@ function isAccessoryDominatedTitle(title = '') {
     const norm = token.replace(/[^a-z0-9]/gi, '').toLowerCase();
     if (!norm) continue;
 
-    // count your existing headcover variants as accessory tokens
     if (HEAD_COVER_TOKEN_VARIANTS.has(norm)) {
       hasHeadcoverSignal = true;
       accessoryCount++;
@@ -137,9 +129,8 @@ function isAccessoryDominatedTitle(title = '') {
       continue;
     }
 
-    // substantives: brand/model cues, lengths, shapes, etc.
     if (
-      /\b(32|33|34|35|36)\b/.test(norm) ||                     // length numbers
+      /\b(32|33|34|35|36)\b/.test(norm) ||
       /newport|phantom|anser|spider|odyssey|rossie|er\d+/.test(norm) ||
       /blade|mallet|milled|center|face|balanced/.test(norm)
     ) {
@@ -157,6 +148,14 @@ function isAccessoryDominatedTitle(title = '') {
   return false;
 }
 
+// ---------- helper for fast=1 ----------
+function fastRows(rows) {
+  return rows.map(r =>
+    r.stats_source === 'aggregated'
+      ? { ...r, live_n: null, live_p10_cents: null, live_p50_cents: null, live_p90_cents: null, live_dispersion_ratio: null }
+      : r
+  );
+}
 
 // ---------- DB query ----------
 async function queryTopDeals(sql, since, modelKey = null) {
@@ -258,6 +257,7 @@ async function queryTopDeals(sql, since, modelKey = null) {
       JOIN items i2 ON i2.item_id = lp2.item_id
       WHERE i2.model_key = i.model_key
         AND lp2.total IS NOT NULL AND lp2.total > 0
+        AND (stats.p50_cents IS NULL) -- only compute live stats when aggregates are missing
     ) AS live ON TRUE
 
     LEFT JOIN model_counts mc ON mc.model_key = i.model_key
@@ -271,7 +271,6 @@ async function queryTopDeals(sql, since, modelKey = null) {
 
 // ---------- deal building + filters ----------
 export function buildDealsFromRows(rows, limit, arg3) {
-  // Back-compat: if arg3 is a number, treat it as lookbackHours (old signature).
   const opts = (typeof arg3 === 'number' || arg3 == null)
     ? { lookbackHours: (typeof arg3 === 'number' ? arg3 : null) }
     : (arg3 || {});
@@ -288,12 +287,9 @@ export function buildDealsFromRows(rows, limit, arg3) {
   const grouped = new Map();
 
   for (const row of rows) {
-    // use "likely putter" instead of requiring literal "putter"
     if (!isLikelyPutterTitle(row?.title || '')) continue;
-
     const modelKey = row.model_key || '';
     if (!modelKey) continue;
-
     if (isAccessoryDominatedTitle(row?.title || '')) continue;
 
     const total = toNumber(row.total);
@@ -316,13 +312,11 @@ export function buildDealsFromRows(rows, limit, arg3) {
 
     if (!Number.isFinite(total) || !Number.isFinite(median) || median <= 0) continue;
 
-    // Stats gates
     const sampleSize = toNumber(row.n);
     const dispersion = toNumber(row.dispersion_ratio);
     if (minSample != null && sampleSize != null && sampleSize < minSample) continue;
     if (maxDispersion != null && dispersion != null && dispersion > maxDispersion) continue;
 
-    // Freshness gate (observed_at of THIS listing)
     if (freshnessHours != null && row.observed_at) {
       const obs = new Date(row.observed_at);
       if (now - obs > freshnessHours * 3600 * 1000) continue;
@@ -482,8 +476,8 @@ async function verifyDealsActive(deals = []) {
             'X-EBAY-C-MARKETPLACE-ID': 'EBAY_US',
           },
         });
-        if (r.status === 404) continue; // ended or not found
-        if (!r.ok) continue; // be conservative
+        if (r.status === 404) continue;
+        if (!r.ok) continue;
         out.push(d);
       } catch {
         out.push(d);
@@ -496,15 +490,17 @@ async function verifyDealsActive(deals = []) {
 }
 
 // ---------- main loader ----------
-async function loadRankedDeals(sql, limit, windows, filters, modelKey = null) {
+async function loadRankedDeals(sql, limit, windows, filters, modelKey = null, fast = false, startTime = Date.now()) {
   const windowsToTry = Array.isArray(windows) && windows.length ? windows : DEFAULT_LOOKBACK_WINDOWS_HOURS;
   let deals = [];
   let usedWindow = windowsToTry[windowsToTry.length - 1] ?? null;
 
   for (const hours of windowsToTry) {
     const since = new Date(Date.now() - hours * 3600 * 1000);
+    if (Date.now() - startTime > TIME_BUDGET_MS) break;
     const rows = await queryTopDeals(sql, since, modelKey);
-    const computed = buildDealsFromRows(rows, limit, { ...filters, lookbackHours: hours });
+    const usedRows = fast ? fastRows(rows) : rows;
+    const computed = buildDealsFromRows(usedRows, limit, { ...filters, lookbackHours: hours });
     deals = computed;
     usedWindow = hours;
     if (computed.length > 0) break;
@@ -523,15 +519,35 @@ export default async function handler(req, res) {
     // parse query params
     const limit = Math.min(12, Math.max(3, toNumber(req.query.limit) ?? 12));
     const lookback = toNumber(req.query.lookbackWindowHours) || null;
-    const windows = lookback ? [lookback] : DEFAULT_LOOKBACK_WINDOWS_HOURS;
+    const verify = String(req.query.verify || '') === '1';
+    const modelParam = (req.query.model || '').trim();
+    const modelKey = modelParam ? normalizeModelKey(modelParam) : null;
+    const startTime = Date.now();
+    const fast = String(req.query.fast || '') === '1';
+    const windows = lookback ? [lookback] : (fast ? FAST_WINDOWS : DEFAULT_LOOKBACK_WINDOWS_HOURS);
 
     const freshnessHours = toNumber(req.query.freshnessHours);
     const minSample = toNumber(req.query.minSample);
     const maxDispersion = toNumber(req.query.maxDispersion);
     const minSavingsPct = toNumber(req.query.minSavingsPct);
-    const verify = String(req.query.verify || '') === '1';
-    const modelParam = (req.query.model || '').trim();
-    const modelKey = modelParam ? normalizeModelKey(modelParam) : null;
+
+    // Serve cached payload first (Hobby-friendly): enabled by default
+    const useCache = String(req.query.cache || '1') === '1';
+    if (useCache && !modelKey && !verify) {
+      try {
+        const [cached] = await sql/* sql */`
+          SELECT payload, generated_at FROM top_deals_cache WHERE cache_key = 'default'
+        `;
+        if (cached?.payload) {
+          return res.status(200).json({
+            ...cached.payload,
+            meta: { ...(cached.payload.meta || {}), cache: { key: 'default', generatedAt: cached.generated_at } }
+          });
+        }
+      } catch (e) {
+        // fall through
+      }
+    }
 
     // strict defaults (good UX), but we will auto-relax if empty
     const filters = {
@@ -542,15 +558,16 @@ export default async function handler(req, res) {
     };
 
     // 1) Try with strict filters
-    let { deals: baseDeals, windowHours } = await loadRankedDeals(sql, limit, windows, filters, modelKey);
+    let { deals: baseDeals, windowHours } = await loadRankedDeals(sql, limit, windows, filters, modelKey, fast, startTime);
     let deals = verify ? await verifyDealsActive(baseDeals) : baseDeals;
 
-    // 2) Auto-relax progressively if empty (keeps homepage from going blank)
+    // 2) Auto-relax progressively if empty
     let usedFilters = { ...filters };
     let fallbackUsed = false;
 
     if (deals.length === 0) {
       for (const bump of FALLBACK_TRIES) {
+        if (Date.now() - startTime > TIME_BUDGET_MS) break;
         const mergedFilters = {
           freshnessHours: bump.freshnessHours ?? usedFilters.freshnessHours,
           minSample: bump.minSample ?? usedFilters.minSample,
@@ -558,7 +575,7 @@ export default async function handler(req, res) {
           minSavingsPct: bump.minSavingsPct ?? usedFilters.minSavingsPct,
         };
         const windows2 = bump.lookbackWindowHours ? [bump.lookbackWindowHours] : windows;
-        const res2 = await loadRankedDeals(sql, limit, windows2, mergedFilters, modelKey);
+        const res2 = await loadRankedDeals(sql, limit, windows2, mergedFilters, modelKey, fast, startTime);
         const d2 = verify ? await verifyDealsActive(res2.deals) : res2.deals;
         if (d2.length > 0) {
           deals = d2;
@@ -568,6 +585,40 @@ export default async function handler(req, res) {
           break;
         }
       }
+    }
+
+    // Optional: write computed payload into cache (for nightly cron)
+    const cacheWrite = String(req.query.cacheWrite || '') === '1';
+    const okAuth = (req.headers['x-cron-secret'] && process.env.CRON_SECRET && req.headers['x-cron-secret'] === process.env.CRON_SECRET);
+    if (cacheWrite && okAuth) {
+      try {
+        await sql/* sql */`
+          CREATE TABLE IF NOT EXISTS top_deals_cache (
+            cache_key TEXT PRIMARY KEY,
+            payload   JSONB NOT NULL,
+            generated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+          )
+        `;
+        await sql/* sql */`
+          INSERT INTO top_deals_cache (cache_key, payload)
+          VALUES ('default', ${{
+            ok: true,
+            generatedAt: new Date().toISOString(),
+            deals,
+            meta: {
+              limit,
+              modelCount: deals.length,
+              lookbackWindowHours: windowHours,
+              modelKey,
+              filters: usedFilters,
+              verified: verify,
+              fallbackUsed,
+            },
+          }}::jsonb)
+          ON CONFLICT (cache_key) DO UPDATE
+          SET payload = EXCLUDED.payload, generated_at = now()
+        `;
+      } catch {}
     }
 
     return res.status(200).json({
