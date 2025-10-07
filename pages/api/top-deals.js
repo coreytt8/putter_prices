@@ -202,17 +202,19 @@ async function queryTopDeals(sql, since, modelKey = null) {
     ) v ON TRUE
 
     -- Map eBay conditionId -> band for this row
-    LEFT JOIN LATERAL (
-      SELECT CASE
-        WHEN lp.condition IN (1000) THEN 'NEW'
-        WHEN lp.condition IN (1500,2000,2500,2750) THEN 'MINT'
-        WHEN lp.condition IN (3000) THEN 'USED'
-        WHEN lp.condition IN (4000) THEN 'VERY_GOOD'
-        WHEN lp.condition IN (5000) THEN 'GOOD'
-        WHEN lp.condition IN (6000) THEN 'ACCEPTABLE'
-        ELSE 'ANY'
-      END AS cond_band
-    ) c ON TRUE
+   -- Map eBay conditionId → condition_band (robust for text/int)
+LEFT JOIN LATERAL (
+  SELECT CASE
+    WHEN lp.condition::text IN ('1000') THEN 'NEW'
+    WHEN lp.condition::text IN ('1500','2000','2500','2750') THEN 'MINT'
+    WHEN lp.condition::text IN ('3000') THEN 'USED'
+    WHEN lp.condition::text IN ('4000') THEN 'VERY_GOOD'
+    WHEN lp.condition::text IN ('5000') THEN 'GOOD'
+    WHEN lp.condition::text IN ('6000') THEN 'ACCEPTABLE'
+    ELSE 'ANY'
+  END AS cond_band
+) c ON TRUE
+
 
     -- Variant + ANY
     LEFT JOIN LATERAL (
