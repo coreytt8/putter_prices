@@ -164,4 +164,5 @@ res.json({
   backfill,
   aggregate: aggregateResult,
 });
+}
 
