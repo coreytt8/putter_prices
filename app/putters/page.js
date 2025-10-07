@@ -2,17 +2,12 @@
 
 import { useCallback, useEffect, useMemo, useState } from "react";
 import MarketSnapshot from "@/components/MarketSnapshot";
-import PriceSparkline from "@/components/PriceSparkline";
-import ConditionChips from "@/components/ConditionChips";
-import SmartPriceBadge from "@/components/SmartPriceBadge";
 import HeroSection from "@/components/HeroSection";
 import SectionWrapper from "@/components/SectionWrapper";
 import HighlightCard from "@/components/HighlightCard";
 import CompareBar from "@/components/CompareBar";
 import CompareTray from "@/components/CompareTray";
 import { detectVariant } from "@/lib/variantMap";
-import DealGradeBadge from "@/components/DealGradeBadge";
-import { gradeDeal } from "@/lib/deal-grade";
 
 // --- Inline condition pill (Corey’s mapping) ---
 // --- Inline condition pill (Corey’s mapping) ---
@@ -39,6 +34,26 @@ function ConditionPill({ condition }) {
   return (
     <span className={`inline-flex items-center rounded-full px-2 py-0.5 text-[11px] font-medium ${cls}`}>
       {label}
+    </span>
+  );
+}
+
+const bandPretty = (b) => {
+  if (!b) return null;
+  const str = String(b).toUpperCase();
+  if (!str || str === "ANY") return null;
+  return str.replace(/_/g, " ").replace(/\b\w/g, (c) => c.toUpperCase());
+};
+
+function BandChip({ band, sample }) {
+  const pretty = bandPretty(band);
+  if (!pretty) return null;
+  const count = Number(sample);
+  const showCount = Number.isFinite(count) && count > 0;
+  return (
+    <span className="inline-flex items-center rounded-full bg-gray-100 px-2 py-0.5 text-[10px] font-medium text-gray-700">
+      {pretty}
+      {showCount ? <span className="ml-1 opacity-70">n={count}</span> : null}
     </span>
   );
 }
@@ -175,23 +190,6 @@ function timeAgo(ts) {
   const days = Math.floor(hrs / 24);
   return days === 1 ? "1 day ago" : `${days} days ago`;
 }
-async function copyToClipboard(text) {
-  try {
-    await navigator.clipboard.writeText(text);
-    return true;
-  } catch {
-    const ta = document.createElement("textarea");
-    ta.value = text;
-    ta.style.position = "fixed";
-    ta.style.opacity = "0";
-    document.body.appendChild(ta);
-    ta.select();
-    try { document.execCommand("copy"); } catch {}
-    document.body.removeChild(ta);
-    return true;
-  }
-}
-
 function getOfferId(offer) {
   if (!offer) return null;
   if (offer.productId != null) return String(offer.productId);
@@ -668,16 +666,6 @@ export default function PuttersPage() {
     const domLen = Object.entries(lenCounts).sort((a,b)=>b[1]-a[1])[0];
     const domLenVal = domLen && domLen[1] > 0 ? Number(domLen[0]) : null;
     return { domDex, domHead, domLen: domLenVal };
-  }
-
-  // quick “Great deal/Good deal” chip (kept for the summary row)
-  function fairPriceBadge(best, stats) {
-    if (!best || !stats) return null;
-    const p10 = Number(stats.p10), p50 = Number(stats.p50);
-    if (!isFinite(p10) && !isFinite(p50)) return null;
-    if (isFinite(p10) && best <= p10) return { label: "Great deal", tone: "emerald" };
-    if (isFinite(p50) && best <= p50) return { label: "Good deal", tone: "green" };
-    return null;
   }
 
   const clearAll = () => {
@@ -1226,7 +1214,6 @@ export default function PuttersPage() {
                   <section className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-2">
                     {sortedGroups.map((g) => {
                       const isOpen = !!expanded[g.model];
-
                       const ordered =
                         sortBy === "best_price_desc"
                           ? [...g.offers].sort((a, b) => {
@@ -1240,29 +1227,11 @@ export default function PuttersPage() {
                               return (ac ?? Infinity) - (bc ?? Infinity);
                             });
 
-                      const nums = ordered
-                        .map((o) => offerCost(o))
-                        .filter((x) => typeof x === "number")
-                        .sort((a, b) => a - b);
-                      const nNums = nums.length;
-                      const med =
-                        nNums < 2
-                          ? null
-                          : nNums % 2
-                          ? nums[Math.floor(nNums / 2)]
-                          : (nums[nNums / 2 - 1] + nums[nNums / 2]) / 2;
-                      const bestDelta =
-                        typeof g.bestPrice === "number" && typeof med === "number" && med - g.bestPrice > 0
-                          ? { diff: med - g.bestPrice, pct: ((med - g.bestPrice) / med) * 100 }
-                          : null;
-
                       const { domDex, domHead, domLen } = summarizeDexHead(g);
 
                       const showAll = !!showAllOffersByModel[g.model];
                       const list = isOpen ? (showAll ? ordered : ordered.slice(0, 10)) : [];
 
-                      const lows = lowsByModel[g.model];
-                      const series = seriesByModel[g.model] || [];
                       const groupCond =
                         selectedConditionBand(conds) || inferConditionBandFromOffers(g?.offers || []) || "";
                       const statsKey = getStatsKey(g.model, groupCond);
@@ -1270,327 +1239,215 @@ export default function PuttersPage() {
 
                       const firstOffer = ordered[0];
                       const bestUrl = firstOffer?.url ?? null;
-                      const firstOfferId = getOfferId(firstOffer);
-                      const firstOfferCompared = firstOfferId ? compareIds.has(firstOfferId) : false;
+                      const bestPriceValue = Number.isFinite(Number(g.bestPrice))
+                        ? Number(g.bestPrice)
+                        : offerCost(firstOffer);
+                      const bestCurrency = g.bestCurrency || firstOffer?.currency || "USD";
 
-                      const helperModelKey = firstOffer ? getModelKey(firstOffer) : g.model;
-                      const helperVariant = firstOffer ? detectVariant(firstOffer?.title) : null;
-                      const helperVariantKey = getStatsKey3(helperModelKey, helperVariant, groupCond);
-                      const helperBaseKey = getStatsKey(helperModelKey, groupCond);
-                      const helperVariantStats = statsByModel[helperVariantKey] ?? null;
-                      const helperBaseStats = statsByModel[helperBaseKey] ?? stats;
+                      const bandValue = stats?.usedBand || g?.stats?.usedBand || null;
+                      const bandSampleRaw =
+                        stats?.bandSampleSize ?? stats?.n ?? stats?.sampleSize ?? g?.statsMeta?.bandSampleSize ?? null;
+                      const bandSample =
+                        Number.isFinite(Number(bandSampleRaw)) && Number(bandSampleRaw) > 0
+                          ? Number(bandSampleRaw)
+                          : null;
 
-                      const fair = fairPriceBadge(g.bestPrice, stats);
+                      const conditionValue =
+                        firstOffer?.conditionBand || firstOffer?.conditionId || firstOffer?.condition || null;
+                      const displayLabel = g.label || g.model;
+                      const imageUrl = g.image || firstOffer?.image || null;
+                      const retailerCount = Array.isArray(g.retailers) ? g.retailers.length : 0;
 
                       return (
                         <article
                           key={g.model}
-                          className="group overflow-hidden rounded-3xl border border-slate-200 bg-white/95 shadow-sm transition hover:shadow-xl"
+                          className="rounded-3xl border border-slate-200 bg-white/95 shadow-sm transition hover:shadow-xl"
                         >
-                          <div className="flex flex-col gap-6 p-6 lg:flex-row">
-                            <div className="flex items-center justify-center overflow-hidden rounded-2xl bg-slate-100 lg:w-56 lg:shrink-0">
-                              {g.image ? (
+                          <div className="flex flex-col gap-4 p-5 sm:flex-row sm:items-center">
+                            <div className="flex h-28 w-full items-center justify-center overflow-hidden rounded-2xl bg-slate-100 sm:h-32 sm:w-40">
+                              {imageUrl ? (
                                 // eslint-disable-next-line @next/next/no-img-element
-                                <img src={g.image} alt={g.model} className="h-full w-full object-contain" loading="lazy" />
+                                <img src={imageUrl} alt={displayLabel} className="h-full w-full object-contain" loading="lazy" />
                               ) : (
-                                <div className="flex h-40 w-full items-center justify-center text-xs text-slate-500">
+                                <div className="flex h-full w-full items-center justify-center text-xs text-slate-500">
                                   Image updating…
                                 </div>
                               )}
                             </div>
 
-                            <div className="flex flex-1 flex-col gap-6">
-                              <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
-                                <div className="min-w-0 space-y-3">
-                                  <div>
-                                    <h3 className="text-lg font-semibold text-slate-900 sm:text-xl">{g.model}</h3>
-                                    <p className="mt-1 text-sm text-slate-500">
-                                      {g.count} offer{g.count === 1 ? "" : "s"} · {g.retailers.join(", ")}
-                                    </p>
-                                  </div>
-
-                                  <div className="flex flex-wrap items-center gap-2 text-xs font-semibold text-slate-700">
-                                    {domDex && (
-                                      <span className="inline-flex items-center rounded-full bg-slate-100 px-2.5 py-1">
-                                        {domDex === "LEFT" ? "Left-hand" : "Right-hand"}
-                                      </span>
-                                    )}
-                                    {domHead && (
-                                      <span className="inline-flex items-center rounded-full bg-indigo-100 px-2.5 py-1 text-indigo-700">
-                                        {domHead === "MALLET" ? "Mallet" : "Blade"}
-                                      </span>
-                                    )}
-                                    {Number.isFinite(domLen) && (
-                                      <span className="inline-flex items-center rounded-full bg-amber-100 px-2.5 py-1 text-amber-800">
-                                        ~{domLen}&quot;
-                                      </span>
-                                    )}
-                                  </div>
-
-                                  {g.model ? <ConditionChips model={g.model} className="pt-1" /> : null}
-                                </div>
-
-                                <div className="flex flex-col items-start gap-2 sm:items-end">
-                                  <div className="inline-flex items-center gap-2 rounded-full bg-emerald-50 px-4 py-1.5 text-sm font-semibold text-emerald-700">
-                                    <span>{formatPrice(g.bestPrice, g.bestCurrency)}</span>
-                                    {fair && (
-                                      <span
-                                        className={`inline-flex items-center rounded-full px-2 py-0.5 text-[11px] font-semibold text-white ${
-                                          fair.tone === "emerald" ? "bg-emerald-600" : "bg-green-600"
-                                        }`}
-                                      >
-                                        {fair.label}
-                                      </span>
-                                    )}
-                                  </div>
-
-                                  {bestDelta && (
-                                    <span
-                                      className="text-xs font-medium text-emerald-700"
-                                      title={`Median ${formatPrice(med)} · Save ~${formatPrice(bestDelta.diff)} (~${bestDelta.pct.toFixed(0)}%)`}
-                                    >
-                                      Save {formatPrice(bestDelta.diff)} (~{bestDelta.pct.toFixed(0)}%)
-                                    </span>
-                                  )}
-
-                                  <SmartPriceBadge
-                                    price={Number(g.bestPrice)}
-                                    baseStats={helperBaseStats}
-                                    variantStats={helperVariantStats}
-                                    title={firstOffer?.title || g.model}
-                                    specs={firstOffer?.specs}
-                                    brand={g?.brand}
-                                    showHelper
-                                  />
-
-                                  <div className="flex flex-wrap items-center gap-2 pt-2">
-                                    <button
-                                      type="button"
-                                      disabled={!firstOfferId}
-                                      onClick={() => {
-                                        if (firstOffer) {
-                                          handleToggleCompare(firstOffer);
-                                        }
-                                      }}
-                                      aria-pressed={firstOfferCompared}
-                                      className={`inline-flex items-center gap-1 rounded-full px-3 py-1 text-xs font-semibold transition ${
-                                        firstOfferCompared
-                                          ? "border border-blue-600 bg-blue-600 text-white hover:border-blue-700 hover:bg-blue-700"
-                                          : "border border-slate-200 text-slate-700 hover:border-blue-300 hover:text-blue-700"
-                                      } disabled:cursor-not-allowed disabled:opacity-60`}
-                                      title={firstOfferCompared ? "Remove from compare" : "Add to compare"}
-                                    >
-                                      {firstOfferCompared ? "Remove" : "Compare"}
-                                    </button>
-
-                                    {bestUrl ? (
-                                      <a
-                                        href={bestUrl}
-                                        target="_blank"
-                                        rel="noreferrer"
-                                        className="inline-flex items-center rounded-full bg-slate-900 px-3 py-1 text-xs font-semibold text-white shadow-sm transition hover:bg-slate-700"
-                                      >
-                                        Open listing
-                                      </a>
-                                    ) : null}
-
-                                    <button
-                                      disabled={!bestUrl}
-                                      onClick={async () => {
-                                        if (!bestUrl) return;
-                                        await copyToClipboard(bestUrl);
-                                        setCopiedFor(g.model);
-                                        setTimeout(() => setCopiedFor((c) => (c === g.model ? "" : c)), 1500);
-                                      }}
-                                      className={`inline-flex items-center rounded-full border border-slate-200 px-3 py-1 text-[11px] font-medium transition ${
-                                        bestUrl ? "text-slate-700 hover:border-emerald-200 hover:text-emerald-700" : "opacity-50"
-                                      }`}
-                                      title="Copy best listing link"
-                                    >
-                                      {copiedFor === g.model ? "Copied!" : "Copy best"}
-                                    </button>
-                                  </div>
-                                </div>
-                              </div>
-
-                              <div className="grid gap-3 text-sm sm:grid-cols-3">
-                                <div className="rounded-2xl border border-slate-100 bg-slate-50/70 p-4">
-                                  <p className="text-xs uppercase tracking-wide text-slate-500">Median baseline</p>
-                                  <p className="mt-1 text-base font-semibold text-slate-900">
-                                    {Number.isFinite(med) ? formatPrice(med, g.bestCurrency) : "Building…"}
-                                  </p>
-                                </div>
-                                <div className="rounded-2xl border border-slate-100 bg-slate-50/70 p-4">
-                                  <p className="text-xs uppercase tracking-wide text-slate-500">Listings tracked</p>
-                                  <p className="mt-1 text-base font-semibold text-slate-900">{g.count}</p>
+                            <div className="flex flex-1 flex-col gap-3">
+                              <div className="flex items-start justify-between gap-3">
+                                <div className="min-w-0 space-y-1">
+                                  <h3 className="truncate text-base font-semibold text-slate-900 sm:text-lg">{displayLabel}</h3>
                                   <p className="text-xs text-slate-500">
-                                    Sample n {Number.isFinite(Number(stats?.n)) ? Number(stats.n) : "—"}
+                                    {g.count} listing{g.count === 1 ? "" : "s"}
+                                    {retailerCount ? <> · {retailerCount} seller{retailerCount === 1 ? "" : "s"}</> : null}
                                   </p>
-                                </div>
-                                <div className="rounded-2xl border border-slate-100 bg-slate-50/70 p-4">
-                                  <p className="text-xs uppercase tracking-wide text-slate-500">Recent lows</p>
-                                  <div className="mt-2 grid grid-cols-3 gap-2 text-xs font-medium text-slate-600">
-                                    <span>1d {formatPrice(Number(lows?.low1d))}</span>
-                                    <span>7d {formatPrice(Number(lows?.low7d))}</span>
-                                    <span>30d {formatPrice(Number(lows?.low30d))}</span>
-                                  </div>
                                 </div>
                               </div>
 
-                              {isOpen && Array.isArray(series) && series.length > 1 && (
-                                <div className="rounded-3xl border border-slate-100 bg-slate-50/70 p-4">
-                                  <PriceSparkline
-                                    data={series}
-                                    height={70}
-                                    showAverage
-                                    showMedian
-                                    className="h-[70px] text-sky-600"
-                                  />
-                                </div>
-                              )}
-
-                              <div className="flex flex-wrap items-center gap-2">
-                                <button
-                                  onClick={() => toggleExpand(g.model)}
-                                  className="inline-flex items-center rounded-full bg-slate-900 px-4 py-2 text-sm font-semibold text-white shadow-sm transition hover:bg-slate-700"
-                                >
-                                  {isOpen ? "Hide offers" : `View offers (${g.count})`}
-                                </button>
-                                {isOpen && g.count > 10 && (
-                                  <button
-                                    onClick={() => toggleShowAllOffers(g.model)}
-                                    className="inline-flex items-center rounded-full border border-slate-200 px-4 py-2 text-sm font-semibold text-slate-700 transition hover:border-emerald-200 hover:text-emerald-700"
-                                  >
-                                    {showAll ? "Show top 10" : "Show all"}
-                                  </button>
+                              <div className="flex flex-wrap items-center gap-2 text-xs text-slate-600">
+                                <ConditionPill condition={conditionValue} />
+                                <BandChip band={bandValue} sample={bandSample} />
+                                {domDex && (
+                                  <span className="inline-flex items-center rounded-full bg-slate-100 px-2 py-0.5 text-[11px] font-medium text-slate-700">
+                                    {domDex === "LEFT" ? "Left-hand" : "Right-hand"}
+                                  </span>
+                                )}
+                                {domHead && (
+                                  <span className="inline-flex items-center rounded-full bg-indigo-100 px-2 py-0.5 text-[11px] font-medium text-indigo-700">
+                                    {domHead === "MALLET" ? "Mallet" : "Blade"}
+                                  </span>
+                                )}
+                                {Number.isFinite(domLen) && (
+                                  <span className="inline-flex items-center rounded-full bg-amber-100 px-2 py-0.5 text-[11px] font-medium text-amber-800">
+                                    ~{domLen}"</span>
                                 )}
                               </div>
 
-                              {isOpen && (
-                                <ul className="mt-4 space-y-3">
-                                  {list.map((o) => {
-                                    const condParam =
-                                      (o?.conditionBand || o?.condition || "").toUpperCase() ||
-                                      selectedConditionBand(conds) ||
-                                      "";
+                              <div className="flex items-end justify-between gap-3 pt-1">
+                                <div>
+                                  <p className="text-xs text-slate-500">Best live price</p>
+                                  <p className="text-lg font-semibold text-slate-900">
+                                    {Number.isFinite(bestPriceValue) ? formatPrice(bestPriceValue, bestCurrency) : "—"}
+                                  </p>
+                                </div>
+                                {bestUrl ? (
+                                  <a
+                                    href={bestUrl}
+                                    target="_blank"
+                                    rel="noreferrer"
+                                    className="inline-flex items-center rounded-full bg-emerald-500 px-3 py-1.5 text-xs font-semibold text-slate-950 transition hover:bg-emerald-400"
+                                  >
+                                    View listing
+                                  </a>
+                                ) : null}
+                              </div>
 
-                                    const modelKey = getModelKey(o);
-                                    const variant = detectVariant(o?.title);
-                                    const variantKey = getStatsKey3(modelKey, variant, condParam);
-                                    const baseKey = getStatsKey(modelKey, condParam);
-                                    const variantStats = statsByModel[variantKey] ?? null;
-                                    const baseStats = statsByModel[baseKey] ?? stats;
-                                    const offerId = getOfferId(o);
-                                    const offerCompared = offerId ? compareIds.has(offerId) : false;
-
-                                    return (
-                                      <li
-                                        key={o.productId + o.url}
-                                        className="rounded-2xl border border-slate-200/80 bg-white/80 p-4 shadow-sm transition hover:border-emerald-200"
-                                      >
-                                        <div className="flex flex-col gap-3 md:flex-row md:items-start md:justify-between">
-                                          <div className="min-w-0 space-y-2">
-                                            <div className="text-sm font-semibold text-slate-900">{o.title}</div>
-                                            <div className="flex flex-wrap items-center gap-2 text-xs text-slate-600">
-                                              <ConditionPill condition={o.conditionBand || o.conditionId || o.condition} />
-                                              {(() => {
-                                                const sBase = baseStats;
-                                                const sVar = variantStats;
-                                                const variant = detectVariant(o?.title);
-                                                if (!variant || !sBase || !sVar || !Number.isFinite(sBase?.p50) || !Number.isFinite(sVar?.p50) || sBase.p50 <= 0) return null;
-                                                const delta = (sVar.p50 - sBase.p50) / sBase.p50;
-                                                if (Math.abs(delta) < 0.05) return null;
-                                                const pct = Math.round(Math.abs(delta) * 100);
-                                                const sign = delta > 0 ? "+" : "−";
-                                                return (
-                                                  <span className="inline-flex items-center rounded-full border border-slate-300 bg-white px-2 py-0.5 text-[11px] font-medium text-slate-700">
-                                                    {sign}
-                                                    {pct}% {delta > 0 ? "premium" : "discount"} ({variant})
-                                                  </span>
-                                                );
-                                              })()}
-                                            </div>
-                                            <div className="text-xs text-slate-500">
-                                              {o?.seller?.username && <>@{o.seller.username} · </>}
-                                              {typeof o?.seller?.feedbackPct === "number" && (
-                                                <>{o.seller.feedbackPct.toFixed(1)}% · </>
-                                              )}
-                                              {Number(o?.buying?.bidCount) > 0 && <>{o.buying.bidCount} bids · </>}
-                                              {(o.specs?.dexterity || "").toUpperCase() === "LEFT"
-                                                ? "LH"
-                                                : (o.specs?.dexterity || "").toUpperCase() === "RIGHT"
-                                                ? "RH"
-                                                : "—"}
-                                              {" · "}
-                                              {(o.specs?.headType || "").toUpperCase() || "—"}
-                                              {" · "}
-                                              {Number.isFinite(Number(o?.specs?.length)) ? `${o.specs.length}"` : "—"}
-                                              {o?.specs?.shaft && <> · {String(o.specs.shaft).toLowerCase()}</>}
-                                              {o?.specs?.hosel && <> · {o.specs.hosel}</>}
-                                              {o?.specs?.face && <> · {o.specs.face}</>}
-                                              {o?.specs?.grip && <> · {o.specs.grip}</>}
-                                              {o?.specs?.hasHeadcover && <> · HC</>}
-                                              {o?.specs?.toeHang && <> · {o.specs.toeHang} toe</>}
-                                              {Number.isFinite(Number(o?.specs?.loft)) && <> · {o.specs.loft}° loft</>}
-                                              {Number.isFinite(Number(o?.specs?.lie)) && <> · {o.specs.lie}° lie</>}
-                                              {o.createdAt && <> · listed {timeAgo(new Date(o.createdAt).getTime())}</>}
-                                            </div>
-                                          </div>
-
-                                          <div className="flex flex-col items-start gap-2 md:items-end">
-                                            <div className="flex flex-wrap items-center gap-2">
-                                              <SmartPriceBadge
-                                                price={Number(o.price)}
-                                                baseStats={baseStats}
-                                                variantStats={variantStats}
-                                                title={o.title}
-                                                specs={o.specs}
-                                                brand={g?.brand}
-                                              />
-                                              {(() => {
-  const s = (variantStats && Number(variantStats?.n) >= 10) ? variantStats : baseStats;
-  if (!s || typeof o.price !== "number") return null;
-  let g = gradeDeal({ total: o.price, p50: s.p50, p10: s.p10, p90: s.p90, dispersionRatio: s.dispersionRatio });
-  if (g && g.letter === "A" && typeof g.deltaPct === "number" && g.deltaPct <= -0.40) { g = { ...g, letter: "A+", color: "emerald" }; }
-  return g && g.letter ? <DealGradeBadge grade={g} /> : null;
-})()}
-                                            </div>
-                                            <div className="flex flex-wrap items-center gap-2 text-sm font-semibold text-slate-900">
-                                              {typeof o.price === "number" ? formatPrice(o.price, o.currency) : "—"}
-                                            </div>
-                                            <div className="flex flex-wrap items-center gap-2">
-                                              <button
-                                                type="button"
-                                                disabled={!offerId}
-                                                onClick={() => handleToggleCompare(o)}
-                                                aria-pressed={offerCompared}
-                                                className={`inline-flex items-center gap-1 rounded-full px-3 py-1.5 text-xs font-semibold transition ${
-                                                  offerCompared
-                                                    ? "border border-blue-600 bg-blue-600 text-white hover:border-blue-700 hover:bg-blue-700"
-                                                    : "border border-slate-200 text-slate-700 hover:border-blue-300 hover:text-blue-700"
-                                                } disabled:cursor-not-allowed disabled:opacity-60`}
-                                                title={offerCompared ? "Remove from compare" : "Add to compare"}
-                                              >
-                                                {offerCompared ? "Remove" : "Compare"}
-                                              </button>
-                                              <a
-                                                href={o.url}
-                                                target="_blank"
-                                                rel="noreferrer"
-                                                className="inline-flex items-center rounded-full bg-emerald-500 px-3 py-1 text-xs font-semibold text-slate-950 transition hover:bg-emerald-400"
-                                              >
-                                                View
-                                              </a>
-                                            </div>
-                                          </div>
-                                        </div>
-                                      </li>
-                                    );
-                                  })}
-                                </ul>
-                              )}
+                              <div className="flex flex-wrap items-center gap-2 pt-2">
+                                <button
+                                  onClick={() => toggleExpand(g.model)}
+                                  className="inline-flex items-center rounded-full bg-slate-900 px-4 py-1.5 text-sm font-semibold text-white transition hover:bg-slate-700"
+                                >
+                                  {isOpen ? "Hide offers" : `View offers (${g.count})`}
+                                </button>
+                                {isOpen && g.count > 10 ? (
+                                  <button
+                                    onClick={() => toggleShowAllOffers(g.model)}
+                                    className="inline-flex items-center rounded-full border border-slate-200 px-4 py-1.5 text-sm font-semibold text-slate-700 transition hover:border-emerald-200 hover:text-emerald-700"
+                                  >
+                                    {showAll ? "Show top 10" : "Show all"}
+                                  </button>
+                                ) : null}
+                              </div>
                             </div>
                           </div>
+
+                          {isOpen && list.length ? (
+                            <ul className="space-y-3 border-t border-slate-100 px-5 pb-5 pt-4">
+                              {list.map((o) => {
+                                const condParam =
+                                  (o?.conditionBand || o?.condition || "").toUpperCase() ||
+                                  selectedConditionBand(conds) ||
+                                  "";
+
+                                const modelKey = getModelKey(o);
+                                const variant = detectVariant(o?.title);
+                                const variantKey = getStatsKey3(modelKey, variant, condParam);
+                                const baseKey = getStatsKey(modelKey, condParam);
+                                const variantStats = statsByModel[variantKey] ?? null;
+                                const baseStats = statsByModel[baseKey] ?? stats;
+                                const bandForOffer = variantStats?.usedBand ?? baseStats?.usedBand ?? bandValue;
+                                const bandSampleOffer =
+                                  variantStats?.bandSampleSize ?? baseStats?.bandSampleSize ?? baseStats?.n ?? null;
+                                const offerId = getOfferId(o);
+                                const offerCompared = offerId ? compareIds.has(offerId) : false;
+                                const priceValue = Number(o.price);
+                                const dex = (o?.specs?.dexterity || "").toUpperCase();
+                                const head = (o?.specs?.headType || "").toUpperCase();
+                                const lengthValue = Number(o?.specs?.length);
+
+                                return (
+                                  <li
+                                    key={o.productId + o.url}
+                                    className="rounded-2xl border border-slate-200/80 bg-white/90 p-4 shadow-sm transition hover:border-emerald-200"
+                                  >
+                                    <div className="flex flex-col gap-3 sm:flex-row">
+                                      <div className="flex h-24 w-full items-center justify-center overflow-hidden rounded-xl bg-slate-100 sm:h-24 sm:w-24">
+                                        {o.image ? (
+                                          // eslint-disable-next-line @next/next/no-img-element
+                                          <img src={o.image} alt={o.title} className="h-full w-full object-contain" loading="lazy" />
+                                        ) : (
+                                          <div className="flex h-full w-full items-center justify-center text-xs text-slate-500">
+                                            Image updating…
+                                          </div>
+                                        )}
+                                      </div>
+                                      <div className="flex flex-1 flex-col gap-3">
+                                        <div className="flex items-start justify-between gap-3">
+                                          <div className="min-w-0">
+                                            <h4 className="line-clamp-2 text-sm font-semibold text-slate-900">{o.title}</h4>
+                                            <div className="mt-2 flex flex-wrap items-center gap-2 text-xs text-slate-600">
+                                              <ConditionPill condition={o.conditionBand || o.conditionId || o.condition} />
+                                              <BandChip band={bandForOffer} sample={bandSampleOffer} />
+                                              {dex === "LEFT" || dex === "RIGHT" ? (
+                                                <span className="inline-flex items-center rounded-full bg-slate-100 px-2 py-0.5 text-[10px] font-medium text-slate-700">
+                                                  {dex === "LEFT" ? "Left-hand" : "Right-hand"}
+                                                </span>
+                                              ) : null}
+                                              {head === "MALLET" || head === "BLADE" ? (
+                                                <span className="inline-flex items-center rounded-full bg-indigo-100 px-2 py-0.5 text-[10px] font-medium text-indigo-700">
+                                                  {head === "MALLET" ? "Mallet" : "Blade"}
+                                                </span>
+                                              ) : null}
+                                              {Number.isFinite(lengthValue) ? (
+                                                <span className="inline-flex items-center rounded-full bg-amber-100 px-2 py-0.5 text-[10px] font-medium text-amber-800">
+                                                  {`${lengthValue}"`}
+                                                </span>
+                                              ) : null}
+                                            </div>
+                                          </div>
+                                          <div className="text-right">
+                                            <p className="text-xs text-slate-500">Price</p>
+                                            <p className="text-base font-semibold text-slate-900">
+                                              {Number.isFinite(priceValue) ? formatPrice(priceValue, o.currency) : "—"}
+                                            </p>
+                                          </div>
+                                        </div>
+                                        <div className="flex flex-wrap items-center gap-2">
+                                          {offerId ? (
+                                            <button
+                                              type="button"
+                                              disabled={!offerId}
+                                              onClick={() => handleToggleCompare(o)}
+                                              aria-pressed={offerCompared}
+                                              className={`inline-flex items-center gap-1 rounded-full px-3 py-1 text-xs font-semibold transition ${
+                                                offerCompared
+                                                  ? "border border-blue-600 bg-blue-600 text-white hover:border-blue-700 hover:bg-blue-700"
+                                                  : "border border-slate-200 text-slate-700 hover:border-blue-300 hover:text-blue-700"
+                                              } disabled:cursor-not-allowed disabled:opacity-60`}
+                                            >
+                                              {offerCompared ? "Remove" : "Compare"}
+                                            </button>
+                                          ) : null}
+                                          {o.url ? (
+                                            <a
+                                              href={o.url}
+                                              target="_blank"
+                                              rel="noreferrer"
+                                              className="inline-flex items-center rounded-full bg-emerald-500 px-3 py-1 text-xs font-semibold text-slate-950 transition hover:bg-emerald-400"
+                                            >
+                                              View listing
+                                            </a>
+                                          ) : null}
+                                        </div>
+                                      </div>
+                                    </div>
+                                  </li>
+                                );
+                              })}
+                            </ul>
+                          ) : null}
                         </article>
                       );
                     })}
@@ -1635,129 +1492,88 @@ export default function PuttersPage() {
                       const stats = variantStats ?? baseStats;
                       const offerId = getOfferId(o);
                       const offerCompared = offerId ? compareIds.has(offerId) : false;
+                      const priceValue = Number(o.price);
+                      const dex = (o?.specs?.dexterity || "").toUpperCase();
+                      const head = (o?.specs?.headType || "").toUpperCase();
+                      const lengthValue = Number(o?.specs?.length);
+                      const bandValue = stats?.usedBand || null;
+                      const bandSample = stats?.bandSampleSize ?? stats?.n ?? null;
 
                       return (
                         <article
                           key={o.productId + o.url}
-                          className="group overflow-hidden rounded-3xl border border-slate-200 bg-white/95 shadow-sm transition hover:shadow-xl"
+                          className="overflow-hidden rounded-3xl border border-slate-200 bg-white/95 p-5 shadow-sm transition hover:shadow-xl"
                         >
-                          <div className="flex flex-col gap-5 p-5">
-                            <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:gap-6">
-                              <div className="flex items-center justify-center overflow-hidden rounded-2xl bg-slate-100 sm:w-48 sm:shrink-0">
-                                {o.image ? (
-                                  // eslint-disable-next-line @next/next/no-img-element
-                                  <img
-                                    src={o.image}
-                                    alt={o.title}
-                                    className="h-40 w-full object-contain sm:h-48"
-                                    loading="lazy"
-                                  />
-                                ) : (
-                                  <div className="flex h-40 w-full items-center justify-center text-xs text-slate-500">
-                                    Image updating…
-                                  </div>
-                                )}
-                              </div>
-                              <div className="flex flex-1 flex-col gap-4">
-                                <div>
+                          <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:gap-5">
+                            <div className="flex h-28 w-full items-center justify-center overflow-hidden rounded-2xl bg-slate-100 sm:h-32 sm:w-40">
+                              {o.image ? (
+                                // eslint-disable-next-line @next/next/no-img-element
+                                <img src={o.image} alt={o.title} className="h-full w-full object-contain" loading="lazy" />
+                              ) : (
+                                <div className="flex h-full w-full items-center justify-center text-xs text-slate-500">
+                                  Image updating…
+                                </div>
+                              )}
+                            </div>
+
+                            <div className="flex flex-1 flex-col gap-3">
+                              <div className="flex items-start justify-between gap-3">
+                                <div className="min-w-0">
                                   <h3 className="line-clamp-2 text-base font-semibold text-slate-900">{o.title}</h3>
                                   <div className="mt-2 flex flex-wrap items-center gap-2 text-xs text-slate-600">
                                     <ConditionPill condition={o.conditionBand || o.conditionId || o.condition} />
+                                    <BandChip band={bandValue} sample={bandSample} />
+                                    {dex === "LEFT" || dex === "RIGHT" ? (
+                                      <span className="inline-flex items-center rounded-full bg-slate-100 px-2 py-0.5 text-[10px] font-medium text-slate-700">
+                                        {dex === "LEFT" ? "Left-hand" : "Right-hand"}
+                                      </span>
+                                    ) : null}
+                                    {head === "MALLET" || head === "BLADE" ? (
+                                      <span className="inline-flex items-center rounded-full bg-indigo-100 px-2 py-0.5 text-[10px] font-medium text-indigo-700">
+                                        {head === "MALLET" ? "Mallet" : "Blade"}
+                                      </span>
+                                    ) : null}
+                                    {Number.isFinite(lengthValue) ? (
+                                      <span className="inline-flex items-center rounded-full bg-amber-100 px-2 py-0.5 text-[10px] font-medium text-amber-800">
+                                        {`${lengthValue}"`}
+                                      </span>
+                                    ) : null}
                                   </div>
-                                  <p className="mt-2 text-xs text-slate-500">
-                                    {o?.seller?.username && <>@{o.seller.username} · </>}
-                                    {typeof o?.seller?.feedbackPct === "number" && <>{o.seller.feedbackPct.toFixed(1)}% · </>}
-                                    {Number(o?.buying?.bidCount) > 0 && <>{o.buying.bidCount} bids · </>}
-                                    {(o.specs?.dexterity || "").toUpperCase() || "—"} · {(o.specs?.headType || "").toUpperCase() || "—"} ·
-                                    {Number.isFinite(Number(o?.specs?.length)) ? `${o.specs.length}"` : "—"}
-                                    {o?.specs?.shaft && <> · {String(o.specs.shaft).toLowerCase()}</>}
-                                    {o?.specs?.hosel && <> · {o.specs.hosel}</>}
-                                    {o?.specs?.face && <> · {o.specs.face}</>}
-                                    {o?.specs?.grip && <> · {o.specs.grip}</>}
-                                    {o?.specs?.hasHeadcover && <> · HC</>}
-                                    {o?.specs?.toeHang && <> · {o.specs.toeHang} toe</>}
-                                    {Number.isFinite(Number(o?.specs?.loft)) && <> · {o.specs.loft}° loft</>}
-                                    {Number.isFinite(Number(o?.specs?.lie)) && <> · {o.specs.lie}° lie</>}
-                                    {o.createdAt && (<> · listed {timeAgo(new Date(o.createdAt).getTime())}</>)}
+                                </div>
+                                <div className="text-right">
+                                  <p className="text-xs text-slate-500">Price</p>
+                                  <p className="text-lg font-semibold text-slate-900">
+                                    {Number.isFinite(priceValue) ? formatPrice(priceValue, o.currency) : "—"}
                                   </p>
                                 </div>
+                              </div>
 
-                                <div className="flex flex-wrap items-center justify-between gap-3 border-t border-slate-100 pt-4">
-                                  <div className="flex flex-wrap items-center gap-2">
-                                    <SmartPriceBadge
-                                      price={Number(o.price)}
-                                      baseStats={baseStats}
-                                      variantStats={variantStats}
-                                      title={o.title}
-                                      specs={o.specs}
-                                      brand={o.brand || ""}
-                                    />
-
-                                    {(() => {
-                                      if (!stats || typeof o.price !== "number") return null;
-                                      const base = stats;
-                                      let g = gradeDeal({
-                                        total: o.price,
-                                        p50: base?.p50,
-                                        p10: base?.p10,
-                                        p90: base?.p90,
-                                        dispersionRatio: base?.dispersionRatio,
-                                      });
-                                      if (g && g.letter === "A" && typeof g.deltaPct === "number" && g.deltaPct <= -0.4) {
-                                        g = { ...g, letter: "A+", color: "emerald" };
-                                      }
-                                      return g && g.letter ? <DealGradeBadge grade={g} /> : null;
-                                    })()}
-
-                                    <span className="text-lg font-semibold text-slate-900">{formatPrice(o.price, o.currency)}</span>
-
-                                    {(() => {
-                                      const p50 = stats?.p50;
-                                      if (
-                                        Number.isFinite(Number(p50)) &&
-                                        typeof o.price === "number" &&
-                                        o.price < Number(p50)
-                                      ) {
-                                        const save = Number(p50) - o.price;
-                                        const pct = Math.round((save / Number(p50)) * 100);
-                                        return (
-                                          <span
-                                            className="inline-flex items-center rounded-full bg-emerald-50 px-2 py-0.5 text-[11px] font-medium text-emerald-700"
-                                            title={`Median ${formatPrice(Number(p50))} · Save ~${formatPrice(save)} (~${pct}%)`}
-                                          >
-                                            Save {formatPrice(save)}
-                                          </span>
-                                        );
-                                      }
-                                      return null;
-                                    })()}
-                                  </div>
-
-                                  <div className="flex flex-wrap items-center gap-2">
-                                    <button
-                                      type="button"
-                                      disabled={!offerId}
-                                      onClick={() => handleToggleCompare(o)}
-                                      aria-pressed={offerCompared}
-                                      className={`inline-flex items-center gap-1 rounded-full px-3 py-1.5 text-xs font-semibold transition ${
-                                        offerCompared
-                                          ? "border border-blue-600 bg-blue-600 text-white hover:border-blue-700 hover:bg-blue-700"
-                                          : "border border-slate-200 text-slate-700 hover:border-blue-300 hover:text-blue-700"
-                                      } disabled:cursor-not-allowed disabled:opacity-60`}
-                                      title={offerCompared ? "Remove from compare" : "Add to compare"}
-                                    >
-                                      {offerCompared ? "Remove" : "Compare"}
-                                    </button>
-                                    <a
-                                      href={o.url}
-                                      target="_blank"
-                                      rel="noopener noreferrer"
-                                      className="inline-flex items-center rounded-full bg-emerald-500 px-3 py-1.5 text-sm font-semibold text-slate-950 transition hover:bg-emerald-400"
-                                    >
-                                      View
-                                    </a>
-                                  </div>
-                                </div>
+                              <div className="flex flex-wrap items-center gap-2">
+                                {offerId ? (
+                                  <button
+                                    type="button"
+                                    disabled={!offerId}
+                                    onClick={() => handleToggleCompare(o)}
+                                    aria-pressed={offerCompared}
+                                    className={`inline-flex items-center gap-1 rounded-full px-3 py-1 text-xs font-semibold transition ${
+                                      offerCompared
+                                        ? "border border-blue-600 bg-blue-600 text-white hover:border-blue-700 hover:bg-blue-700"
+                                        : "border border-slate-200 text-slate-700 hover:border-blue-300 hover:text-blue-700"
+                                    } disabled:cursor-not-allowed disabled:opacity-60`}
+                                  >
+                                    {offerCompared ? "Remove" : "Compare"}
+                                  </button>
+                                ) : null}
+                                {o.url ? (
+                                  <a
+                                    href={o.url}
+                                    target="_blank"
+                                    rel="noopener noreferrer"
+                                    className="inline-flex items-center rounded-full bg-emerald-500 px-3 py-1.5 text-sm font-semibold text-slate-950 transition hover:bg-emerald-400"
+                                  >
+                                    View listing
+                                  </a>
+                                ) : null}
                               </div>
                             </div>
                           </div>
