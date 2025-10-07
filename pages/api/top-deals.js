@@ -427,20 +427,40 @@ export function buildDealsFromRows(rows, limit, arg3) {
       queryVariants: { clean: cleanQuery || null, accessory: accessoryQuery || null },
     };
   });
-er ${token}`,
-          'Content-Type': 'application/json',
-          'X-EBAY-C-MARKETPLACE-ID': 'EBAY_US',
-        },
-      });
-      if (r.status === 404) continue; // ended or not found
-      if (!r.ok) continue; // be conservative
-      out.push(d);
-    } catch {
-      // network hiccup — keep it (fail-open) so page doesn’t go blank
-      out.push(d);
     }
   }
   return out;
+}
+
+
+// ---------- optional 404 verification against eBay (fail-open) ----------
+async function verifyDealsActive(deals = []) {
+  try {
+    const token = await getEbayToken();
+    const out = [];
+    for (const d of deals) {
+      try {
+        const id = d?.bestOffer?.itemId || d?.itemId || d?.id;
+        if (!id) { out.push(d); continue; }
+        const r = await fetch(`https://api.ebay.com/buy/browse/v1/item/${id}`, {
+          headers: {
+            Authorization: `Bearer ${token}`,
+            'Content-Type': 'application/json',
+            'X-EBAY-C-MARKETPLACE-ID': 'EBAY_US',
+          },
+        });
+        if (r.status === 404) continue; // ended or not found
+        if (!r.ok) continue; // be conservative
+        out.push(d);
+      } catch {
+        // network hiccup — keep it so page doesn’t go blank
+        out.push(d);
+      }
+    }
+    return out;
+  } catch {
+    return deals;
+  }
 }
 
 // ---------- main loader ----------
