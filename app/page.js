@@ -65,7 +65,7 @@ async function fetchJson(url, init) {
 export default async function Home() {
   const baseUrl = await resolveBaseUrl();
 
-  const topDealsPromise = fetchJson(`${baseUrl}/api/top-deals`, {
+  const topDealsPromise = fetchJson(`${baseUrl}/api/top-deals?cache=1&fast=1`, {
     next: { revalidate: 60 },
   });
 
@@ -113,6 +113,7 @@ export default async function Home() {
       bestOffer: item?.bestOffer || null,
       stats: item?.stats || null,
       statsMeta: item?.statsMeta || null,
+      modelKey: item?.modelKey || null,
       bestPrice: Number.isFinite(bestPrice) ? bestPrice : null,
       currency,
       image: item?.image || item?.bestOffer?.image || null,
