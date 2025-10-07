@@ -1285,65 +1285,74 @@ export default function PuttersPage() {
                       return (
                         <article
                           key={g.model}
-                          className="overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm transition hover:-translate-y-1 hover:shadow-lg"
+                          className="group overflow-hidden rounded-3xl border border-slate-200 bg-white/95 shadow-sm transition hover:shadow-xl"
                         >
-                          <div className="relative aspect-[4/3] w-full max-h-48 bg-slate-100">
-                            {g.image ? (
-                              // eslint-disable-next-line @next/next/no-img-element
-                              <img src={g.image} alt={g.model} className="h-full w-full object-contain" loading="lazy" />
-                            ) : (
-                              <div className="flex h-full w-full items-center justify-center text-xs text-slate-500">
-                                No image
-                              </div>
-                            )}
-                          </div>
+                          <div className="flex flex-col gap-6 p-6 lg:flex-row">
+                            <div className="flex items-center justify-center overflow-hidden rounded-2xl bg-slate-100 lg:w-56 lg:shrink-0">
+                              {g.image ? (
+                                // eslint-disable-next-line @next/next/no-img-element
+                                <img src={g.image} alt={g.model} className="h-full w-full object-contain" loading="lazy" />
+                              ) : (
+                                <div className="flex h-40 w-full items-center justify-center text-xs text-slate-500">
+                                  Image updating…
+                                </div>
+                              )}
+                            </div>
 
-                          <div className="p-5">
-                            <div className="flex items-start justify-between gap-3">
-                              <div className="min-w-0">
-                                <h3 className="text-lg font-semibold leading-tight text-slate-900">{g.model}</h3>
-                                <p className="mt-1 text-xs text-slate-500">
-                                  {g.count} offer{g.count === 1 ? "" : "s"} · {g.retailers.join(", ")}
-                                </p>
+                            <div className="flex flex-1 flex-col gap-6">
+                              <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
+                                <div className="min-w-0 space-y-3">
+                                  <div>
+                                    <h3 className="text-lg font-semibold text-slate-900 sm:text-xl">{g.model}</h3>
+                                    <p className="mt-1 text-sm text-slate-500">
+                                      {g.count} offer{g.count === 1 ? "" : "s"} · {g.retailers.join(", ")}
+                                    </p>
+                                  </div>
 
-                                <div className="mt-2 flex flex-wrap items-center gap-2">
-                                  {domDex && (
-                                    <span className="rounded-full bg-slate-100 px-2 py-0.5 text-[11px] font-medium text-slate-700">
-                                      {domDex === "LEFT" ? "Left-hand" : "Right-hand"}
-                                    </span>
-                                  )}
-                                  {domHead && (
-                                    <span className="rounded-full bg-indigo-100 px-2 py-0.5 text-[11px] font-medium text-indigo-700">
-                                      {domHead === "MALLET" ? "Mallet" : "Blade"}
-                                    </span>
-                                  )}
-                                  {Number.isFinite(domLen) && (
-                                    <span className="rounded-full bg-amber-100 px-2 py-0.5 text-[11px] font-medium text-amber-800">
-                                      ~{domLen}&quot;
-                                    </span>
-                                  )}
+                                  <div className="flex flex-wrap items-center gap-2 text-xs font-semibold text-slate-700">
+                                    {domDex && (
+                                      <span className="inline-flex items-center rounded-full bg-slate-100 px-2.5 py-1">
+                                        {domDex === "LEFT" ? "Left-hand" : "Right-hand"}
+                                      </span>
+                                    )}
+                                    {domHead && (
+                                      <span className="inline-flex items-center rounded-full bg-indigo-100 px-2.5 py-1 text-indigo-700">
+                                        {domHead === "MALLET" ? "Mallet" : "Blade"}
+                                      </span>
+                                    )}
+                                    {Number.isFinite(domLen) && (
+                                      <span className="inline-flex items-center rounded-full bg-amber-100 px-2.5 py-1 text-amber-800">
+                                        ~{domLen}&quot;
+                                      </span>
+                                    )}
+                                  </div>
 
-                                  <SmartPriceBadge
-                                    price={Number(g.bestPrice)}
-                                    baseStats={helperBaseStats}
-                                    variantStats={helperVariantStats}
-                                    className="ml-1"
-                                  />
-
-                                  {fair && (
-                                    <span
-                                      className={`rounded-full px-2 py-0.5 text-[11px] font-medium text-white ${fair.tone === "emerald" ? "bg-emerald-600" : "bg-green-600"}`}
-                                    >
-                                      {fair.label}
-                                    </span>
-                                  )}
+                                  {g.model ? <ConditionChips model={g.model} className="pt-1" /> : null}
                                 </div>
 
-                                {g.model ? (
-                                  <ConditionChips model={g.model} className="mt-2" />
-                                ) : null}
+                                <div className="flex flex-col items-start gap-2 sm:items-end">
+                                  <div className="inline-flex items-center gap-2 rounded-full bg-emerald-50 px-4 py-1.5 text-sm font-semibold text-emerald-700">
+                                    <span>{formatPrice(g.bestPrice, g.bestCurrency)}</span>
+                                    {fair && (
+                                      <span
+                                        className={`inline-flex items-center rounded-full px-2 py-0.5 text-[11px] font-semibold text-white ${
+                                          fair.tone === "emerald" ? "bg-emerald-600" : "bg-green-600"
+                                        }`}
+                                      >
+                                        {fair.label}
+                                      </span>
+                                    )}
+                                  </div>
 
-                                <div className="mt-2">
+                                  {bestDelta && (
+                                    <span
+                                      className="text-xs font-medium text-emerald-700"
+                                      title={`Median ${formatPrice(med)} · Save ~${formatPrice(bestDelta.diff)} (~${bestDelta.pct.toFixed(0)}%)`}
+                                    >
+                                      Save {formatPrice(bestDelta.diff)} (~{bestDelta.pct.toFixed(0)}%)
+                                    </span>
+                                  )}
+
                                   <SmartPriceBadge
                                     price={Number(g.bestPrice)}
                                     baseStats={helperBaseStats}
@@ -1353,211 +1362,234 @@ export default function PuttersPage() {
                                     brand={g?.brand}
                                     showHelper
                                   />
-                                </div>
 
-                                {isOpen && (
-                                  <div className="mt-2 text-xs text-slate-600">
-                                    <span className="mr-2 font-semibold text-slate-700">Lows:</span>
-                                    <span className="mr-3">1d {formatPrice(Number(lows?.low1d))}</span>
-                                    <span className="mr-3">7d {formatPrice(Number(lows?.low7d))}</span>
+                                  <div className="flex flex-wrap items-center gap-2 pt-2">
+                                    <button
+                                      type="button"
+                                      disabled={!firstOfferId}
+                                      onClick={() => {
+                                        if (firstOffer) {
+                                          handleToggleCompare(firstOffer);
+                                        }
+                                      }}
+                                      aria-pressed={firstOfferCompared}
+                                      className={`inline-flex items-center gap-1 rounded-full px-3 py-1 text-xs font-semibold transition ${
+                                        firstOfferCompared
+                                          ? "border border-blue-600 bg-blue-600 text-white hover:border-blue-700 hover:bg-blue-700"
+                                          : "border border-slate-200 text-slate-700 hover:border-blue-300 hover:text-blue-700"
+                                      } disabled:cursor-not-allowed disabled:opacity-60`}
+                                      title={firstOfferCompared ? "Remove from compare" : "Add to compare"}
+                                    >
+                                      {firstOfferCompared ? "Remove" : "Compare"}
+                                    </button>
+
+                                    {bestUrl ? (
+                                      <a
+                                        href={bestUrl}
+                                        target="_blank"
+                                        rel="noreferrer"
+                                        className="inline-flex items-center rounded-full bg-slate-900 px-3 py-1 text-xs font-semibold text-white shadow-sm transition hover:bg-slate-700"
+                                      >
+                                        Open listing
+                                      </a>
+                                    ) : null}
+
+                                    <button
+                                      disabled={!bestUrl}
+                                      onClick={async () => {
+                                        if (!bestUrl) return;
+                                        await copyToClipboard(bestUrl);
+                                        setCopiedFor(g.model);
+                                        setTimeout(() => setCopiedFor((c) => (c === g.model ? "" : c)), 1500);
+                                      }}
+                                      className={`inline-flex items-center rounded-full border border-slate-200 px-3 py-1 text-[11px] font-medium transition ${
+                                        bestUrl ? "text-slate-700 hover:border-emerald-200 hover:text-emerald-700" : "opacity-50"
+                                      }`}
+                                      title="Copy best listing link"
+                                    >
+                                      {copiedFor === g.model ? "Copied!" : "Copy best"}
+                                    </button>
+                                  </div>
+                                </div>
+                              </div>
+
+                              <div className="grid gap-3 text-sm sm:grid-cols-3">
+                                <div className="rounded-2xl border border-slate-100 bg-slate-50/70 p-4">
+                                  <p className="text-xs uppercase tracking-wide text-slate-500">Median baseline</p>
+                                  <p className="mt-1 text-base font-semibold text-slate-900">
+                                    {Number.isFinite(med) ? formatPrice(med, g.bestCurrency) : "Building…"}
+                                  </p>
+                                </div>
+                                <div className="rounded-2xl border border-slate-100 bg-slate-50/70 p-4">
+                                  <p className="text-xs uppercase tracking-wide text-slate-500">Listings tracked</p>
+                                  <p className="mt-1 text-base font-semibold text-slate-900">{g.count}</p>
+                                  <p className="text-xs text-slate-500">
+                                    Sample n {Number.isFinite(Number(stats?.n)) ? Number(stats.n) : "—"}
+                                  </p>
+                                </div>
+                                <div className="rounded-2xl border border-slate-100 bg-slate-50/70 p-4">
+                                  <p className="text-xs uppercase tracking-wide text-slate-500">Recent lows</p>
+                                  <div className="mt-2 grid grid-cols-3 gap-2 text-xs font-medium text-slate-600">
+                                    <span>1d {formatPrice(Number(lows?.low1d))}</span>
+                                    <span>7d {formatPrice(Number(lows?.low7d))}</span>
                                     <span>30d {formatPrice(Number(lows?.low30d))}</span>
                                   </div>
-                                )}
-                              </div>
-
-                              <div className="flex flex-col items-end gap-1">
-                                <button
-                                  type="button"
-                                  disabled={!firstOfferId}
-                                  onClick={() => {
-                                    if (firstOffer) {
-                                      handleToggleCompare(firstOffer);
-                                    }
-                                  }}
-                                  aria-pressed={firstOfferCompared}
-                                  className={`inline-flex items-center gap-1 rounded-full px-3 py-1 text-xs font-semibold transition ${
-                                    firstOfferCompared
-                                      ? "border border-blue-600 bg-blue-600 text-white hover:border-blue-700 hover:bg-blue-700"
-                                      : "border border-slate-200 text-slate-700 hover:border-blue-300 hover:text-blue-700"
-                                  } disabled:cursor-not-allowed disabled:opacity-60`}
-                                  title={firstOfferCompared ? "Remove from compare" : "Add to compare"}
-                                >
-                                  {firstOfferCompared ? "Remove" : "Compare"}
-                                </button>
-
-                                <div className="shrink-0 rounded-full bg-emerald-100 px-3 py-1 text-xs font-semibold text-emerald-700">
-                                  Best: {formatPrice(g.bestPrice, g.bestCurrency)}
                                 </div>
-                                {bestDelta && (
-                                  <div
-                                    className="rounded-full bg-emerald-50 px-3 py-1 text-[11px] font-medium text-emerald-700"
-                                    title={`Median ${formatPrice(med)} · Save ~${formatPrice(bestDelta.diff)} (~${bestDelta.pct.toFixed(0)}%)`}
-                                  >
-                                    Save {formatPrice(bestDelta.diff)} (~{bestDelta.pct.toFixed(0)}%)
-                                  </div>
-                                )}
-
-                                <button
-                                  disabled={!bestUrl}
-                                  onClick={async () => {
-                                    if (!bestUrl) return;
-                                    await copyToClipboard(bestUrl);
-                                    setCopiedFor(g.model);
-                                    setTimeout(() => setCopiedFor((c) => (c === g.model ? "" : c)), 1500);
-                                  }}
-                                  className={`mt-1 rounded-full border border-slate-200 px-3 py-1 text-[11px] font-medium transition ${bestUrl ? "text-slate-700 hover:border-emerald-200 hover:text-emerald-700" : "opacity-50"}`}
-                                  title="Copy best listing link"
-                                >
-                                  {copiedFor === g.model ? "Copied!" : "Copy best"}
-                                </button>
                               </div>
-                            </div>
 
-                            {isOpen && Array.isArray(series) && series.length > 1 && (
-                              <div className="mt-4">
-                                <PriceSparkline
-                                  data={series}
-                                  height={70}
-                                  showAverage
-                                  showMedian
-                                  className="h-[70px] text-sky-600"
-                                />
-                              </div>
-                            )}
-
-                            <div className="mt-4 flex gap-2">
-                              <button
-                                onClick={() => toggleExpand(g.model)}
-                                className="w-full rounded-full border border-slate-200 px-3 py-2 text-sm font-semibold text-slate-700 transition hover:border-emerald-200 hover:text-emerald-700"
-                              >
-                                {isOpen ? "Hide offers" : `View offers (${g.count})`}
-                              </button>
-                              {isOpen && g.count > 10 && (
-                                <button
-                                  onClick={() => toggleShowAllOffers(g.model)}
-                                  className="rounded-full border border-slate-200 px-3 py-2 text-sm font-semibold text-slate-700 transition hover:border-emerald-200 hover:text-emerald-700"
-                                >
-                                  {showAll ? "Show top 10" : "Show all"}
-                                </button>
+                              {isOpen && Array.isArray(series) && series.length > 1 && (
+                                <div className="rounded-3xl border border-slate-100 bg-slate-50/70 p-4">
+                                  <PriceSparkline
+                                    data={series}
+                                    height={70}
+                                    showAverage
+                                    showMedian
+                                    className="h-[70px] text-sky-600"
+                                  />
+                                </div>
                               )}
-                            </div>
 
-                            {isOpen && (
-                              <ul className="mt-4 space-y-3">
-                                {list.map((o) => {
-                                  const condParam =
-                                    (o?.conditionBand || o?.condition || "").toUpperCase() ||
-                                    selectedConditionBand(conds) ||
-                                    "";
+                              <div className="flex flex-wrap items-center gap-2">
+                                <button
+                                  onClick={() => toggleExpand(g.model)}
+                                  className="inline-flex items-center rounded-full bg-slate-900 px-4 py-2 text-sm font-semibold text-white shadow-sm transition hover:bg-slate-700"
+                                >
+                                  {isOpen ? "Hide offers" : `View offers (${g.count})`}
+                                </button>
+                                {isOpen && g.count > 10 && (
+                                  <button
+                                    onClick={() => toggleShowAllOffers(g.model)}
+                                    className="inline-flex items-center rounded-full border border-slate-200 px-4 py-2 text-sm font-semibold text-slate-700 transition hover:border-emerald-200 hover:text-emerald-700"
+                                  >
+                                    {showAll ? "Show top 10" : "Show all"}
+                                  </button>
+                                )}
+                              </div>
 
-                                  const modelKey = getModelKey(o);
-                                  const variant = detectVariant(o?.title);
-                                  const variantKey = getStatsKey3(modelKey, variant, condParam);
-                                  const baseKey = getStatsKey(modelKey, condParam);
-                                  const variantStats = statsByModel[variantKey] ?? null;
-                                  const baseStats = statsByModel[baseKey] ?? stats;
-                                  const offerId = getOfferId(o);
-                                  const offerCompared = offerId ? compareIds.has(offerId) : false;
+                              {isOpen && (
+                                <ul className="mt-4 space-y-3">
+                                  {list.map((o) => {
+                                    const condParam =
+                                      (o?.conditionBand || o?.condition || "").toUpperCase() ||
+                                      selectedConditionBand(conds) ||
+                                      "";
 
-                                  return (
-                                    <li
-                                      key={o.productId + o.url}
-                                      className="flex flex-col gap-3 rounded-2xl border border-slate-200 bg-slate-50 p-3 text-sm text-slate-700 sm:flex-row sm:items-center sm:justify-between"
-                                    >
-                                      <div className="flex flex-1 flex-col gap-1">
-                                        <div className="font-semibold text-slate-900">{o.title}</div>
-                                        <div className="mt-1 flex items-center gap-2">
-                                          <ConditionPill condition={o.conditionBand || o.conditionId || o.condition} />
-                                          {(() => {
-                                            const sBase = baseStats;
-                                            const sVar = variantStats;
-                                            const variant = detectVariant(o?.title);
-                                            if (!variant || !sBase || !sVar || !Number.isFinite(sBase?.p50) || !Number.isFinite(sVar?.p50) || sBase.p50 <= 0) return null;
-                                            const delta = (sVar.p50 - sBase.p50) / sBase.p50;
-                                            if (Math.abs(delta) < 0.05) return null;
-                                            const pct = Math.round(Math.abs(delta) * 100);
-                                            const sign = delta > 0 ? '+' : '−';
-                                            return (
-                                              <span className="inline-flex items-center rounded-full border border-slate-300 bg-white px-2 py-0.5 text-[11px] font-medium text-slate-700">
-                                                {sign}{pct}% {delta>0? 'premium' : 'discount'} ({variant})
-                                              </span>
-                                            );
-                                          })()}
-                                        </div>
-                                        <div className="text-xs text-slate-500">
-                                          {o?.seller?.username && <>@{o.seller.username} · </>}
-                                          {typeof o?.seller?.feedbackPct === "number" && (
-                                            <>{o.seller.feedbackPct.toFixed(1)}% · </>
-                                          )}
-                                          {Number(o?.buying?.bidCount) > 0 && <>{o.buying.bidCount} bids · </>}
-                                          {(o.specs?.dexterity || "").toUpperCase() === "LEFT"
-                                            ? "LH"
-                                            : (o.specs?.dexterity || "").toUpperCase() === "RIGHT"
-                                            ? "RH"
-                                            : "—"}
-                                          {" · "}
-                                          {(o.specs?.headType || "").toUpperCase() || "—"}
-                                          {" · "}
-                                          {Number.isFinite(Number(o?.specs?.length)) ? `${o.specs.length}"` : "—"}
-                                          {o?.specs?.shaft && <> · {String(o.specs.shaft).toLowerCase()}</>}
-                                          {o?.specs?.hosel && <> · {o.specs.hosel}</>}
-                                          {o?.specs?.face && <> · {o.specs.face}</>}
-                                          {o?.specs?.grip && <> · {o.specs.grip}</>}
-                                          {o?.specs?.hasHeadcover && <> · HC</>}
-                                          {o?.specs?.toeHang && <> · {o.specs.toeHang} toe</>}
-                                          {Number.isFinite(Number(o?.specs?.loft)) && <> · {o.specs.loft}° loft</>}
-                                          {Number.isFinite(Number(o?.specs?.lie)) && <> · {o.specs.lie}° lie</>}
-                                          {o.createdAt && <> · listed {timeAgo(new Date(o.createdAt).getTime())}</>}
-                                        </div>
-                                      </div>
+                                    const modelKey = getModelKey(o);
+                                    const variant = detectVariant(o?.title);
+                                    const variantKey = getStatsKey3(modelKey, variant, condParam);
+                                    const baseKey = getStatsKey(modelKey, condParam);
+                                    const variantStats = statsByModel[variantKey] ?? null;
+                                    const baseStats = statsByModel[baseKey] ?? stats;
+                                    const offerId = getOfferId(o);
+                                    const offerCompared = offerId ? compareIds.has(offerId) : false;
 
-                                      <div className="flex flex-wrap items-center gap-3 sm:flex-nowrap">
-                                        <SmartPriceBadge
-                                          price={Number(o.price)}
-                                          baseStats={baseStats}
-                                          variantStats={variantStats}
-                                          title={o.title}
-                                          specs={o.specs}
-                                          brand={g?.brand}
-                                        />
-                                        {(() => {
+                                    return (
+                                      <li
+                                        key={o.productId + o.url}
+                                        className="rounded-2xl border border-slate-200/80 bg-white/80 p-4 shadow-sm transition hover:border-emerald-200"
+                                      >
+                                        <div className="flex flex-col gap-3 md:flex-row md:items-start md:justify-between">
+                                          <div className="min-w-0 space-y-2">
+                                            <div className="text-sm font-semibold text-slate-900">{o.title}</div>
+                                            <div className="flex flex-wrap items-center gap-2 text-xs text-slate-600">
+                                              <ConditionPill condition={o.conditionBand || o.conditionId || o.condition} />
+                                              {(() => {
+                                                const sBase = baseStats;
+                                                const sVar = variantStats;
+                                                const variant = detectVariant(o?.title);
+                                                if (!variant || !sBase || !sVar || !Number.isFinite(sBase?.p50) || !Number.isFinite(sVar?.p50) || sBase.p50 <= 0) return null;
+                                                const delta = (sVar.p50 - sBase.p50) / sBase.p50;
+                                                if (Math.abs(delta) < 0.05) return null;
+                                                const pct = Math.round(Math.abs(delta) * 100);
+                                                const sign = delta > 0 ? "+" : "−";
+                                                return (
+                                                  <span className="inline-flex items-center rounded-full border border-slate-300 bg-white px-2 py-0.5 text-[11px] font-medium text-slate-700">
+                                                    {sign}
+                                                    {pct}% {delta > 0 ? "premium" : "discount"} ({variant})
+                                                  </span>
+                                                );
+                                              })()}
+                                            </div>
+                                            <div className="text-xs text-slate-500">
+                                              {o?.seller?.username && <>@{o.seller.username} · </>}
+                                              {typeof o?.seller?.feedbackPct === "number" && (
+                                                <>{o.seller.feedbackPct.toFixed(1)}% · </>
+                                              )}
+                                              {Number(o?.buying?.bidCount) > 0 && <>{o.buying.bidCount} bids · </>}
+                                              {(o.specs?.dexterity || "").toUpperCase() === "LEFT"
+                                                ? "LH"
+                                                : (o.specs?.dexterity || "").toUpperCase() === "RIGHT"
+                                                ? "RH"
+                                                : "—"}
+                                              {" · "}
+                                              {(o.specs?.headType || "").toUpperCase() || "—"}
+                                              {" · "}
+                                              {Number.isFinite(Number(o?.specs?.length)) ? `${o.specs.length}"` : "—"}
+                                              {o?.specs?.shaft && <> · {String(o.specs.shaft).toLowerCase()}</>}
+                                              {o?.specs?.hosel && <> · {o.specs.hosel}</>}
+                                              {o?.specs?.face && <> · {o.specs.face}</>}
+                                              {o?.specs?.grip && <> · {o.specs.grip}</>}
+                                              {o?.specs?.hasHeadcover && <> · HC</>}
+                                              {o?.specs?.toeHang && <> · {o.specs.toeHang} toe</>}
+                                              {Number.isFinite(Number(o?.specs?.loft)) && <> · {o.specs.loft}° loft</>}
+                                              {Number.isFinite(Number(o?.specs?.lie)) && <> · {o.specs.lie}° lie</>}
+                                              {o.createdAt && <> · listed {timeAgo(new Date(o.createdAt).getTime())}</>}
+                                            </div>
+                                          </div>
+
+                                          <div className="flex flex-col items-start gap-2 md:items-end">
+                                            <div className="flex flex-wrap items-center gap-2">
+                                              <SmartPriceBadge
+                                                price={Number(o.price)}
+                                                baseStats={baseStats}
+                                                variantStats={variantStats}
+                                                title={o.title}
+                                                specs={o.specs}
+                                                brand={g?.brand}
+                                              />
+                                              {(() => {
   const s = (variantStats && Number(variantStats?.n) >= 10) ? variantStats : baseStats;
   if (!s || typeof o.price !== "number") return null;
   let g = gradeDeal({ total: o.price, p50: s.p50, p10: s.p10, p90: s.p90, dispersionRatio: s.dispersionRatio });
   if (g && g.letter === "A" && typeof g.deltaPct === "number" && g.deltaPct <= -0.40) { g = { ...g, letter: "A+", color: "emerald" }; }
   return g && g.letter ? <DealGradeBadge grade={g} /> : null;
 })()}
-<span className="text-sm font-semibold text-slate-900">
-                                          {typeof o.price === "number" ? formatPrice(o.price, o.currency) : "—"}
-                                        </span>
-                                        <button
-                                          type="button"
-                                          disabled={!offerId}
-                                          onClick={() => handleToggleCompare(o)}
-                                          aria-pressed={offerCompared}
-                                          className={`inline-flex items-center gap-1 rounded-full px-3 py-1.5 text-xs font-semibold transition ${
-                                            offerCompared
-                                              ? "border border-blue-600 bg-blue-600 text-white hover:border-blue-700 hover:bg-blue-700"
-                                              : "border border-slate-200 text-slate-700 hover:border-blue-300 hover:text-blue-700"
-                                          } disabled:cursor-not-allowed disabled:opacity-60`}
-                                          title={offerCompared ? "Remove from compare" : "Add to compare"}
-                                        >
-                                          {offerCompared ? "Remove" : "Compare"}
-                                        </button>
-                                        <a
-                                          href={o.url}
-                                          target="_blank"
-                                          rel="noreferrer"
-                                          className="rounded-full bg-emerald-500 px-3 py-1 text-xs font-semibold text-slate-950 transition hover:bg-emerald-400"
-                                        >
-                                          View
-                                        </a>
-                                      </div>
-                                    </li>
-                                  );
-                                })}
-                              </ul>
-                            )}
+                                            </div>
+                                            <div className="flex flex-wrap items-center gap-2 text-sm font-semibold text-slate-900">
+                                              {typeof o.price === "number" ? formatPrice(o.price, o.currency) : "—"}
+                                            </div>
+                                            <div className="flex flex-wrap items-center gap-2">
+                                              <button
+                                                type="button"
+                                                disabled={!offerId}
+                                                onClick={() => handleToggleCompare(o)}
+                                                aria-pressed={offerCompared}
+                                                className={`inline-flex items-center gap-1 rounded-full px-3 py-1.5 text-xs font-semibold transition ${
+                                                  offerCompared
+                                                    ? "border border-blue-600 bg-blue-600 text-white hover:border-blue-700 hover:bg-blue-700"
+                                                    : "border border-slate-200 text-slate-700 hover:border-blue-300 hover:text-blue-700"
+                                                } disabled:cursor-not-allowed disabled:opacity-60`}
+                                                title={offerCompared ? "Remove from compare" : "Add to compare"}
+                                              >
+                                                {offerCompared ? "Remove" : "Compare"}
+                                              </button>
+                                              <a
+                                                href={o.url}
+                                                target="_blank"
+                                                rel="noreferrer"
+                                                className="inline-flex items-center rounded-full bg-emerald-500 px-3 py-1 text-xs font-semibold text-slate-950 transition hover:bg-emerald-400"
+                                              >
+                                                View
+                                              </a>
+                                            </div>
+                                          </div>
+                                        </div>
+                                      </li>
+                                    );
+                                  })}
+                                </ul>
+                              )}
+                            </div>
                           </div>
                         </article>
                       );
@@ -1607,94 +1639,125 @@ export default function PuttersPage() {
                       return (
                         <article
                           key={o.productId + o.url}
-                          className="overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm transition hover:-translate-y-1 hover:shadow-lg"
+                          className="group overflow-hidden rounded-3xl border border-slate-200 bg-white/95 shadow-sm transition hover:shadow-xl"
                         >
-                          <div className="relative aspect-[4/3] w-full bg-slate-100">
-                            {o.image ? (
-                              // eslint-disable-next-line @next/next/no-img-element
-                              <img src={o.image} alt={o.title} className="h-full w-full object-contain" loading="lazy" />
-                            ) : (
-                              <div className="flex h-full w-full items-center justify-center text-xs text-slate-500">No image</div>
-                            )}
-                          </div>
-                          <div className="p-5">
-                            <h3 className="line-clamp-2 text-sm font-semibold text-slate-900">{o.title}</h3>
-                            <p className="mt-1 text-xs text-slate-500">
-                              {o?.seller?.username && <>@{o.seller.username} · </>}
-                              {typeof o?.seller?.feedbackPct === "number" && <>{o.seller.feedbackPct.toFixed(1)}% · </>}
-                              {Number(o?.buying?.bidCount) > 0 && <>{o.buying.bidCount} bids · </>}
-                              {(o.specs?.dexterity || "").toUpperCase() || "—"} · {(o.specs?.headType || "").toUpperCase() || "—"} ·
-                              {Number.isFinite(Number(o?.specs?.length)) ? `${o.specs.length}"` : "—"}
-                              {o?.specs?.shaft && <> · {String(o.specs.shaft).toLowerCase()}</>}
-                              {o?.specs?.hosel && <> · {o.specs.hosel}</>}
-                              {o?.specs?.face && <> · {o.specs.face}</>}
-                              {o?.specs?.grip && <> · {o.specs.grip}</>}
-                              {o?.specs?.hasHeadcover && <> · HC</>}
-                              {o?.specs?.toeHang && <> · {o.specs.toeHang} toe</>}
-                              {Number.isFinite(Number(o?.specs?.loft)) && <> · {o.specs.loft}° loft</>}
-                              {Number.isFinite(Number(o?.specs?.lie)) && <> · {o.specs.lie}° lie</>}
-                              {o.createdAt && (<> · listed {timeAgo(new Date(o.createdAt).getTime())}</>)}
-                            </p>
-
-                            <div className="mt-4 flex items-center justify-between">
-                              <div className="flex items-center gap-2">
-                                <SmartPriceBadge
-                                  price={Number(o.price)}
-                                  baseStats={baseStats}
-                                  variantStats={variantStats}
-                                  title={o.title}
-                                  specs={o.specs}
-                                  brand={o.brand || ""}
-                                  className="mr-2"
-                                />
-
-                                <span className="text-base font-semibold text-slate-900">{formatPrice(o.price, o.currency)}</span>
-
-                                {(() => {
-                                  const p50 = stats?.p50;
-                                  if (
-                                    Number.isFinite(Number(p50)) &&
-                                    typeof o.price === "number" &&
-                                    o.price < Number(p50)
-                                  ) {
-                                    const save = Number(p50) - o.price;
-                                    const pct = Math.round((save / Number(p50)) * 100);
-                                    return (
-                                      <span
-                                        className="rounded-full bg-emerald-50 px-2 py-0.5 text-[11px] font-medium text-emerald-700"
-                                        title={`Median ${formatPrice(Number(p50))} · Save ~${formatPrice(save)} (~${pct}%)`}
-                                      >
-                                        Save {formatPrice(save)}
-                                      </span>
-                                    );
-                                  }
-                                  return null;
-                                })()}
+                          <div className="flex flex-col gap-5 p-5">
+                            <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:gap-6">
+                              <div className="flex items-center justify-center overflow-hidden rounded-2xl bg-slate-100 sm:w-48 sm:shrink-0">
+                                {o.image ? (
+                                  // eslint-disable-next-line @next/next/no-img-element
+                                  <img
+                                    src={o.image}
+                                    alt={o.title}
+                                    className="h-40 w-full object-contain sm:h-48"
+                                    loading="lazy"
+                                  />
+                                ) : (
+                                  <div className="flex h-40 w-full items-center justify-center text-xs text-slate-500">
+                                    Image updating…
+                                  </div>
+                                )}
                               </div>
+                              <div className="flex flex-1 flex-col gap-4">
+                                <div>
+                                  <h3 className="line-clamp-2 text-base font-semibold text-slate-900">{o.title}</h3>
+                                  <div className="mt-2 flex flex-wrap items-center gap-2 text-xs text-slate-600">
+                                    <ConditionPill condition={o.conditionBand || o.conditionId || o.condition} />
+                                  </div>
+                                  <p className="mt-2 text-xs text-slate-500">
+                                    {o?.seller?.username && <>@{o.seller.username} · </>}
+                                    {typeof o?.seller?.feedbackPct === "number" && <>{o.seller.feedbackPct.toFixed(1)}% · </>}
+                                    {Number(o?.buying?.bidCount) > 0 && <>{o.buying.bidCount} bids · </>}
+                                    {(o.specs?.dexterity || "").toUpperCase() || "—"} · {(o.specs?.headType || "").toUpperCase() || "—"} ·
+                                    {Number.isFinite(Number(o?.specs?.length)) ? `${o.specs.length}"` : "—"}
+                                    {o?.specs?.shaft && <> · {String(o.specs.shaft).toLowerCase()}</>}
+                                    {o?.specs?.hosel && <> · {o.specs.hosel}</>}
+                                    {o?.specs?.face && <> · {o.specs.face}</>}
+                                    {o?.specs?.grip && <> · {o.specs.grip}</>}
+                                    {o?.specs?.hasHeadcover && <> · HC</>}
+                                    {o?.specs?.toeHang && <> · {o.specs.toeHang} toe</>}
+                                    {Number.isFinite(Number(o?.specs?.loft)) && <> · {o.specs.loft}° loft</>}
+                                    {Number.isFinite(Number(o?.specs?.lie)) && <> · {o.specs.lie}° lie</>}
+                                    {o.createdAt && (<> · listed {timeAgo(new Date(o.createdAt).getTime())}</>)}
+                                  </p>
+                                </div>
 
-                              <div className="flex items-center gap-2">
-                                <button
-                                  type="button"
-                                  disabled={!offerId}
-                                  onClick={() => handleToggleCompare(o)}
-                                  aria-pressed={offerCompared}
-                                  className={`inline-flex items-center gap-1 rounded-full px-3 py-1.5 text-xs font-semibold transition ${
-                                    offerCompared
-                                      ? "border border-blue-600 bg-blue-600 text-white hover:border-blue-700 hover:bg-blue-700"
-                                      : "border border-slate-200 text-slate-700 hover:border-blue-300 hover:text-blue-700"
-                                  } disabled:cursor-not-allowed disabled:opacity-60`}
-                                  title={offerCompared ? "Remove from compare" : "Add to compare"}
-                                >
-                                  {offerCompared ? "Remove" : "Compare"}
-                                </button>
-                                <a
-                                  href={o.url}
-                                  target="_blank"
-                                  rel="noopener noreferrer"
-                                  className="inline-flex items-center rounded-full bg-emerald-500 px-3 py-1.5 text-sm font-semibold text-slate-950 transition hover:bg-emerald-400"
-                                >
-                                  View
-                                </a>
+                                <div className="flex flex-wrap items-center justify-between gap-3 border-t border-slate-100 pt-4">
+                                  <div className="flex flex-wrap items-center gap-2">
+                                    <SmartPriceBadge
+                                      price={Number(o.price)}
+                                      baseStats={baseStats}
+                                      variantStats={variantStats}
+                                      title={o.title}
+                                      specs={o.specs}
+                                      brand={o.brand || ""}
+                                    />
+
+                                    {(() => {
+                                      if (!stats || typeof o.price !== "number") return null;
+                                      const base = stats;
+                                      let g = gradeDeal({
+                                        total: o.price,
+                                        p50: base?.p50,
+                                        p10: base?.p10,
+                                        p90: base?.p90,
+                                        dispersionRatio: base?.dispersionRatio,
+                                      });
+                                      if (g && g.letter === "A" && typeof g.deltaPct === "number" && g.deltaPct <= -0.4) {
+                                        g = { ...g, letter: "A+", color: "emerald" };
+                                      }
+                                      return g && g.letter ? <DealGradeBadge grade={g} /> : null;
+                                    })()}
+
+                                    <span className="text-lg font-semibold text-slate-900">{formatPrice(o.price, o.currency)}</span>
+
+                                    {(() => {
+                                      const p50 = stats?.p50;
+                                      if (
+                                        Number.isFinite(Number(p50)) &&
+                                        typeof o.price === "number" &&
+                                        o.price < Number(p50)
+                                      ) {
+                                        const save = Number(p50) - o.price;
+                                        const pct = Math.round((save / Number(p50)) * 100);
+                                        return (
+                                          <span
+                                            className="inline-flex items-center rounded-full bg-emerald-50 px-2 py-0.5 text-[11px] font-medium text-emerald-700"
+                                            title={`Median ${formatPrice(Number(p50))} · Save ~${formatPrice(save)} (~${pct}%)`}
+                                          >
+                                            Save {formatPrice(save)}
+                                          </span>
+                                        );
+                                      }
+                                      return null;
+                                    })()}
+                                  </div>
+
+                                  <div className="flex flex-wrap items-center gap-2">
+                                    <button
+                                      type="button"
+                                      disabled={!offerId}
+                                      onClick={() => handleToggleCompare(o)}
+                                      aria-pressed={offerCompared}
+                                      className={`inline-flex items-center gap-1 rounded-full px-3 py-1.5 text-xs font-semibold transition ${
+                                        offerCompared
+                                          ? "border border-blue-600 bg-blue-600 text-white hover:border-blue-700 hover:bg-blue-700"
+                                          : "border border-slate-200 text-slate-700 hover:border-blue-300 hover:text-blue-700"
+                                      } disabled:cursor-not-allowed disabled:opacity-60`}
+                                      title={offerCompared ? "Remove from compare" : "Add to compare"}
+                                    >
+                                      {offerCompared ? "Remove" : "Compare"}
+                                    </button>
+                                    <a
+                                      href={o.url}
+                                      target="_blank"
+                                      rel="noopener noreferrer"
+                                      className="inline-flex items-center rounded-full bg-emerald-500 px-3 py-1.5 text-sm font-semibold text-slate-950 transition hover:bg-emerald-400"
+                                    >
+                                      View
+                                    </a>
+                                  </div>
+                                </div>
                               </div>
                             </div>
                           </div>
