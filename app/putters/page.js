@@ -427,9 +427,8 @@ export default function PuttersPage() {
   }, [q, onlyComplete, minPrice, maxPrice, conds, buying, hasBids, sortBy, page, groupMode, broaden, dex, head, lengths, includeProShops, modelKeyParam]);
 
   useEffect(() => {
-    if (!q.trim() && modelKeyParam) {
-      setModelKeyParam("");
-    }
+    if (!q.trim() || !modelKeyParam) return;
+    setModelKeyParam("");
   }, [q, modelKeyParam]);
 
   // API URL
@@ -676,6 +675,7 @@ export default function PuttersPage() {
     setSortBy("best_price_asc");
     setPage(1); setGroupMode(true); setBroaden(false);
     setIncludeProShops(false);
+    setModelKeyParam("");
   };
 
   const handleToggleCompare = useCallback((offer) => {
