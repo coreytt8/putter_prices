@@ -57,6 +57,28 @@ async function callSeed({ base, secret, offset, count, limit, pages, budgetMs })
   return json;
 }
 
+async function callRefresh(base, secret) {
+  try {
+    const url = new URL(`${base}/api/cron/collect-prices`);
+    url.searchParams.set("key", secret);
+    url.searchParams.set("mode", "refresh");
+    url.searchParams.set("limit", "400");
+    const res = await fetch(url.toString());
+    return await res.json().catch(() => ({ ok: false }));
+  } catch (e) { return { ok: false, error: String(e) }; }
+}
+
+async function callBackfill(base, adminKey) {
+  try {
+    const url = new URL(`${base}/api/admin/backfill-variants`);
+    url.searchParams.set("sinceDays", "365");
+    url.searchParams.set("limit", "10000");
+    const res = await fetch(url.toString(), { method: "POST", headers: { "x-admin-key": adminKey } });
+    return await res.json().catch(() => ({ ok: false }));
+  } catch (e) { return { ok: false, error: String(e) }; }
+}
+
+
 async function callAggregates(base, secret) {
   try {
     const aurl = new URL(`${base}/api/admin/aggregate`);
@@ -122,6 +144,11 @@ export default async function handler(req, res) {
     // resume from nextOffset
     offset = s.nextOffset;
   }
+
+const refresh  = await callRefresh(base, process.env.CRON_SECRET || "");
+const backfill = await callBackfill(base, process.env.ADMIN_KEY || "");
+const aggregate = await callAggregates(base, process.env.ADMIN_SECRET || "");
+
 
   // Kick aggregates after seeding
   const aggregate = await callAggregates(base, secret);
