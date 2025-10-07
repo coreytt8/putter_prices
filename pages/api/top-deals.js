@@ -155,8 +155,6 @@ async function queryTopDeals(sql, since, modelKey = null) {
     model_counts AS (
       SELECT i.model_key, COUNT(*) AS listing_count,
 
-      av.var_n, av.var_p50_cents, av.var_window,
-      am.mod_n, am.mod_p50_cents, am.mod_window
 
 FROM latest_prices lp
       JOIN items i ON i.item_id = lp.item_id
@@ -181,7 +179,9 @@ FROM latest_prices lp
       stats.n AS aggregated_n,
       stats.updated_at AS aggregated_updated_at,
       live.live_n,
-      live.latest_observed_at AS live_updated_at
+      live.latest_observed_at AS live_updated_at,
+      av.var_n, av.var_p50_cents, av.var_window,
+      am.mod_n, am.mod_p50_cents, am.mod_window
     FROM latest_prices lp
     JOIN items i ON i.item_id = lp.item_id
     LEFT JOIN base_stats stats ON stats.model = i.model_key
