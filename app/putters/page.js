@@ -15,6 +15,7 @@ import DealGradeBadge from "@/components/DealGradeBadge";
 import { gradeDeal } from "@/lib/deal-grade";
 
 // --- Inline condition pill (Corey’s mapping) ---
+// --- Inline condition pill (Corey’s mapping) ---
 function conditionToLabelAndClass(condRaw) {
   const c = String(condRaw || '').toUpperCase();
   const band =
@@ -31,11 +32,17 @@ function conditionToLabelAndClass(condRaw) {
     default:          return { label: 'Used',       cls: 'bg-slate-300 text-black' };
   }
 }
+
 function ConditionPill({ condition }) {
   if (!condition) return null;
   const { label, cls } = conditionToLabelAndClass(condition);
-  return <span className={\`inline-flex items-center rounded-full px-2 py-0.5 text-[11px] font-medium \${cls}\`}>{label}</span>;
+  return (
+    <span className={`inline-flex items-center rounded-full px-2 py-0.5 text-[11px] font-medium ${cls}`}>
+      {label}
+    </span>
+  );
 }
+
 
 
 /* ============================
