@@ -61,74 +61,97 @@ function ensurePutterQuery(text = '') {
 }
 
 // ---------- accessory dominated title filter (same logic you had) ----------
+// ---------- helper: is this title likely a real putter? ----------
+function isLikelyPutterTitle(title = '') {
+  const t = String(title || '').toLowerCase();
+
+  // direct keyword
+  if (/\bputter\b/i.test(t)) return true;
+
+  // common model/head names that imply a putter
+  const modelHintRx =
+    /\b(newport|phantom\s?x|anser|spider|odyssey|rossie|squareback|fastback|del\s*mar|studio|sigma|tomcat|monza|monte|er[ -]?\d)\b/i;
+  if (modelHintRx.test(t)) return true;
+
+  // length hints (33–36 inches etc.)
+  if (/\b(32|33|34|35|36)\s?(in|inch|")\b/.test(t)) return true;
+
+  // shape cues
+  if (/\b(blade|mallet|center\s?shaft(ed)?|face\s?balanced|milled)\b/i.test(t)) return true;
+
+  return false;
+}
+
+// ---------- accessory dominated title filter (refined) ----------
 function isAccessoryDominatedTitle(title = '') {
   if (!title) return false;
   const raw = String(title);
+  const t = raw.toLowerCase();
+
+  // 1) Hard-block headcovers by text signal (your existing regex + token set)
   let hasHeadcoverSignal = HEAD_COVER_TEXT_RX.test(raw);
-  const hasPutterToken = /\bputter\b/i.test(raw);
+  if (hasHeadcoverSignal) return true;
+
+  // 2) Tokenize once
   const tokens = raw.split(/\s+/).filter(Boolean);
 
+  // 3) Accessory vocabulary (beyond headcovers)
+  const ACCESSORY_TOKENS = new Set([
+    'weight','weights','screw','screws','wrench','tool','tools','kit','adapter',
+    'plate','plates','sole','soleplate','cap','plug','plugs','bumper',
+    'shaft','shaft-only','shafonly','grip','grip-only','griponly','hosel','neck',
+    'cover','headcover','head-cover','head','plate',
+  ]);
+
+  // 4) Counters
   let accessoryCount = 0;
   let substantiveCount = 0;
-  const analysis = [];
 
   for (const token of tokens) {
     const norm = token.replace(/[^a-z0-9]/gi, '').toLowerCase();
     if (!norm) continue;
+
+    // count your existing headcover variants as accessory tokens
     if (HEAD_COVER_TOKEN_VARIANTS.has(norm)) {
-      hasHeadcoverSignal = true;
+      hasHeadcoverSignal = true; // redundant safety
+      accessoryCount++;
       continue;
     }
-    const isNumeric = NUMERIC_TOKEN_PATTERN.test(norm);
-    const isMeasurement = MEASUREMENT_TOKEN_PATTERN.test(norm);
-    const isConnector = CONNECTOR_TOKENS.has(norm);
-    const isPutter = norm === 'putter';
-    const isFiller = isPutter || isConnector || isNumeric || isMeasurement;
-    const accessory = !isPutter && containsAccessoryToken(token);
-    if (accessory) accessoryCount++; else if (!isFiller) substantiveCount++;
-    analysis.push({ norm, accessory, filler: isFiller });
-  }
 
-  const strippedTokens = stripAccessoryTokens(raw)
-    .split(/\s+/)
-    .map((t) => t.replace(/[^a-z0-9]/gi, '').toLowerCase())
-    .filter((t) => t && t !== 'putter' && !HEAD_COVER_TOKEN_VARIANTS.has(t) && !CONNECTOR_TOKENS.has(t) && !NUMERIC_TOKEN_PATTERN.test(t) && !MEASUREMENT_TOKEN_PATTERN.test(t));
-  const remainingCount = strippedTokens.length;
-
-  let leadingAccessory = 0;
-  let seenSubstantive = false;
-  for (const t of analysis) {
-    if (t.filler) continue;
-    if (t.accessory) {
-      if (seenSubstantive) break;
-      leadingAccessory++;
-    } else {
-      seenSubstantive = true;
+    if (ACCESSORY_TOKENS.has(norm)) {
+      accessoryCount++;
+      continue;
     }
+
+    // substantives: brand/model cues, lengths, shapes, etc.
+    if (
+      /\b(32|33|34|35|36)\b/.test(norm) ||                     // length numbers
+      /newport|phantom|anser|spider|odyssey|rossie|er\d+/.test(norm) ||
+      /blade|mallet|milled|center|face|balanced/.test(norm)
+    ) {
+      substantiveCount++;
+      continue;
+    }
+
+    // neutral words we ignore (e.g., "with", "for", "the") won’t change counts
   }
 
-  let hasFit = false, hasWeight = false, packCount = 0, cueCount = 0;
-  for (const t of analysis) {
-    const n = t.norm;
-    if (!n) continue;
-    if (!hasFit && (n === 'fit' || n === 'fits' || n === 'fitting' || n.startsWith('compat'))) hasFit = true;
-    if (!hasWeight && /weight/.test(n)) hasWeight = true;
-    const isPack = PACK_TOKEN_PATTERN.test(n);
-    if (isPack) packCount++;
-    if (ACCESSORY_COMBO_TOKENS.has(n) || isPack) cueCount++;
-  }
-
-  const strongCombo = accessoryCount >= 2 && (leadingAccessory >= 2 || (packCount > 0 && (hasWeight || hasFit)) || (hasWeight && hasFit) || cueCount >= 3);
+  // 5) Final decision rules
+  // Headcover anywhere? Accessory-dominated.
   if (hasHeadcoverSignal) return true;
-  if (strongCombo) return true;
-  if (!remainingCount) return true;
-  if (!hasPutterToken && accessoryCount) {
-    if (accessoryCount >= remainingCount || accessoryCount >= 2) return true;
-  }
-  if (!accessoryCount) return false;
-  if (substantiveCount && accessoryCount < substantiveCount) return false;
-  return accessoryCount >= remainingCount;
+
+  const likelyPutter = isLikelyPutterTitle(raw);
+
+  // If it looks like a putter and substantives are not overwhelmed, keep it.
+  if (likelyPutter && accessoryCount <= substantiveCount + 1) return false;
+
+  // Many accessory tokens and not likely a putter? Drop it.
+  if (accessoryCount >= 2 && !likelyPutter) return true;
+
+  // Default: not accessory-dominated
+  return false;
 }
+
 
 // ---------- DB query ----------
 async function queryTopDeals(sql, since, modelKey = null) {
@@ -509,7 +532,7 @@ export default async function handler(req, res) {
     const filters = {
       freshnessHours: Number.isFinite(freshnessHours) ? freshnessHours : 24,
       minSample: Number.isFinite(minSample) ? minSample : 10,
-      maxDispersion: Number.isFinite(maxDispersion) ? maxDispersion : 3,
+      maxDispersion: Number.isFinite(maxDispersion) ? maxDispersion : 4.5,
       minSavingsPct: Number.isFinite(minSavingsPct) ? minSavingsPct : 0.25,
     };
 
