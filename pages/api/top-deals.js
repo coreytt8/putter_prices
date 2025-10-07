@@ -1,18 +1,28 @@
-export const runtime = "nodejs";
+// pages/api/top-deals.js
+export const runtime = 'nodejs';
 
-import { getSql } from "../../lib/db.js";
-import { PUTTER_CATALOG } from "../../lib/data/putterCatalog.js";
-import { normalizeModelKey } from "../../lib/normalize.js";
+import { getSql } from '../../lib/db';
+import { getEbayToken } from '../../lib/ebayAuth';
+import { PUTTER_CATALOG } from '../../lib/data/putterCatalog';
+import { normalizeModelKey } from '../../lib/normalize';
 import {
   sanitizeModelKey,
   stripAccessoryTokens,
   containsAccessoryToken,
   HEAD_COVER_TOKEN_VARIANTS,
   HEAD_COVER_TEXT_RX,
-} from "../../lib/sanitizeModelKey.js";
-import { decorateEbayUrl } from "../../lib/affiliate.js";
-import { gradeDeal } from "../../lib/deal-grade.js";
+} from '../../lib/sanitizeModelKey';
+import { decorateEbayUrl } from '../../lib/affiliate';
+import { gradeDeal } from '../../lib/deal-grade';
 
+const DEFAULT_LOOKBACK_WINDOWS_HOURS = [24, 72, 168, 336, 720]; // broadened
+const CONNECTOR_TOKENS = new Set(['for','with','and','the','a','to','of','by','from','in','on','at','&','+','plus','or']);
+const NUMERIC_TOKEN_PATTERN = /^\d+(?:\.\d+)?$/;
+const MEASUREMENT_TOKEN_PATTERN = /^\d+(?:\.\d+)?(?:in|cm|mm|g|gram|grams)$/;
+const PACK_TOKEN_PATTERN = /^(?:\d+(?:\/\d+)?(?:pc|pcs|pack)s?|\d+(?:pcs?)|pcs?|pack)$/;
+const ACCESSORY_COMBO_TOKENS = new Set(['weight','weights','counterweight','counterweights','fit','fits','fitting','compatible','compatibility','adapter','adapters','kit','kits','wrench','wrenches','tool','tools']);
+
+// ---------- catalog lookup for pretty labels ----------
 const CATALOG_LOOKUP = (() => {
   const map = new Map();
   for (const entry of PUTTER_CATALOG) {
@@ -24,37 +34,34 @@ const CATALOG_LOOKUP = (() => {
   return map;
 })();
 
-function formatModelLabel(modelKey = "", brand = "", title = "") {
-  const normalized = String(modelKey || "").trim();
+function formatModelLabel(modelKey = '', brand = '', title = '') {
+  const normalized = String(modelKey || '').trim();
   if (normalized && CATALOG_LOOKUP.has(normalized)) {
     const [first] = CATALOG_LOOKUP.get(normalized);
     if (first) return `${first.brand} ${first.model}`;
   }
-  if (brand) return brand;
+  const brandTitle = String(brand || '').trim();
+  if (brandTitle) return brandTitle;
   if (title) return title;
-  if (!normalized) return "Live Smart Price deal";
-  return normalized.split(" ").map(p => p ? p[0].toUpperCase() + p.slice(1) : "").join(" ");
+  if (!normalized) return 'Live Smart Price deal';
+  return normalized.split(' ')
+    .map((p) => (p ? p[0].toUpperCase() + p.slice(1) : ''))
+    .join(' ');
 }
 
-const NUM = (v) => (Number.isFinite(Number(v)) ? Number(v) : null);
-const centsToNum = (v) => (NUM(v) == null ? null : NUM(v) / 100);
+function toNumber(v) { const n = Number(v); return Number.isFinite(n) ? n : null; }
+function centsToNumber(v) { const n = toNumber(v); return n == null ? null : n / 100; }
 
-function ensurePutterQuery(text = "") {
-  let s = String(text || "").trim();
-  if (!s) return "golf putter";
-  s = s.replace(/\bputters\b/gi, "putter");
+function ensurePutterQuery(text = '') {
+  let s = String(text || '').trim();
+  if (!s) return 'golf putter';
+  s = s.replace(/\bputters\b/gi, 'putter');
   if (!/\bputter\b/i.test(s)) s = `${s} putter`;
-  return s.replace(/\s+/g, " ").trim();
+  return s.replace(/\s+/g, ' ').trim();
 }
 
-// --- accessory/title filter helpers (unchanged) ---
-const CONNECTOR_TOKENS = new Set(["for","with","and","the","a","to","of","by","from","in","on","at","&","+","plus","or"]);
-const NUMERIC_TOKEN_PATTERN = /^\d+(?:\.\d+)?$/;
-const MEASUREMENT_TOKEN_PATTERN = /^\d+(?:\.\d+)?(?:in|cm|mm|g|gram|grams)$/;
-const PACK_TOKEN_PATTERN = /^(?:\d+(?:\/\d+)?(?:pc|pcs|pack)s?|\d+(?:pcs?)|pcs?|pack)$/;
-const ACCESSORY_COMBO_TOKENS = new Set(["weight","weights","counterweight","counterweights","fit","fits","fitting","compatible","compatibility","adapter","adapters","kit","kits","wrench","wrenches","tool","tools"]);
-
-function isAccessoryDominatedTitle(title = "") {
+// ---------- accessory dominated title filter (same logic you had) ----------
+function isAccessoryDominatedTitle(title = '') {
   if (!title) return false;
   const raw = String(title);
   let hasHeadcoverSignal = HEAD_COVER_TEXT_RX.test(raw);
@@ -66,60 +73,55 @@ function isAccessoryDominatedTitle(title = "") {
   const analysis = [];
 
   for (const token of tokens) {
-    const norm = token.replace(/[^a-z0-9]/gi, "").toLowerCase();
+    const norm = token.replace(/[^a-z0-9]/gi, '').toLowerCase();
     if (!norm) continue;
-    if (HEAD_COVER_TOKEN_VARIANTS.has(norm)) { hasHeadcoverSignal = true; continue; }
+    if (HEAD_COVER_TOKEN_VARIANTS.has(norm)) {
+      hasHeadcoverSignal = true;
+      continue;
+    }
     const isNumeric = NUMERIC_TOKEN_PATTERN.test(norm);
     const isMeasurement = MEASUREMENT_TOKEN_PATTERN.test(norm);
     const isConnector = CONNECTOR_TOKENS.has(norm);
-    const isPutter = norm === "putter";
+    const isPutter = norm === 'putter';
     const isFiller = isPutter || isConnector || isNumeric || isMeasurement;
-    const isAccessory = !isPutter && containsAccessoryToken(token);
-    if (isAccessory) accessoryCount++; else if (!isFiller) substantiveCount++;
-    analysis.push({ norm, isAccessory, isFiller });
+    const accessory = !isPutter && containsAccessoryToken(token);
+    if (accessory) accessoryCount++; else if (!isFiller) substantiveCount++;
+    analysis.push({ norm, accessory, filler: isFiller });
   }
 
   const strippedTokens = stripAccessoryTokens(raw)
     .split(/\s+/)
-    .map(t => t.replace(/[^a-z0-9]/gi, "").toLowerCase())
-    .filter(t => t && t !== "putter" && !HEAD_COVER_TOKEN_VARIANTS.has(t) && !CONNECTOR_TOKENS.has(t)
-      && !NUMERIC_TOKEN_PATTERN.test(t) && !MEASUREMENT_TOKEN_PATTERN.test(t));
+    .map((t) => t.replace(/[^a-z0-9]/gi, '').toLowerCase())
+    .filter((t) => t && t !== 'putter' && !HEAD_COVER_TOKEN_VARIANTS.has(t) && !CONNECTOR_TOKENS.has(t) && !NUMERIC_TOKEN_PATTERN.test(t) && !MEASUREMENT_TOKEN_PATTERN.test(t));
   const remainingCount = strippedTokens.length;
 
-  let leadingAccessoryCount = 0;
+  let leadingAccessory = 0;
   let seenSubstantive = false;
-  for (const tok of analysis) {
-    if (tok.isFiller) continue;
-    if (tok.isAccessory) {
+  for (const t of analysis) {
+    if (t.filler) continue;
+    if (t.accessory) {
       if (seenSubstantive) break;
-      leadingAccessoryCount++;
+      leadingAccessory++;
     } else {
       seenSubstantive = true;
     }
   }
 
-  let hasFitToken = false, hasWeightToken = false, packTokenCount = 0, accessoryCue = 0;
-  for (const tok of analysis) {
-    const n = tok.norm;
+  let hasFit = false, hasWeight = false, packCount = 0, cueCount = 0;
+  for (const t of analysis) {
+    const n = t.norm;
     if (!n) continue;
-    if (!hasFitToken && (n === "fit" || n === "fits" || n === "fitting" || n.startsWith("compat"))) hasFitToken = true;
-    if (!hasWeightToken && /weight/.test(n)) hasWeightToken = true;
+    if (!hasFit && (n === 'fit' || n === 'fits' || n === 'fitting' || n.startsWith('compat'))) hasFit = true;
+    if (!hasWeight && /weight/.test(n)) hasWeight = true;
     const isPack = PACK_TOKEN_PATTERN.test(n);
-    if (isPack) packTokenCount++;
-    if (ACCESSORY_COMBO_TOKENS.has(n) || isPack) accessoryCue++;
+    if (isPack) packCount++;
+    if (ACCESSORY_COMBO_TOKENS.has(n) || isPack) cueCount++;
   }
 
-  const strongAccessoryCombo =
-    accessoryCount >= 2 &&
-    (leadingAccessoryCount >= 2 ||
-      (packTokenCount > 0 && (hasWeightToken || hasFitToken)) ||
-      (hasWeightToken && hasFitToken) ||
-      accessoryCue >= 3);
-
+  const strongCombo = accessoryCount >= 2 && (leadingAccessory >= 2 || (packCount > 0 && (hasWeight || hasFit)) || (hasWeight && hasFit) || cueCount >= 3);
   if (hasHeadcoverSignal) return false;
-  if (strongAccessoryCombo) return true;
+  if (strongCombo) return true;
   if (!remainingCount) return true;
-
   if (!hasPutterToken && accessoryCount) {
     if (accessoryCount >= remainingCount || accessoryCount >= 2) return true;
   }
@@ -128,191 +130,235 @@ function isAccessoryDominatedTitle(title = "") {
   return accessoryCount >= remainingCount;
 }
 
-// ---------------- SQL ----------------
-
-/**
- * Prefer condition-specific stats if available, else ANY.
- * We can’t reliably map eBay condition strings to bands in SQL, so we use ANY in SQL
- * and optionally swap later if the row already contains a simple band name.
- */
-async function queryTopDeals(sql, since) {
-  return sql`
+// ---------- DB query ----------
+async function queryTopDeals(sql, since, modelKey = null) {
+  // latest price per item_id since 'since'
+  // attach aggregate stats or live stats; count listings per model
+  const rows = await sql/* sql */`
     WITH latest_prices AS (
       SELECT DISTINCT ON (p.item_id)
-        p.item_id,
-        p.observed_at,
-        p.price,
-        p.shipping,
+        p.item_id, p.observed_at, p.price, p.shipping,
         COALESCE(p.total, p.price + COALESCE(p.shipping, 0)) AS total,
         p.condition
       FROM item_prices p
       WHERE p.observed_at >= ${since}
       ORDER BY p.item_id, p.observed_at DESC
     ),
-    base_stats_any AS (
+    base_stats AS (
       SELECT DISTINCT ON (model)
-        model,
-        window_days,
-        n,
-        p10_cents,
-        p50_cents,
-        p90_cents,
-        dispersion_ratio,
-        updated_at
+        model, window_days, n, p10_cents, p50_cents, p90_cents,
+        dispersion_ratio, updated_at
       FROM aggregated_stats_variant
-      WHERE variant_key = ''
-        AND condition_band = 'ANY'
-        AND n >= 5
+      WHERE variant_key = '' AND condition_band = 'ANY' AND n >= 1
       ORDER BY model, window_days DESC, updated_at DESC
+    ),
+    model_counts AS (
+      SELECT i.model_key, COUNT(*) AS listing_count
+      FROM latest_prices lp
+      JOIN items i ON i.item_id = lp.item_id
+      WHERE i.model_key IS NOT NULL AND i.model_key <> ''
+      GROUP BY i.model_key
     )
     SELECT
-      i.model_key,
-      i.brand,
-      i.title,
-      i.image_url,
-      i.url,
-      i.currency,
-      i.head_type,
-      i.dexterity,
-      i.length_in,
-      lp.item_id,
-      lp.price,
-      lp.shipping,
-      lp.total,
-      lp.observed_at,
-      lp.condition,
-      stats_any.n AS any_n,
-      stats_any.window_days AS any_window_days,
-      stats_any.p10_cents AS any_p10_cents,
-      stats_any.p50_cents AS any_p50_cents,
-      stats_any.p90_cents AS any_p90_cents,
-      stats_any.dispersion_ratio AS any_dispersion_ratio,
-      stats_any.updated_at AS any_updated_at
+      i.model_key, i.brand, i.title, i.image_url, i.url,
+      i.currency, i.head_type, i.dexterity, i.length_in,
+      lp.item_id, lp.price, lp.shipping, lp.total, lp.observed_at, lp.condition,
+      COALESCE(stats.n, live.live_n) AS n,
+      stats.window_days,
+      COALESCE(stats.p10_cents, live.live_p10_cents) AS p10_cents,
+      COALESCE(stats.p50_cents, live.live_p50_cents) AS p50_cents,
+      COALESCE(stats.p90_cents, live.live_p90_cents) AS p90_cents,
+      COALESCE(stats.dispersion_ratio, live.live_dispersion_ratio) AS dispersion_ratio,
+      COALESCE(stats.updated_at, live.latest_observed_at) AS updated_at,
+      mc.listing_count,
+      CASE WHEN stats.p50_cents IS NOT NULL THEN 'aggregated'
+           WHEN live.live_p50_cents IS NOT NULL THEN 'live'
+           ELSE NULL END AS stats_source,
+      stats.n AS aggregated_n,
+      stats.updated_at AS aggregated_updated_at,
+      live.live_n,
+      live.latest_observed_at AS live_updated_at
     FROM latest_prices lp
     JOIN items i ON i.item_id = lp.item_id
-    LEFT JOIN base_stats_any stats_any ON stats_any.model = i.model_key
-    WHERE i.model_key IS NOT NULL
-      AND i.model_key <> ''
-      AND lp.total IS NOT NULL
-      AND lp.total > 0
-      AND (
-        stats_any.p50_cents IS NOT NULL
-      )
+    LEFT JOIN base_stats stats ON stats.model = i.model_key
+    LEFT JOIN LATERAL (
+      SELECT
+        COUNT(*) AS live_n,
+        percentile_cont(0.1) WITHIN GROUP (ORDER BY lp2.total) * 100 AS live_p10_cents,
+        percentile_cont(0.5) WITHIN GROUP (ORDER BY lp2.total) * 100 AS live_p50_cents,
+        percentile_cont(0.9) WITHIN GROUP (ORDER BY lp2.total) * 100 AS live_p90_cents,
+        MAX(lp2.observed_at) AS latest_observed_at,
+        CASE
+          WHEN percentile_cont(0.1) WITHIN GROUP (ORDER BY lp2.total) IS NOT NULL
+            AND percentile_cont(0.1) WITHIN GROUP (ORDER BY lp2.total) <> 0
+          THEN (percentile_cont(0.9) WITHIN GROUP (ORDER BY lp2.total) /
+               NULLIF(percentile_cont(0.1) WITHIN GROUP (ORDER BY lp2.total), 0))
+          ELSE NULL
+        END AS live_dispersion_ratio
+      FROM latest_prices lp2
+      JOIN items i2 ON i2.item_id = lp2.item_id
+      WHERE i2.model_key = i.model_key
+        AND lp2.total IS NOT NULL AND lp2.total > 0
+    ) AS live ON TRUE
+    LEFT JOIN model_counts mc ON mc.model_key = i.model_key
+    WHERE i.model_key IS NOT NULL AND i.model_key <> ''
+      AND lp.total IS NOT NULL AND lp.total > 0
+      ${modelKey ? sql`AND i.model_key = ${modelKey}` : sql``}
+      AND (stats.p50_cents IS NOT NULL OR live.live_p50_cents IS NOT NULL)
   `;
+  return rows;
 }
 
-// Build + filter using thresholds
-export function buildDealsFromRows(rows, {
-  limit = 6,
-  lookbackHoursForMeta = null,
-  minSavingsPct = 0.25,   // 25% cheaper than median
-  minSample = 20,         // median must be based on >= N listings
-  maxDispersion = 3.0,    // drop super-spread models (optional)
-  freshnessHours = 12     // listing must be observed within X hours
-} = {}) {
+// ---------- deal building + filters ----------
+function buildDealsFromRows(rows, limit, opts) {
+  const {
+    now = new Date(),
+    freshnessHours = null,
+    minSample = null,
+    maxDispersion = null,
+    minSavingsPct = 0,
+    lookbackHours = null,
+  } = opts || {};
+
   const grouped = new Map();
-  const now = Date.now();
-  const freshCutoff = freshnessHours ? now - freshnessHours * 3600 * 1000 : null;
 
   for (const row of rows) {
-    const modelKey = row.model_key || "";
+    const modelKey = row.model_key || '';
     if (!modelKey) continue;
 
-    // title guard
-    if (isAccessoryDominatedTitle(row?.title || "")) continue;
+    // Title filter
+    if (isAccessoryDominatedTitle(row?.title || '')) continue;
 
-    // freshness guard
-    const observedAt = row.observed_at ? new Date(row.observed_at).getTime() : 0;
-    if (freshCutoff && (!observedAt || observedAt < freshCutoff)) continue;
+    const total = toNumber(row.total);
+    const price = toNumber(row.price);
+    const shipping = toNumber(row.shipping);
+    const median = centsToNumber(row.p50_cents);
 
-    const total = NUM(row.total);
-    const price = NUM(row.price);
-    const shipping = NUM(row.shipping);
-    const medianAny = centsToNum(row.any_p50_cents);
-    const nAny = NUM(row.any_n);
-    const dispersionAny = NUM(row.any_dispersion_ratio);
+    if (!Number.isFinite(total) || !Number.isFinite(median) || median <= 0) continue;
 
-    if (!Number.isFinite(total) || !Number.isFinite(medianAny) || medianAny <= 0) continue;
+    // Stats gate
+    const sampleSize = toNumber(row.n);
+    const dispersion = toNumber(row.dispersion_ratio);
+    if (minSample != null && sampleSize != null && sampleSize < minSample) continue;
+    if (maxDispersion != null && dispersion != null && dispersion > maxDispersion) continue;
 
-    // confidence guards
-    if (!Number.isFinite(nAny) || nAny < minSample) continue;
-    if (Number.isFinite(dispersionAny) && dispersionAny > maxDispersion) continue;
+    // Freshness gate
+    if (freshnessHours != null && row.observed_at) {
+      const obs = new Date(row.observed_at);
+      if (now - obs > freshnessHours * 3600 * 1000) continue;
+    }
 
-    const savingsAmount = medianAny - total;
-    const savingsPercent = medianAny > 0 ? (savingsAmount / medianAny) : null;
-    if (!Number.isFinite(savingsPercent) || savingsPercent < minSavingsPct) continue;
+    const savingsAmount = median - total;
+    const savingsPercent = median > 0 ? savingsAmount / median : null;
 
-    const current = grouped.get(modelKey);
-    if (!current || savingsPercent > current.savingsPercent || (savingsPercent === current.savingsPercent && total < current.total)) {
-      grouped.set(modelKey, {
-        modelKey,
-        row,
-        total,
-        price,
-        shipping,
-        median: medianAny,
-        n: nAny,
-        dispersion: dispersionAny,
-        savingsAmount,
-        savingsPercent,
-      });
+    if (!Number.isFinite(savingsPercent) || savingsPercent <= (minSavingsPct ?? 0)) continue;
+
+    const cur = grouped.get(modelKey);
+    if (!cur || savingsPercent > cur.savingsPercent || (savingsPercent === cur.savingsPercent && total < cur.total)) {
+      grouped.set(modelKey, { row, total, price, shipping, median, savingsAmount, savingsPercent });
     }
   }
 
   const ranked = Array.from(grouped.values())
     .sort((a, b) => {
-      if (b.savingsPercent !== a.savingsPercent) return b.savingsPercent - a.savingsPercent;
-      if (a.total !== b.total) return a.total - b.total;
+      if (Number.isFinite(b.savingsPercent) && Number.isFinite(a.savingsPercent) && b.savingsPercent !== a.savingsPercent) {
+        return b.savingsPercent - a.savingsPercent;
+      }
+      if (Number.isFinite(a.total) && Number.isFinite(b.total) && a.total !== b.total) {
+        return a.total - b.total;
+      }
       return 0;
     })
     .slice(0, limit);
 
-  return ranked.map((entry) => {
-    const { row, total, price, shipping, median, n, dispersion, savingsAmount, savingsPercent } = entry;
+  return ranked.map(({ row, total, price, shipping, median, savingsAmount, savingsPercent }) => {
     const label = formatModelLabel(row.model_key, row.brand, row.title);
-
     const sanitized = sanitizeModelKey(row.model_key, { storedBrand: row.brand });
-    const { query: canonicalQuery, queryVariants = {}, rawLabel: rawLabelWithAccessories, cleanLabel: cleanLabelWithoutAccessories } = sanitized;
+    const {
+      query: canonicalQuery,
+      queryVariants: canonicalVariants = {},
+      rawLabel: rawWithAccessories,
+      cleanLabel: cleanWithoutAccessories,
+    } = sanitized;
 
     let cleanQuery = canonicalQuery || null;
-    let accessoryQuery = queryVariants.accessory || null;
+    let accessoryQuery = canonicalVariants.accessory || null;
     let query = cleanQuery;
 
     const fallbackCandidates = [
       formatModelLabel(row.model_key, row.brand, row.title),
-      [row.brand, row.title].filter(Boolean).join(" ").trim(),
+      [row.brand, row.title].filter(Boolean).join(' ').trim(),
     ].filter(Boolean);
 
     if (!query && row.brand) {
       const brandBacked = sanitizeModelKey(`${row.brand} ${row.model_key}`, { storedBrand: row.brand });
-      if (brandBacked?.query) { query = brandBacked.query; cleanQuery = cleanQuery || brandBacked.query; }
-      if (!accessoryQuery && brandBacked?.queryVariants?.accessory) accessoryQuery = brandBacked.queryVariants.accessory;
+      if (brandBacked?.query) {
+        query = brandBacked.query;
+        cleanQuery = cleanQuery || brandBacked.query;
+      }
+      if (!accessoryQuery && brandBacked?.queryVariants?.accessory) {
+        accessoryQuery = brandBacked.queryVariants.accessory;
+      }
     }
     if (!query) {
       for (const candidate of fallbackCandidates) {
-        const sn = sanitizeModelKey(candidate, { storedBrand: row.brand });
-        if (sn?.query) {
-          query = sn.query;
-          cleanQuery = cleanQuery || sn.query;
-          if (!accessoryQuery && sn?.queryVariants?.accessory) accessoryQuery = sn.queryVariants.accessory;
+        const s = sanitizeModelKey(candidate, { storedBrand: row.brand });
+        if (s?.query) {
+          query = s.query;
+          cleanQuery = cleanQuery || s.query;
+          if (!accessoryQuery && s?.queryVariants?.accessory) accessoryQuery = s.queryVariants.accessory;
           break;
         }
       }
     }
     if (!query) {
-      const base = stripAccessoryTokens(`${row.brand || ""} ${label}`.trim());
-      query = ensurePutterQuery(base || label || row.brand || "");
+      const base = stripAccessoryTokens(`${row.brand || ''} ${label}`.trim());
+      query = ensurePutterQuery(base || label || row.brand || '');
       if (!cleanQuery) cleanQuery = query;
-      const accessoryBase = `${row.brand || ""} ${label}`.trim();
+      const accessoryBase = `${row.brand || ''} ${label}`.trim();
       if (!accessoryQuery && accessoryBase) accessoryQuery = ensurePutterQuery(accessoryBase);
     }
 
-    const labelWasAccessoryOnly = Boolean(rawLabelWithAccessories) && !cleanLabelWithoutAccessories;
+    const labelWasAccessoryOnly = Boolean(rawWithAccessories) && !cleanWithoutAccessories;
     const shouldPromoteAccessoryQuery = Boolean(accessoryQuery) && labelWasAccessoryOnly && !cleanQuery;
     if (shouldPromoteAccessoryQuery) query = accessoryQuery; else if (cleanQuery) query = cleanQuery;
 
-    const currency = row.currency || "USD";
-    const grade = gradeDeal({ total, p10: centsToNum(row.any_p10_cents), p50: median, p90: centsToNum(row.any_p90_cents), dispersionRatio: dispersion });
+    const currency = row.currency || 'USD';
+    const statsSource = row.stats_source || null;
+
+    const stats = {
+      p10: centsToNumber(row.p10_cents),
+      p50: median,
+      p90: centsToNumber(row.p90_cents),
+      n: toNumber(row.n),
+      dispersionRatio: toNumber(row.dispersion_ratio),
+      source: statsSource,
+    };
+    const statsMeta = {
+      source: statsSource,
+      windowDays: statsSource === 'aggregated' ? toNumber(row.window_days) : null,
+      updatedAt: statsSource === 'aggregated' ? (row.aggregated_updated_at || row.updated_at || null) : (row.live_updated_at || row.updated_at || null),
+      sampleSize: statsSource === 'aggregated' ? toNumber(row.aggregated_n ?? row.n) : toNumber(row.live_n ?? row.n),
+    };
+    if (statsSource === 'live' && lookbackHours != null) statsMeta.lookbackHours = lookbackHours;
+
+    const bestOffer = {
+      itemId: row.item_id,
+      title: row.title,
+      url: decorateEbayUrl(row.url),
+      price,
+      total,
+      shipping,
+      currency,
+      image: row.image_url,
+      observedAt: row.observed_at || null,
+      condition: row.condition || null,
+      retailer: 'eBay',
+      specs: { headType: row.head_type || null, dexterity: row.dexterity || null, length: toNumber(row.length_in) },
+      brand: row.brand || null,
+    };
+
+    const grade = gradeDeal({ total, p10: stats.p10, p50: stats.p50, p90: stats.p90, dispersionRatio: stats.dispersionRatio });
 
     return {
       modelKey: row.model_key,
@@ -321,45 +367,14 @@ export function buildDealsFromRows(rows, {
       image: row.image_url || null,
       currency,
       bestPrice: total,
-      bestOffer: {
-        itemId: row.item_id,
-        title: row.title,
-        url: decorateEbayUrl(row.url),
-        price,
-        total,
-        shipping,
-        currency,
-        image: row.image_url,
-        observedAt: row.observed_at || null,
-        condition: row.condition || null,
-        retailer: "eBay",
-        specs: {
-          headType: row.head_type || null,
-          dexterity: row.dexterity || null,
-          length: NUM(row.length_in),
-        },
-        brand: row.brand || null,
-      },
-      stats: {
-        p10: centsToNum(row.any_p10_cents),
-        p50: median,
-        p90: centsToNum(row.any_p90_cents),
-        n,
-        dispersionRatio: dispersion,
-        source: "aggregated",
-      },
-      statsMeta: {
-        source: "aggregated",
-        windowDays: NUM(row.any_window_days),
-        updatedAt: row.any_updated_at || null,
-        sampleSize: n,
-        ...(lookbackHoursForMeta != null ? { lookbackHours: lookbackHoursForMeta } : {}),
-      },
-      totalListings: null, // optional; can be added with a model_counts join later
+      bestOffer,
+      stats,
+      statsMeta,
+      totalListings: toNumber(row.listing_count),
       grade: {
-        letter: typeof grade.letter === "string" ? grade.letter : null,
-        label: typeof grade.label === "string" ? grade.label : null,
-        color: typeof grade.color === "string" ? grade.color : null,
+        letter: typeof grade.letter === 'string' ? grade.letter : null,
+        label: typeof grade.label === 'string' ? grade.label : null,
+        color: typeof grade.color === 'string' ? grade.color : null,
         deltaPct: Number.isFinite(grade.deltaPct) ? grade.deltaPct : null,
       },
       savings: {
@@ -367,66 +382,83 @@ export function buildDealsFromRows(rows, {
         percent: Number.isFinite(savingsPercent) ? savingsPercent : null,
       },
       queryVariants: { clean: cleanQuery || null, accessory: accessoryQuery || null },
-      meta: {
-        filters: { minSavingsPct, minSample, maxDispersion, freshnessHours },
-      },
     };
   });
 }
 
-async function loadRankedDeals(sql, {
-  limit = 6,
-  windows = [24, 72, 168],
-  minSavingsPct = 0.25,
-  minSample = 20,
-  maxDispersion = 3.0,
-  freshnessHours = 12,
-}) {
-  let deals = [];
-  let windowHours = windows[windows.length - 1] ?? null;
-
-  for (const hours of windows) {
-    const since = new Date(Date.now() - hours * 3600 * 1000);
-    const rows = await queryTopDeals(sql, since);
-    const computed = buildDealsFromRows(rows, {
-      limit,
-      lookbackHoursForMeta: hours,
-      minSavingsPct,
-      minSample,
-      maxDispersion,
-      freshnessHours,
-    });
-    deals = computed;
-    windowHours = hours;
-    if (computed.length > 0) break;
+// ---------- verify candidate items are still active (optional) ----------
+async function verifyDealsActive(deals) {
+  if (!deals?.length) return deals;
+  let token;
+  try { token = await getEbayToken(); } catch { return deals; } // fail-open if token missing
+  const out = [];
+  for (const d of deals) {
+    const id = d?.bestOffer?.itemId;
+    if (!id) continue;
+    try {
+      const r = await fetch(`https://api.ebay.com/buy/browse/v1/item/${id}`, {
+        headers: {
+          Authorization: `Bearer ${token}`,
+          'Content-Type': 'application/json',
+          'X-EBAY-C-MARKETPLACE-ID': 'EBAY_US',
+        },
+      });
+      if (r.status === 404) continue; // ended or not found
+      if (!r.ok) continue; // be conservative
+      out.push(d);
+    } catch {
+      // network hiccup — keep it (fail-open) so page doesn’t go blank
+      out.push(d);
+    }
   }
-  return { deals, windowHours };
+  return out;
 }
 
+// ---------- main loader ----------
+async function loadRankedDeals(sql, limit, windows, filters, modelKey = null) {
+  const windowsToTry = Array.isArray(windows) && windows.length ? windows : DEFAULT_LOOKBACK_WINDOWS_HOURS;
+  let deals = [];
+  let usedWindow = windowsToTry[windowsToTry.length - 1] ?? null;
+
+  for (const hours of windowsToTry) {
+    const since = new Date(Date.now() - hours * 3600 * 1000);
+    const rows = await queryTopDeals(sql, since, modelKey);
+    const computed = buildDealsFromRows(rows, limit, { ...filters, lookbackHours: hours });
+    deals = computed;
+    usedWindow = hours;
+    if (computed.length > 0) break;
+  }
+
+  return { deals, windowHours: usedWindow };
+}
+
+// ---------- handler ----------
 export default async function handler(req, res) {
   try {
     const sql = getSql();
-    const q = req.query || {};
-    const limit = Math.min(12, Math.max(3, NUM(q.limit) ?? 6));
 
-    const windows = Array.isArray(q.windows)
-      ? q.windows.map(Number).filter(Number.isFinite)
-      : (q.lookbackWindowHours ? [Number(q.lookbackWindowHours)] : null);
-    const effectiveWindows = windows && windows.length ? windows : [24, 72, 168];
+    // parse query params
+    const limit = Math.min(12, Math.max(3, toNumber(req.query.limit) ?? 6));
+    const lookback = toNumber(req.query.lookbackWindowHours) || null;
+    const windows = lookback ? [lookback] : DEFAULT_LOOKBACK_WINDOWS_HOURS;
 
-    const minSavingsPct = Number(q.minSavingsPct ?? 0.25);
-    const minSample = Math.max(1, Number(q.minSample ?? 20));
-    const maxDispersion = Number(q.maxDispersion ?? 3.0);
-    const freshnessHours = Number(q.freshnessHours ?? 12);
+    const freshnessHours = toNumber(req.query.freshnessHours);
+    const minSample = toNumber(req.query.minSample);
+    const maxDispersion = toNumber(req.query.maxDispersion);
+    const minSavingsPct = toNumber(req.query.minSavingsPct);
+    const verify = String(req.query.verify || '') === '1';
+    const modelParam = (req.query.model || '').trim();
+    const modelKey = modelParam ? normalizeModelKey(modelParam) : null;
 
-    const { deals, windowHours } = await loadRankedDeals(sql, {
-      limit,
-      windows: effectiveWindows,
-      minSavingsPct,
-      minSample,
-      maxDispersion,
-      freshnessHours,
-    });
+    const filters = {
+      freshnessHours: Number.isFinite(freshnessHours) ? freshnessHours : null,
+      minSample: Number.isFinite(minSample) ? minSample : null,
+      maxDispersion: Number.isFinite(maxDispersion) ? maxDispersion : null,
+      minSavingsPct: Number.isFinite(minSavingsPct) ? minSavingsPct : 0,
+    };
+
+    const { deals: baseDeals, windowHours } = await loadRankedDeals(sql, limit, windows, filters, modelKey);
+    const deals = verify ? await verifyDealsActive(baseDeals) : baseDeals;
 
     return res.status(200).json({
       ok: true,
@@ -436,7 +468,9 @@ export default async function handler(req, res) {
         limit,
         modelCount: deals.length,
         lookbackWindowHours: windowHours,
-        filters: { minSavingsPct, minSample, maxDispersion, freshnessHours },
+        modelKey,
+        filters,
+        verified: verify,
       },
     });
   } catch (err) {
