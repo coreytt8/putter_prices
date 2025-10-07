@@ -210,7 +210,14 @@ async function queryTopDeals(sql, since, modelKey = null) {
 }
 
 // ---------- deal building + filters ----------
-function buildDealsFromRows(rows, limit, opts) {
+// keep this in pages/api/top-deals.js
+
+export function buildDealsFromRows(rows, limit, arg3) {
+  // Back-compat: if arg3 is a number, treat it as lookbackHours (old signature).
+  const opts = (typeof arg3 === 'number' || arg3 == null)
+    ? { lookbackHours: (typeof arg3 === 'number' ? arg3 : null) }
+    : (arg3 || {});
+
   const {
     now = new Date(),
     freshnessHours = null,
@@ -218,7 +225,7 @@ function buildDealsFromRows(rows, limit, opts) {
     maxDispersion = null,
     minSavingsPct = 0,
     lookbackHours = null,
-  } = opts || {};
+  } = opts;
 
   const grouped = new Map();
 
@@ -226,23 +233,21 @@ function buildDealsFromRows(rows, limit, opts) {
     const modelKey = row.model_key || '';
     if (!modelKey) continue;
 
-    // Title filter
     if (isAccessoryDominatedTitle(row?.title || '')) continue;
 
     const total = toNumber(row.total);
     const price = toNumber(row.price);
     const shipping = toNumber(row.shipping);
     const median = centsToNumber(row.p50_cents);
-
     if (!Number.isFinite(total) || !Number.isFinite(median) || median <= 0) continue;
 
-    // Stats gate
+    // Stats gates
     const sampleSize = toNumber(row.n);
     const dispersion = toNumber(row.dispersion_ratio);
     if (minSample != null && sampleSize != null && sampleSize < minSample) continue;
     if (maxDispersion != null && dispersion != null && dispersion > maxDispersion) continue;
 
-    // Freshness gate
+    // Freshness gate (observed_at of THIS listing)
     if (freshnessHours != null && row.observed_at) {
       const obs = new Date(row.observed_at);
       if (now - obs > freshnessHours * 3600 * 1000) continue;
@@ -250,11 +255,10 @@ function buildDealsFromRows(rows, limit, opts) {
 
     const savingsAmount = median - total;
     const savingsPercent = median > 0 ? savingsAmount / median : null;
-
     if (!Number.isFinite(savingsPercent) || savingsPercent <= (minSavingsPct ?? 0)) continue;
 
-    const cur = grouped.get(modelKey);
-    if (!cur || savingsPercent > cur.savingsPercent || (savingsPercent === cur.savingsPercent && total < cur.total)) {
+    const current = grouped.get(modelKey);
+    if (!current || savingsPercent > current.savingsPercent || (savingsPercent === current.savingsPercent && total < current.total)) {
       grouped.set(modelKey, { row, total, price, shipping, median, savingsAmount, savingsPercent });
     }
   }
