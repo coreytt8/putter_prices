@@ -11,6 +11,32 @@ import HighlightCard from "@/components/HighlightCard";
 import CompareBar from "@/components/CompareBar";
 import CompareTray from "@/components/CompareTray";
 import { detectVariant } from "@/lib/variantMap";
+import DealGradeBadge from "@/components/DealGradeBadge";
+import { gradeDeal } from "@/lib/deal-grade";
+
+// --- Inline condition pill (Corey’s mapping) ---
+function conditionToLabelAndClass(condRaw) {
+  const c = String(condRaw || '').toUpperCase();
+  const band =
+    c.includes('1000') || (c.includes('NEW') && !c.includes('USED')) ? 'NEW' :
+    c.includes('2750') || c.includes('3000') || c.includes('MINT') || c.includes('LIKE_NEW') ? 'MINT' :
+    c.includes('4000') || c.includes('5000') || c.includes('VERY') ? 'VERY_GOOD' :
+    c.includes('6000') || c.includes('7000') || c.includes('GOOD') ? 'GOOD' :
+    'USED';
+  switch (band) {
+    case 'NEW':       return { label: 'New',        cls: 'bg-blue-600 text-white' };
+    case 'MINT':      return { label: 'Mint',       cls: 'bg-cyan-600 text-white' };
+    case 'VERY_GOOD': return { label: 'Very Good',  cls: 'bg-slate-500 text-white' };
+    case 'GOOD':      return { label: 'Good',       cls: 'bg-slate-400 text-black' };
+    default:          return { label: 'Used',       cls: 'bg-slate-300 text-black' };
+  }
+}
+function ConditionPill({ condition }) {
+  if (!condition) return null;
+  const { label, cls } = conditionToLabelAndClass(condition);
+  return <span className={\`inline-flex items-center rounded-full px-2 py-0.5 text-[11px] font-medium \${cls}\`}>{label}</span>;
+}
+
 
 /* ============================
    SMART FAIR-PRICE BADGE (inline, JS/JSX)
@@ -1433,6 +1459,24 @@ export default function PuttersPage() {
                                     >
                                       <div className="flex flex-1 flex-col gap-1">
                                         <div className="font-semibold text-slate-900">{o.title}</div>
+                                        <div className="mt-1 flex items-center gap-2">
+                                          <ConditionPill condition={o.conditionBand || o.conditionId || o.condition} />
+                                          {(() => {
+                                            const sBase = baseStats;
+                                            const sVar = variantStats;
+                                            const variant = detectVariant(o?.title);
+                                            if (!variant || !sBase || !sVar || !Number.isFinite(sBase?.p50) || !Number.isFinite(sVar?.p50) || sBase.p50 <= 0) return null;
+                                            const delta = (sVar.p50 - sBase.p50) / sBase.p50;
+                                            if (Math.abs(delta) < 0.05) return null;
+                                            const pct = Math.round(Math.abs(delta) * 100);
+                                            const sign = delta > 0 ? '+' : '−';
+                                            return (
+                                              <span className="inline-flex items-center rounded-full border border-slate-300 bg-white px-2 py-0.5 text-[11px] font-medium text-slate-700">
+                                                {sign}{pct}% {delta>0? 'premium' : 'discount'} ({variant})
+                                              </span>
+                                            );
+                                          })()}
+                                        </div>
                                         <div className="text-xs text-slate-500">
                                           {o?.seller?.username && <>@{o.seller.username} · </>}
                                           {typeof o?.seller?.feedbackPct === "number" && (
@@ -1469,7 +1513,14 @@ export default function PuttersPage() {
                                           specs={o.specs}
                                           brand={g?.brand}
                                         />
-                                        <span className="text-sm font-semibold text-slate-900">
+                                        {(() => {
+  const s = (variantStats && Number(variantStats?.n) >= 10) ? variantStats : baseStats;
+  if (!s || typeof o.price !== "number") return null;
+  let g = gradeDeal({ total: o.price, p50: s.p50, p10: s.p10, p90: s.p90, dispersionRatio: s.dispersionRatio });
+  if (g && g.letter === "A" && typeof g.deltaPct === "number" && g.deltaPct <= -0.40) { g = { ...g, letter: "A+", color: "emerald" }; }
+  return g && g.letter ? <DealGradeBadge grade={g} /> : null;
+})()}
+<span className="text-sm font-semibold text-slate-900">
                                           {typeof o.price === "number" ? formatPrice(o.price, o.currency) : "—"}
                                         </span>
                                         <button

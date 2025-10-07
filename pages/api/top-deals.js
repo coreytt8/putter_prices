@@ -22,6 +22,21 @@ const MEASUREMENT_TOKEN_PATTERN = /^\d+(?:\.\d+)?(?:in|cm|mm|g|gram|grams)$/;
 const PACK_TOKEN_PATTERN = /^(?:\d+(?:\/\d+)?(?:pc|pcs|pack)s?|\d+(?:pcs?)|pcs?|pack)$/;
 const ACCESSORY_COMBO_TOKENS = new Set(['weight','weights','counterweight','counterweights','fit','fits','fitting','compatible','compatibility','adapter','adapters','kit','kits','wrench','wrenches','tool','tools']);
 
+// -----------------------------------------------------------------------------
+// Auto-relax profiles (only used if strict settings return zero)
+// -----------------------------------------------------------------------------
+const FALLBACK_TRIES = [
+  // NOTE: try current defaults first (implicit); then widen step-by-step
+  { freshnessHours: 48 },
+  { freshnessHours: 48, minSample: 8 },
+  { freshnessHours: 48, minSample: 5 },
+  { freshnessHours: 48, minSample: 5, minSavingsPct: 0.20 },
+  { freshnessHours: 48, minSample: 5, minSavingsPct: 0.15 },
+  { freshnessHours: 48, minSample: 5, minSavingsPct: 0.15, maxDispersion: 4 },
+  { freshnessHours: 48, minSample: 5, minSavingsPct: 0.15, maxDispersion: 5 },
+  { lookbackWindowHours: 720, freshnessHours: 48, minSample: 5, minSavingsPct: 0.15, maxDispersion: 5 },
+];
+
 // ---------- catalog lookup for pretty labels ----------
 const CATALOG_LOOKUP = (() => {
   const map = new Map();
@@ -60,7 +75,6 @@ function ensurePutterQuery(text = '') {
   return s.replace(/\s+/g, ' ').trim();
 }
 
-// ---------- accessory dominated title filter (same logic you had) ----------
 // ---------- helper: is this title likely a real putter? ----------
 function isLikelyPutterTitle(title = '') {
   const t = String(title || '').toLowerCase();
@@ -88,7 +102,7 @@ function isAccessoryDominatedTitle(title = '') {
   const raw = String(title);
   const t = raw.toLowerCase();
 
-  // 1) Hard-block headcovers by text signal (your existing regex + token set)
+  // 1) Hard-block headcovers by text signal
   let hasHeadcoverSignal = HEAD_COVER_TEXT_RX.test(raw);
   if (hasHeadcoverSignal) return true;
 
@@ -113,7 +127,7 @@ function isAccessoryDominatedTitle(title = '') {
 
     // count your existing headcover variants as accessory tokens
     if (HEAD_COVER_TOKEN_VARIANTS.has(norm)) {
-      hasHeadcoverSignal = true; // redundant safety
+      hasHeadcoverSignal = true;
       accessoryCount++;
       continue;
     }
@@ -132,31 +146,20 @@ function isAccessoryDominatedTitle(title = '') {
       substantiveCount++;
       continue;
     }
-
-    // neutral words we ignore (e.g., "with", "for", "the") won’t change counts
   }
 
-  // 5) Final decision rules
-  // Headcover anywhere? Accessory-dominated.
   if (hasHeadcoverSignal) return true;
 
   const likelyPutter = isLikelyPutterTitle(raw);
-
-  // If it looks like a putter and substantives are not overwhelmed, keep it.
   if (likelyPutter && accessoryCount <= substantiveCount + 1) return false;
-
-  // Many accessory tokens and not likely a putter? Drop it.
   if (accessoryCount >= 2 && !likelyPutter) return true;
 
-  // Default: not accessory-dominated
   return false;
 }
 
 
 // ---------- DB query ----------
 async function queryTopDeals(sql, since, modelKey = null) {
-  // latest price per item_id since 'since'
-  // attach aggregate stats or live stats; count listings per model
   const rows = await sql/* sql */`
     WITH latest_prices AS (
       SELECT DISTINCT ON (p.item_id)
@@ -177,7 +180,7 @@ async function queryTopDeals(sql, since, modelKey = null) {
     ),
     model_counts AS (
       SELECT i.model_key, COUNT(*) AS listing_count
-    FROM latest_prices lp
+      FROM latest_prices lp
       JOIN items i ON i.item_id = lp.item_id
       WHERE i.model_key IS NOT NULL AND i.model_key <> ''
       GROUP BY i.model_key
@@ -206,7 +209,7 @@ async function queryTopDeals(sql, since, modelKey = null) {
     FROM latest_prices lp
     JOIN items i ON i.item_id = lp.item_id
     LEFT JOIN base_stats stats ON stats.model = i.model_key
-    
+
     LEFT JOIN LATERAL (
       SELECT ls.variant_key
       FROM listing_snapshots ls
@@ -216,6 +219,7 @@ async function queryTopDeals(sql, since, modelKey = null) {
       ORDER BY ls.snapshot_ts DESC
       LIMIT 1
     ) v ON TRUE
+
     LEFT JOIN LATERAL (
       SELECT n AS var_n, p50_cents AS var_p50_cents, window_days AS var_window
       FROM aggregated_stats_variant a
@@ -225,6 +229,7 @@ async function queryTopDeals(sql, since, modelKey = null) {
       ORDER BY a.window_days DESC
       LIMIT 1
     ) av ON TRUE
+
     LEFT JOIN LATERAL (
       SELECT n AS mod_n, p50_cents AS mod_p50_cents, window_days AS mod_window
       FROM aggregated_stats_variant a2
@@ -254,6 +259,7 @@ async function queryTopDeals(sql, since, modelKey = null) {
       WHERE i2.model_key = i.model_key
         AND lp2.total IS NOT NULL AND lp2.total > 0
     ) AS live ON TRUE
+
     LEFT JOIN model_counts mc ON mc.model_key = i.model_key
     WHERE i.model_key IS NOT NULL AND i.model_key <> ''
       AND lp.total IS NOT NULL AND lp.total > 0
@@ -264,8 +270,6 @@ async function queryTopDeals(sql, since, modelKey = null) {
 }
 
 // ---------- deal building + filters ----------
-// keep this in pages/api/top-deals.js
-
 export function buildDealsFromRows(rows, limit, arg3) {
   // Back-compat: if arg3 is a number, treat it as lookbackHours (old signature).
   const opts = (typeof arg3 === 'number' || arg3 == null)
@@ -284,8 +288,8 @@ export function buildDealsFromRows(rows, limit, arg3) {
   const grouped = new Map();
 
   for (const row of rows) {
-    // Require 'putter' token to reduce accessory noise
-    if (!/\bputter\b/i.test(row?.title || '')) continue;
+    // use "likely putter" instead of requiring literal "putter"
+    if (!isLikelyPutterTitle(row?.title || '')) continue;
 
     const modelKey = row.model_key || '';
     if (!modelKey) continue;
@@ -300,6 +304,7 @@ export function buildDealsFromRows(rows, limit, arg3) {
     const modMedian = centsToNumber(row.mod_p50_cents);
     const modN = toNumber(row.mod_n);
     const liveMedian = centsToNumber(row.p50_cents);
+
     let median = null;
     if (Number.isFinite(varN) && varN >= (minSample ?? 0) && Number.isFinite(varMedian)) {
       median = varMedian;
@@ -308,7 +313,7 @@ export function buildDealsFromRows(rows, limit, arg3) {
     } else {
       median = liveMedian;
     }
-    
+
     if (!Number.isFinite(total) || !Number.isFinite(median) || median <= 0) continue;
 
     // Stats gates
@@ -481,7 +486,6 @@ async function verifyDealsActive(deals = []) {
         if (!r.ok) continue; // be conservative
         out.push(d);
       } catch {
-        // network hiccup — keep it so page doesn’t go blank
         out.push(d);
       }
     }
@@ -529,6 +533,7 @@ export default async function handler(req, res) {
     const modelParam = (req.query.model || '').trim();
     const modelKey = modelParam ? normalizeModelKey(modelParam) : null;
 
+    // strict defaults (good UX), but we will auto-relax if empty
     const filters = {
       freshnessHours: Number.isFinite(freshnessHours) ? freshnessHours : 24,
       minSample: Number.isFinite(minSample) ? minSample : 10,
@@ -536,8 +541,34 @@ export default async function handler(req, res) {
       minSavingsPct: Number.isFinite(minSavingsPct) ? minSavingsPct : 0.25,
     };
 
-    const { deals: baseDeals, windowHours } = await loadRankedDeals(sql, limit, windows, filters, modelKey);
-    const deals = verify ? await verifyDealsActive(baseDeals) : baseDeals;
+    // 1) Try with strict filters
+    let { deals: baseDeals, windowHours } = await loadRankedDeals(sql, limit, windows, filters, modelKey);
+    let deals = verify ? await verifyDealsActive(baseDeals) : baseDeals;
+
+    // 2) Auto-relax progressively if empty (keeps homepage from going blank)
+    let usedFilters = { ...filters };
+    let fallbackUsed = false;
+
+    if (deals.length === 0) {
+      for (const bump of FALLBACK_TRIES) {
+        const mergedFilters = {
+          freshnessHours: bump.freshnessHours ?? usedFilters.freshnessHours,
+          minSample: bump.minSample ?? usedFilters.minSample,
+          maxDispersion: bump.maxDispersion ?? usedFilters.maxDispersion,
+          minSavingsPct: bump.minSavingsPct ?? usedFilters.minSavingsPct,
+        };
+        const windows2 = bump.lookbackWindowHours ? [bump.lookbackWindowHours] : windows;
+        const res2 = await loadRankedDeals(sql, limit, windows2, mergedFilters, modelKey);
+        const d2 = verify ? await verifyDealsActive(res2.deals) : res2.deals;
+        if (d2.length > 0) {
+          deals = d2;
+          windowHours = res2.windowHours;
+          usedFilters = mergedFilters;
+          fallbackUsed = true;
+          break;
+        }
+      }
+    }
 
     return res.status(200).json({
       ok: true,
@@ -548,8 +579,9 @@ export default async function handler(req, res) {
         modelCount: deals.length,
         lookbackWindowHours: windowHours,
         modelKey,
-        filters,
+        filters: usedFilters,
         verified: verify,
+        fallbackUsed,
       },
     });
   } catch (err) {

@@ -3,11 +3,14 @@
 import clsx from "clsx";
 
 const COLOR_VARIANTS = {
-  green: "border-green-200/80 bg-green-100/80 text-green-900",
-  emerald: "border-emerald-200/80 bg-emerald-100/80 text-emerald-900",
-  slate: "border-slate-300/70 bg-slate-200/70 text-slate-900",
-  red: "border-red-200/80 bg-red-100/80 text-red-900",
+    emerald: "bg-emerald-600 text-white", // A+
+    green: "bg-green-600 text-white",   // A
+    amber500: "bg-amber-500 text-black",   // B
+    amber300: "bg-amber-300 text-black",   // C
+    red: "bg-red-600 text-white",     // D
 };
+
+
 
 function formatPercent(value) {
   if (typeof value !== "number" || !Number.isFinite(value)) return null;
