@@ -183,11 +183,21 @@ async function queryTopDeals(sql, since, modelKey = null) {
     FROM latest_prices lp
     JOIN items i ON i.item_id = lp.item_id
     LEFT JOIN base_stats stats ON stats.model = i.model_key
+    
+    LEFT JOIN LATERAL (
+      SELECT ls.variant_key
+      FROM listing_snapshots ls
+      WHERE ls.item_id = lp.item_id
+        AND ls.variant_key IS NOT NULL
+        AND ls.variant_key <> ''
+      ORDER BY ls.snapshot_ts DESC
+      LIMIT 1
+    ) v ON TRUE
     LEFT JOIN LATERAL (
       SELECT n AS var_n, p50_cents AS var_p50_cents, window_days AS var_window
       FROM aggregated_stats_variant a
       WHERE a.model = i.model_key
-        AND a.variant_key = COALESCE(i.variant_key, '')
+        AND a.variant_key = COALESCE(v.variant_key, '')
         AND a.condition_band = 'ANY'
       ORDER BY a.window_days DESC
       LIMIT 1
