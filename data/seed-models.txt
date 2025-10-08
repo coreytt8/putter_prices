@@ -130,3 +130,12 @@ PXG Battle Ready Closer
 # Wilson
 Wilson Staff Infinite Windy City
 Wilson Staff Model BL22
+
+# Headcovers
+Scotty Cameron headcover
+Scotty Cameron Circle T headcover
+Scotty Cameron Jet Set headcover
+Scotty Cameron Button Back headcover
+Swag Golf headcover
+Bettinardi Hive headcover
+Lamb Crafted headcover
