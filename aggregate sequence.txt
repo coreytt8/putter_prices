@@ -1,0 +1,9 @@
+aggregate sequence
+curl -s "$BASE/api/cron/seed-browse?secret=$CRON_SECRET&useFile=1&offset=0&count=60&limit=50&pages=1"
+curl -s "$BASE/api/cron/collect-prices?key=$CRON_SECRET&mode=refresh&limit=400" | jq .
+curl -s -X POST "$BASE/api/admin/backfill-variants?sinceDays=365&limit=10000" \
+  -H "x-admin-key: $ADMIN_KEY" | jq .
+curl -s "$BASE/api/admin/aggregate?secret=$CRON_SECRET" | jq 
+curl -s "$BASE/api/top-deals?cache=0&fast=1&lookbackWindowHours=720&freshnessHours=72&minSample=3&minSavingsPct=0.10&maxDispersion=6&cacheWrite=1" \
+  -H "x-cron-secret: $CRON_SECRET"
+curl -s "$BASE/api/top-deals?cache=1&fast=1"
