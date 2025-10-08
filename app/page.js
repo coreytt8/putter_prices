@@ -344,8 +344,8 @@ export default async function Home() {
                     : "";
                 const grade = deal && typeof deal.grade === "object" ? deal.grade : null;
                 return (
-                  <HighlightCard key={deal.query} className="md:flex-row md:items-stretch">
-                    <div className="relative aspect-[4/3] w-full overflow-hidden bg-slate-100 md:h-full md:max-h-64 md:w-52 md:flex-shrink-0 md:border-r md:border-slate-100">
+                  <HighlightCard key={deal.query} className="md:flex-row md:items-start">
+                    <div className="relative aspect-[4/3] w-full overflow-hidden bg-slate-100 md:w-56 md:flex-shrink-0 md:border-r md:border-slate-100">
                       {deal.image ? (
                         <img
                           src={deal.image}
