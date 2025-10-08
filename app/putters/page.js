@@ -1386,7 +1386,7 @@ export default function PuttersPage() {
                                       <div className="flex flex-1 flex-col gap-3">
                                         <div className="flex items-start justify-between gap-3">
                                           <div className="min-w-0">
-                                            <h4 className="line-clamp-2 text-sm font-semibold text-slate-900">{o.title}</h4>
+                                            <h4 className="line-clamp-3 text-sm font-semibold text-slate-900">{o.title}</h4>
                                             <div className="mt-2 flex flex-wrap items-center gap-2 text-xs text-slate-600">
                                               <ConditionPill condition={o.conditionBand || o.conditionId || o.condition} />
                                               <BandChip band={bandForOffer} sample={bandSampleOffer} />
@@ -1477,7 +1477,7 @@ export default function PuttersPage() {
 
               {q.trim() && !loading && !err && !groupMode && showAdvanced && (
                 <>
-                  <section className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
+                  <section className="grid grid-cols-1 gap-5 lg:grid-cols-2">
                     {offers.map((o) => {
                       const modelKey = getModelKey(o);
                       const condParam =
@@ -1502,78 +1502,85 @@ export default function PuttersPage() {
                       return (
                         <article
                           key={o.productId + o.url}
-                          className="overflow-hidden rounded-3xl border border-slate-200 bg-white/95 p-5 shadow-sm transition hover:shadow-xl"
+                          className="flex h-full flex-col overflow-hidden rounded-3xl border border-slate-200 bg-white p-6 shadow-sm transition hover:-translate-y-0.5 hover:shadow-lg"
                         >
-                          <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:gap-5">
-                            <div className="flex h-28 w-full items-center justify-center overflow-hidden rounded-2xl bg-slate-100 sm:h-32 sm:w-40">
+                          <div className="flex flex-col gap-4 md:flex-row md:items-start md:gap-6">
+                            <div className="relative aspect-[4/3] w-full overflow-hidden rounded-2xl bg-slate-100 md:h-36 md:w-48 md:flex-shrink-0">
                               {o.image ? (
                                 // eslint-disable-next-line @next/next/no-img-element
-                                <img src={o.image} alt={o.title} className="h-full w-full object-contain" loading="lazy" />
+                                <img
+                                  src={o.image}
+                                  alt={o.title}
+                                  className="absolute inset-0 h-full w-full object-contain p-3"
+                                  loading="lazy"
+                                />
                               ) : (
-                                <div className="flex h-full w-full items-center justify-center text-xs text-slate-500">
+                                <div className="flex h-full w-full items-center justify-center p-3 text-xs text-slate-500">
                                   Image updating…
                                 </div>
                               )}
                             </div>
 
-                            <div className="flex flex-1 flex-col gap-3">
-                              <div className="flex items-start justify-between gap-3">
-                                <div className="min-w-0">
-                                  <h3 className="line-clamp-2 text-base font-semibold text-slate-900">{o.title}</h3>
-                                  <div className="mt-2 flex flex-wrap items-center gap-2 text-xs text-slate-600">
-                                    <ConditionPill condition={o.conditionBand || o.conditionId || o.condition} />
-                                    <BandChip band={bandValue} sample={bandSample} />
-                                    {dex === "LEFT" || dex === "RIGHT" ? (
-                                      <span className="inline-flex items-center rounded-full bg-slate-100 px-2 py-0.5 text-[10px] font-medium text-slate-700">
-                                        {dex === "LEFT" ? "Left-hand" : "Right-hand"}
-                                      </span>
-                                    ) : null}
-                                    {head === "MALLET" || head === "BLADE" ? (
-                                      <span className="inline-flex items-center rounded-full bg-indigo-100 px-2 py-0.5 text-[10px] font-medium text-indigo-700">
-                                        {head === "MALLET" ? "Mallet" : "Blade"}
-                                      </span>
-                                    ) : null}
-                                    {Number.isFinite(lengthValue) ? (
-                                      <span className="inline-flex items-center rounded-full bg-amber-100 px-2 py-0.5 text-[10px] font-medium text-amber-800">
-                                        {`${lengthValue}"`}
-                                      </span>
-                                    ) : null}
-                                  </div>
-                                </div>
-                                <div className="text-right">
-                                  <p className="text-xs text-slate-500">Price</p>
-                                  <p className="text-lg font-semibold text-slate-900">
-                                    {Number.isFinite(priceValue) ? formatPrice(priceValue, o.currency) : "—"}
-                                  </p>
+                            <div className="flex flex-1 flex-col gap-4">
+                              <div>
+                                <h3 className="text-lg font-semibold leading-6 text-slate-900">
+                                  {o.title}
+                                </h3>
+                                <div className="mt-3 flex flex-wrap items-center gap-2 text-xs text-slate-600">
+                                  <ConditionPill condition={o.conditionBand || o.conditionId || o.condition} />
+                                  <BandChip band={bandValue} sample={bandSample} />
+                                  {dex === "LEFT" || dex === "RIGHT" ? (
+                                    <span className="inline-flex items-center rounded-full bg-slate-100 px-2 py-0.5 text-[10px] font-medium text-slate-700">
+                                      {dex === "LEFT" ? "Left-hand" : "Right-hand"}
+                                    </span>
+                                  ) : null}
+                                  {head === "MALLET" || head === "BLADE" ? (
+                                    <span className="inline-flex items-center rounded-full bg-indigo-100 px-2 py-0.5 text-[10px] font-medium text-indigo-700">
+                                      {head === "MALLET" ? "Mallet" : "Blade"}
+                                    </span>
+                                  ) : null}
+                                  {Number.isFinite(lengthValue) ? (
+                                    <span className="inline-flex items-center rounded-full bg-amber-100 px-2 py-0.5 text-[10px] font-medium text-amber-800">
+                                      {`${lengthValue}"`}
+                                    </span>
+                                  ) : null}
                                 </div>
                               </div>
 
-                              <div className="flex flex-wrap items-center gap-2">
-                                {offerId ? (
-                                  <button
-                                    type="button"
-                                    disabled={!offerId}
-                                    onClick={() => handleToggleCompare(o)}
-                                    aria-pressed={offerCompared}
-                                    className={`inline-flex items-center gap-1 rounded-full px-3 py-1 text-xs font-semibold transition ${
-                                      offerCompared
-                                        ? "border border-blue-600 bg-blue-600 text-white hover:border-blue-700 hover:bg-blue-700"
-                                        : "border border-slate-200 text-slate-700 hover:border-blue-300 hover:text-blue-700"
-                                    } disabled:cursor-not-allowed disabled:opacity-60`}
-                                  >
-                                    {offerCompared ? "Remove" : "Compare"}
-                                  </button>
-                                ) : null}
-                                {o.url ? (
-                                  <a
-                                    href={o.url}
-                                    target="_blank"
-                                    rel="noopener noreferrer"
-                                    className="inline-flex items-center rounded-full bg-emerald-500 px-3 py-1.5 text-sm font-semibold text-slate-950 transition hover:bg-emerald-400"
-                                  >
-                                    View listing
-                                  </a>
-                                ) : null}
+                              <div className="mt-auto flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between">
+                                <div>
+                                  <p className="text-xs uppercase tracking-wide text-slate-500">Price</p>
+                                  <p className="text-xl font-semibold text-slate-900">
+                                    {Number.isFinite(priceValue) ? formatPrice(priceValue, o.currency) : "—"}
+                                  </p>
+                                </div>
+                                <div className="flex flex-wrap items-center justify-end gap-2">
+                                  {offerId ? (
+                                    <button
+                                      type="button"
+                                      disabled={!offerId}
+                                      onClick={() => handleToggleCompare(o)}
+                                      aria-pressed={offerCompared}
+                                      className={`inline-flex items-center gap-1 rounded-full px-4 py-1.5 text-sm font-semibold transition ${
+                                        offerCompared
+                                          ? "border border-blue-600 bg-blue-600 text-white hover:border-blue-700 hover:bg-blue-700"
+                                          : "border border-slate-200 text-slate-700 hover:border-blue-300 hover:text-blue-700"
+                                      } disabled:cursor-not-allowed disabled:opacity-60`}
+                                    >
+                                      {offerCompared ? "Remove" : "Compare"}
+                                    </button>
+                                  ) : null}
+                                  {o.url ? (
+                                    <a
+                                      href={o.url}
+                                      target="_blank"
+                                      rel="noopener noreferrer"
+                                      className="inline-flex items-center rounded-full bg-emerald-500 px-4 py-1.5 text-sm font-semibold text-slate-950 transition hover:bg-emerald-400"
+                                    >
+                                      View listing
+                                    </a>
+                                  ) : null}
+                                </div>
                               </div>
                             </div>
                           </div>

@@ -8,7 +8,9 @@ import SectionWrapper from "@/components/SectionWrapper";
 import HighlightCard from "@/components/HighlightCard";
 import PriceComparisonTable from "@/components/PriceComparisonTable";
 import TrendingSparkline from "@/components/TrendingSparkline";
-import { buildDealCtaHref, sanitizeModelKey } from "@/lib/sanitizeModelKey";
+import { sanitizeModelKey } from "@/lib/sanitizeModelKey";
+import { formatFullModelName } from "@/lib/format-model";
+import { buildCanonicalQuery } from "@/lib/search-normalize";
 
 const DEFAULT_SNAPSHOT_QUERY = "golf putter";
 
@@ -89,6 +91,17 @@ export default async function Home() {
   const dealsRaw = Array.isArray(topDealsRes?.deals) ? topDealsRes.deals : [];
 
   const deals = dealsRaw.map((item) => {
+    const rawLabel = typeof item?.label === "string" ? item.label : "";
+    const displayLabel = formatFullModelName({
+      brand: item?.brand || item?.bestOffer?.brand,
+      model: item?.model,
+      modelKey: item?.modelKey,
+      label: rawLabel,
+      rawLabel,
+      variantKey: item?.variantKey,
+      bestOfferTitle: item?.bestOffer?.title,
+      bestOffer: item?.bestOffer,
+    });
     const bestPrice = safeNumber(item?.bestPrice ?? item?.bestOffer?.total ?? item?.bestOffer?.price);
     const currency = item?.currency || item?.bestOffer?.currency || "USD";
     const savingsAmount = safeNumber(item?.savings?.amount);
@@ -106,7 +119,9 @@ export default async function Home() {
         : "Smart Price benchmarks every live listing against fresh percentile baselines to surface real savings.");
 
     return {
-      label: item?.label || item?.modelKey || "Live Smart Price deal",
+      label: displayLabel,
+      displayLabel,
+      rawLabel,
       query: item?.query || item?.modelKey || DEFAULT_SNAPSHOT_QUERY,
       blurb,
       group: item?.group || null,
@@ -114,6 +129,9 @@ export default async function Home() {
       stats: item?.stats || null,
       statsMeta: item?.statsMeta || null,
       modelKey: item?.modelKey || null,
+      model: item?.model || null,
+      brand: item?.brand || item?.bestOffer?.brand || null,
+      variantKey: item?.variantKey || null,
       bestPrice: Number.isFinite(bestPrice) ? bestPrice : null,
       currency,
       image: item?.image || item?.bestOffer?.image || null,
@@ -307,33 +325,41 @@ export default async function Home() {
                   typeof deal?.bestOffer?.title === "string"
                     ? deal.bestOffer.title.trim()
                     : "";
-                const { href: ctaHref } = buildDealCtaHref({
-                  ...deal,
-                  label: displayedLabel || deal?.label || "",
-                  bestOffer: deal?.bestOffer
-                    ? {
-                        ...deal.bestOffer,
-                        title: bestOfferTitle,
-                      }
-                    : null,
+                const canonicalQuery = buildCanonicalQuery({
+                  brand: deal?.brand || deal?.bestOffer?.brand,
+                  model: deal?.model,
+                  modelKey: deal?.modelKey,
+                  label: deal?.rawLabel || displayedLabel,
+                  rawLabel: deal?.rawLabel,
+                  variantKey: deal?.variantKey,
+                  bestOfferTitle,
+                  bestOffer: deal?.bestOffer,
                 });
+                const ctaHref = canonicalQuery
+                  ? `/putters?q=${encodeURIComponent(canonicalQuery)}&view=flat`
+                  : "/putters?view=flat";
                 const bestOfferUrl =
                   typeof deal?.bestOffer?.url === "string" && deal.bestOffer.url.trim().length > 0
                     ? deal.bestOffer.url
                     : "";
                 const grade = deal && typeof deal.grade === "object" ? deal.grade : null;
                 return (
-                  <HighlightCard key={deal.query}>
-                    <div className="aspect-[3/2] w-full bg-slate-100">
+                  <HighlightCard key={deal.query} className="md:flex-row md:items-stretch">
+                    <div className="relative aspect-[4/3] w-full overflow-hidden bg-slate-100 md:h-full md:max-h-64 md:w-52 md:flex-shrink-0 md:border-r md:border-slate-100">
                       {deal.image ? (
-                        <img src={deal.image} alt={deal.label} className="h-full w-full object-cover" loading="lazy" />
+                        <img
+                          src={deal.image}
+                          alt={deal.label}
+                          className="absolute inset-0 h-full w-full object-contain p-4"
+                          loading="lazy"
+                        />
                       ) : (
-                        <div className="flex h-full items-center justify-center text-sm text-slate-500">
+                        <div className="flex h-full items-center justify-center p-4 text-sm text-slate-500">
                           Live data populates images as we refresh listings.
                         </div>
                       )}
                     </div>
-                    <div className="flex flex-1 flex-col gap-4 p-6">
+                    <div className="flex flex-1 flex-col gap-4 p-5 sm:p-6">
                       <div>
                         <h3 className="text-xl font-semibold text-slate-900">{deal.label}</h3>
                         <p className="mt-2 text-sm text-slate-600">{deal.blurb}</p>
