@@ -1,4 +1,5 @@
 import DealGradeBadge from "@/components/DealGradeBadge";
+import { formatFullModelName } from "@/lib/format-model";
 
 function formatCurrency(value, currency = "USD") {
   if (typeof value !== "number" || !Number.isFinite(value)) return "—";
@@ -31,10 +32,21 @@ export default function PriceComparisonTable({ deals = [] }) {
             ? (rawSavings / median) * 100
             : null;
 
+        const label = formatFullModelName({
+          brand: deal?.brand || deal?.bestOffer?.brand,
+          model: deal?.model,
+          modelKey: deal?.modelKey,
+          label: deal?.label,
+          rawLabel: deal?.rawLabel,
+          variantKey: deal?.variantKey,
+          bestOfferTitle: deal?.bestOffer?.title,
+          bestOffer: deal?.bestOffer,
+        });
+
         return {
           key: deal?.query || (deal?.label ? `${deal.label}-${index}` : `deal-${index}`),
           deal,
-          label: deal?.label || "Model updating",
+          label: label || "Model updating",
           bestPrice,
           median,
           totalListings,
