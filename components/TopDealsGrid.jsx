@@ -1,6 +1,8 @@
 // components/TopDealsGrid.jsx
 import Link from "next/link";
 import DealGradeBadge from "@/components/DealGradeBadge";
+import { formatFullModelName } from "@/lib/format-model";
+import { buildCanonicalQuery } from "@/lib/search-normalize";
 
 function fmt(n, currency = "USD") {
     if (typeof n !== "number" || !Number.isFinite(n)) return "—";
@@ -18,14 +20,24 @@ const bandPretty = (b) => {
     return upper.replace(/_/g, " ").replace(/\b\w/g, (c) => c.toUpperCase());
 };
 
-export default function TopDealsGrid({ items = [] }) {
-    if (!Array.isArray(items) || items.length === 0) return null;
+export default function TopDealsGrid({ items = [], deals = [] }) {
+    const list = Array.isArray(items) && items.length ? items : deals;
+    if (!Array.isArray(list) || list.length === 0) return null;
 
     return (
         <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
-            {items.map((d) => {
+            {list.map((d) => {
                 const id = d?.bestOffer?.id || d?.id || d?.url;
-                const label = d?.label || d?.model || "Live Smart Price deal";
+                const label = formatFullModelName({
+                    brand: d?.brand || d?.bestOffer?.brand,
+                    model: d?.model,
+                    modelKey: d?.modelKey,
+                    label: d?.label,
+                    rawLabel: d?.rawLabel,
+                    variantKey: d?.variantKey,
+                    bestOfferTitle: d?.bestOffer?.title,
+                    bestOffer: d?.bestOffer,
+                });
                 const bestPrice = Number.isFinite(Number(d?.bestPrice))
                     ? Number(d.bestPrice)
                     : Number(d?.bestOffer?.total ?? d?.bestOffer?.price);
@@ -33,15 +45,32 @@ export default function TopDealsGrid({ items = [] }) {
                 const bandLabel = bandPretty(d?.stats?.usedBand);
                 const bandSampleRaw = Number(d?.statsMeta?.bandSampleSize);
                 const bandSample = Number.isFinite(bandSampleRaw) && bandSampleRaw > 0 ? bandSampleRaw : null;
+                const canonicalQuery = buildCanonicalQuery({
+                    brand: d?.brand || d?.bestOffer?.brand,
+                    model: d?.model,
+                    modelKey: d?.modelKey,
+                    label: d?.rawLabel || d?.label,
+                    rawLabel: d?.rawLabel,
+                    variantKey: d?.variantKey,
+                    bestOfferTitle: d?.bestOffer?.title,
+                    bestOffer: d?.bestOffer,
+                });
+                const latestHref = canonicalQuery
+                    ? `/putters?q=${encodeURIComponent(canonicalQuery)}&view=flat`
+                    : "/putters?view=flat";
 
                 return (
                     <article
                         key={id || label}
-                        className="flex flex-col gap-4 rounded-2xl border border-slate-200 bg-white p-4 shadow-sm"
+                        className="flex h-full flex-col gap-4 rounded-2xl border border-slate-200 bg-white p-4 shadow-sm"
                     >
                         <div className="flex items-start justify-between gap-3">
                             <div className="min-w-0">
-                                <h3 className="truncate text-base font-semibold text-slate-900">{label}</h3>
+                                <h3
+                                    className="text-base font-semibold leading-snug text-slate-900 [display:-webkit-box] [-webkit-box-orient:vertical] [-webkit-line-clamp:2] overflow-hidden"
+                                >
+                                    {label}
+                                </h3>
                                 {d.modelKey ? (
                                     <p className="mt-1 truncate text-xs text-slate-500">{d.modelKey}</p>
                                 ) : null}
@@ -57,33 +86,36 @@ export default function TopDealsGrid({ items = [] }) {
                             </div>
                         </div>
 
-                        <div className="flex items-end justify-between gap-3">
-                            <div>
-                                <p className="text-xs text-slate-500">Best live price</p>
-                                <p className="text-xl font-semibold text-slate-900">
-                                    {Number.isFinite(bestPrice) ? fmt(bestPrice, currency) : "—"}
-                                </p>
-                            </div>
-                            {d.bestOffer?.url ? (
-                                <a
-                                    href={d.bestOffer.url}
-                                    className="inline-flex items-center rounded-xl border border-slate-200 px-3 py-2 text-sm font-medium text-slate-700 transition hover:border-emerald-200 hover:text-emerald-700"
-                                >
-                                    View listing
-                                </a>
-                            ) : (
-                                <span className="text-sm text-slate-500">No live link</span>
-                            )}
+                        <div>
+                            <p className="text-xs text-slate-500">Best live price</p>
+                            <p className="text-xl font-semibold text-slate-900">
+                                {Number.isFinite(bestPrice) ? fmt(bestPrice, currency) : "—"}
+                            </p>
+                            {!d.bestOffer?.url ? (
+                                <p className="mt-1 text-sm text-slate-500">No live link available</p>
+                            ) : null}
                         </div>
 
-                        {d.modelKey ? (
-                            <div className="text-right text-xs">
-                                <Link
-                                    href={`/putters?model=${encodeURIComponent(d.modelKey)}`}
-                                    className="font-medium text-emerald-700 hover:underline"
-                                >
-                                    Explore this model →
-                                </Link>
+                        {(d.bestOffer?.url || canonicalQuery) ? (
+                            <div className="mt-auto flex flex-wrap items-center gap-2 border-t border-slate-100 pt-3">
+                                {d.bestOffer?.url ? (
+                                    <a
+                                        href={d.bestOffer.url}
+                                        target="_blank"
+                                        rel="noopener noreferrer"
+                                        className="inline-flex items-center rounded-xl bg-emerald-600 px-3 py-2 text-sm font-semibold text-white shadow-sm transition hover:bg-emerald-500"
+                                    >
+                                        View on eBay
+                                    </a>
+                                ) : null}
+                                {canonicalQuery ? (
+                                    <Link
+                                        href={latestHref}
+                                        className="inline-flex items-center rounded-xl border border-emerald-100 bg-emerald-50 px-3 py-2 text-sm font-semibold text-emerald-700 transition hover:border-emerald-200 hover:bg-emerald-100"
+                                    >
+                                        See latest listings
+                                    </Link>
+                                ) : null}
                             </div>
                         ) : null}
                     </article>
