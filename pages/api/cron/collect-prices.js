@@ -302,7 +302,6 @@ async function upsertPriceSnapshot(sql, snapshot, { forceTouchObserved = false }
   const { itemId, price, shipping, total, condition, locationCc } = snapshot;
   if (price == null) return { changed: false, skipped: true };
 
-  // try update first
   const updated = await sql`
     UPDATE item_prices
        SET price = ${price},
@@ -316,7 +315,6 @@ async function upsertPriceSnapshot(sql, snapshot, { forceTouchObserved = false }
   `;
   if (updated.length > 0) return { changed: true, skipped: false };
 
-  // insert then retry update on race
   try {
     await sql`
       INSERT INTO item_prices (item_id, price, shipping, total, condition, location_cc, observed_at)
@@ -387,6 +385,16 @@ async function fetchEbayPage(token, q, { offset = 0, limit = 50, sorts = ['NEWLY
   return { items: merged, callCount, primaryCount };
 }
 
+// --- NEW: collector OR-term builder (inline) ---
+const GLOBAL_COLLECTOR_OR = [
+  "tour only","tour issue","tour use only","prototype","proto","one-off","1/1",
+  "limited","ltd","circle t","pld","wrx","hive","small batch","garage","coa","gallery","gss","009","009m","jet set","button back"
+];
+function appendCollectorSuffix(q) {
+  const terms = Array.from(new Set(GLOBAL_COLLECTOR_OR)).map(t => `"${t}"`);
+  return `${q} (${terms.join(" OR ")})`;
+}
+
 // GET only to simplify cron usage (POST would be fine too)
 export default async function handler(req, res) {
   try {
@@ -397,8 +405,13 @@ export default async function handler(req, res) {
     const sql = await getSql();
     const token = await getEbayToken();
 
+    const collector = req.query?.collector === '1'; // NEW
+
     // manual single query
-    const manualQ = (req.query?.q || '').trim() || null;
+    let manualQ = (req.query?.q || '').trim() || null;
+    if (manualQ && collector) {
+      manualQ = appendCollectorSuffix(manualQ);
+    }
 
     // refresh mode: re-fetch details for oldest observed items
     const refreshMode = req.query?.refresh === '1' || req.query?.mode === 'refresh';
@@ -406,15 +419,28 @@ export default async function handler(req, res) {
       const limitParam = Number.parseInt(req.query?.limit, 10);
       const refreshLimit = Number.isFinite(limitParam) && limitParam > 0 ? Math.min(limitParam, 200) : 50;
 
-      const rows = await sql`
-        SELECT i.item_id, i.title, i.brand, i.model_key, i.head_type, i.dexterity, i.length_in, i.currency,
-               i.seller_user, i.seller_score, i.seller_pct, i.url, i.image_url, i.updated_at,
-               ip.price, ip.shipping, ip.total, ip.condition, ip.location_cc, ip.observed_at
-          FROM items i
-     LEFT JOIN item_prices ip ON ip.item_id = i.item_id
-         ORDER BY COALESCE(ip.observed_at, i.updated_at) ASC NULLS FIRST
-         LIMIT ${refreshLimit}
-      `;
+      // NEW: if collector, only refresh collectible putters/headcovers
+      const rows = collector
+        ? await sql`
+          SELECT i.item_id, i.title, i.brand, i.model_key, i.head_type, i.dexterity, i.length_in, i.currency,
+                 i.seller_user, i.seller_score, i.seller_pct, i.url, i.image_url, i.updated_at,
+                 ip.price, ip.shipping, ip.total, ip.condition, ip.location_cc, ip.observed_at
+            FROM items i
+       LEFT JOIN item_prices ip ON ip.item_id = i.item_id
+           WHERE (i.is_collectible IS TRUE OR i.rarity_tier IN ('tour','limited'))
+             AND i.category IN ('putter','headcover')
+        ORDER BY COALESCE(ip.observed_at, i.updated_at) ASC NULLS FIRST
+           LIMIT ${refreshLimit}
+        `
+        : await sql`
+          SELECT i.item_id, i.title, i.brand, i.model_key, i.head_type, i.dexterity, i.length_in, i.currency,
+                 i.seller_user, i.seller_score, i.seller_pct, i.url, i.image_url, i.updated_at,
+                 ip.price, ip.shipping, ip.total, ip.condition, ip.location_cc, ip.observed_at
+            FROM items i
+       LEFT JOIN item_prices ip ON ip.item_id = i.item_id
+        ORDER BY COALESCE(ip.observed_at, i.updated_at) ASC NULLS FIRST
+           LIMIT ${refreshLimit}
+        `;
 
       let totalCalls = 0;
       const results = [];
@@ -439,9 +465,11 @@ export default async function handler(req, res) {
           }
           const item = await r.json();
           const snapshot = extractListingSnapshot(item);
-          if (!snapshot || snapshot.price == null) {
-            results.push({ itemId: row.item_id, status: 'skipped' });
-            continue;
+          // NEW: if collector mode, ignore non-collectible & accessories
+          if (!snapshot || snapshot.price == null) { results.push({ itemId: row.item_id, status: 'skipped' }); continue; }
+          if (collector) {
+            if (snapshot.category === 'accessory') { results.push({ itemId: row.item_id, status: 'skipped' }); continue; }
+            if (!snapshot.releaseMeta?.isCollectible && snapshot.releaseMeta?.rarityTier === 'retail') { results.push({ itemId: row.item_id, status: 'skipped' }); continue; }
           }
           await upsertItem(sql, snapshot);
           await upsertPriceSnapshot(sql, snapshot, { forceTouchObserved: true });
@@ -450,12 +478,12 @@ export default async function handler(req, res) {
           results.push({ itemId: row.item_id, status: 'error', error: e.message || String(e) });
         }
       }
-      return res.status(200).json({ ok: true, calls: totalCalls, manualQ, refresh: { limit: refreshLimit, results } });
+      return res.status(200).json({ ok: true, calls: totalCalls, manualQ, refresh: { limit: refreshLimit, results }, collector });
     }
 
     // batching params
     const offset = Math.max(0, parseInt(req.query?.offset ?? '0', 10) || 0);
-    const count = Math.max(1, parseInt(req.query?.count ?? '25', 10) || 25); // run ~25 seeds per call by default
+    const count = Math.max(1, parseInt(req.query?.count ?? '25', 10) || 25);
     const pages = Math.max(1, parseInt(req.query?.pages ?? '1', 10) || 1);
     const limitPerPage = Math.min(50, Math.max(10, parseInt(req.query?.limit ?? '50', 10) || 50));
     const sorts = String(req.query?.sorts || 'NEWLY_LISTED')
@@ -463,9 +491,8 @@ export default async function handler(req, res) {
       .map((s) => s.trim().toUpperCase())
       .filter(Boolean);
 
-    const queries = manualQ
-      ? [manualQ]
-      : SEED_QUERIES.slice(offset, offset + count);
+    const baseQueries = manualQ ? [manualQ] : SEED_QUERIES.slice(offset, offset + count);
+    const queries = collector ? baseQueries.map(q => appendCollectorSuffix(q)) : baseQueries;
 
     const pageOffsets = Array.from({ length: pages }, (_, i) => i * limitPerPage);
 
@@ -485,7 +512,7 @@ export default async function handler(req, res) {
           const { items, callCount, primaryCount } = await fetchEbayPage(token, q, {
             offset: off,
             limit: limitPerPage,
-            sorts, // keep just NEWLY_LISTED by default
+            sorts,
           });
           totalCalls += callCount;
 
@@ -496,7 +523,6 @@ export default async function handler(req, res) {
             allItems.push(item);
           }
 
-          // stop early if first sort returned less than requested
           if (primaryCount < limitPerPage) break;
         }
 
@@ -506,6 +532,10 @@ export default async function handler(req, res) {
         for (const it of allItems) {
           const snap = extractListingSnapshot(it);
           if (!snap || snap.price == null) continue;
+          if (collector) {
+            if (snap.category === 'accessory') continue;
+            if (!snap.releaseMeta?.isCollectible && snap.releaseMeta?.rarityTier === 'retail') continue;
+          }
           await upsertItem(sql, snap);
           await upsertPriceSnapshot(sql, snap);
           inserted++;
@@ -519,7 +549,7 @@ export default async function handler(req, res) {
       out.push({ q, found, inserted, error: error || null });
     }
 
-    return res.status(200).json({ ok: true, calls: totalCalls, manualQ, results: out, meta: { offset, count, pages, limit: limitPerPage, sorts } });
+    return res.status(200).json({ ok: true, calls: totalCalls, manualQ, collector, results: out, meta: { offset, count, pages, limit: limitPerPage, sorts } });
   } catch (err) {
     return res.status(500).json({ ok: false, error: err.message });
   }
