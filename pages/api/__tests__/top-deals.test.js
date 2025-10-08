@@ -68,7 +68,7 @@ test("loadRankedDeals returns listings observed before midnight when window is r
     assert.equal(deals.length, 1);
     const [deal] = deals;
     assert.equal(deal.bestOffer.observedAt, observedAt);
-    assert.equal(deal.label, "Acme");
+    assert.equal(deal.label, "Acme Racer");
     assert.equal(deal.savings.amount, 60);
     assert.equal(Math.round(deal.savings.percent * 100) / 100, 0.4);
     assert.ok(deal.grade);

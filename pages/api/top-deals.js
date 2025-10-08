@@ -3,8 +3,6 @@ export const runtime = 'nodejs';
 
 import { getSql } from '../../lib/db';
 import { getEbayToken } from '../../lib/ebayAuth';
-import { PUTTER_CATALOG } from '../../lib/data/putterCatalog';
-import { normalizeModelKey } from '../../lib/normalize';
 import {
   sanitizeModelKey,
   stripAccessoryTokens,
@@ -13,6 +11,8 @@ import {
 } from '../../lib/sanitizeModelKey';
 import { decorateEbayUrl } from '../../lib/affiliate';
 import { gradeDeal } from '../../lib/deal-grade';
+import { composeDealLabel, formatModelLabel } from '../../lib/deal-label';
+import { normalizeModelKey } from '../../lib/normalize';
 
 // ---------- Hobby-friendly performance knobs ----------
 const TIME_BUDGET_MS = 7500;                  // well under Hobby cap (~10s)
@@ -31,33 +31,6 @@ const FALLBACK_TRIES = [
   { lookbackWindowHours: 720, freshnessHours: 72, minSample: 3, minSavingsPct: 0.10, maxDispersion: 6 },
   { lookbackWindowHours: 720, freshnessHours: 96, minSample: 0,  minSavingsPct: 0.00, maxDispersion: 8 } // last resort so cache isn't empty
 ];
-
-// ---------- Catalog label helper ----------
-const CATALOG_LOOKUP = (() => {
-  const map = new Map();
-  for (const entry of PUTTER_CATALOG) {
-    const key = normalizeModelKey(`${entry.brand} ${entry.model}`);
-    if (!key) continue;
-    if (!map.has(key)) map.set(key, []);
-    map.get(key).push(entry);
-  }
-  return map;
-})();
-
-function formatModelLabel(modelKey = '', brand = '', title = '') {
-  const normalized = String(modelKey || '').trim();
-  if (normalized && CATALOG_LOOKUP.has(normalized)) {
-    const [first] = CATALOG_LOOKUP.get(normalized);
-    if (first) return `${first.brand} ${first.model}`;
-  }
-  const brandTitle = String(brand || '').trim();
-  if (brandTitle) return brandTitle;
-  if (title) return title;
-  if (!normalized) return 'Live Smart Price deal';
-  return normalized.split(' ')
-    .map((p) => (p ? p[0].toUpperCase() + p.slice(1) : ''))
-    .join(' ');
-}
 
 // ---------- small utils ----------
 function toNumber(v) { const n = Number(v); return Number.isFinite(n) ? n : null; }
@@ -442,9 +415,9 @@ export function buildDealsFromRows(rows, limit, arg3) {
     .slice(0, limit);
 
   return ranked.map(({ row, total, price, shipping, median, savingsAmount, savingsPercent, bandUsed, bandSample, medianSource, medianSample }) => {
-    const label = formatModelLabel(row.model_key, row.brand, row.title);
-    const variantKey = typeof row.variant_key === 'string' ? row.variant_key : '';
     const sanitized = sanitizeModelKey(row.model_key, { storedBrand: row.brand });
+    const { label, brand: displayBrand } = composeDealLabel(row, sanitized);
+    const variantKey = typeof row.variant_key === 'string' ? row.variant_key : '';
     const { query: canonicalQuery, queryVariants: canonicalVariants = {}, rawLabel: rawWithAccessories, cleanLabel: cleanWithoutAccessories } = sanitized;
 
     let cleanQuery = canonicalQuery || null;
@@ -452,6 +425,7 @@ export function buildDealsFromRows(rows, limit, arg3) {
     let query = cleanQuery;
 
     const fallbackCandidates = [
+      label,
       formatModelLabel(row.model_key, row.brand, row.title),
       [row.brand, row.title].filter(Boolean).join(' ').trim(),
     ].filter(Boolean);
@@ -526,7 +500,7 @@ export function buildDealsFromRows(rows, limit, arg3) {
       conditionBand: resolvedCondition,
       retailer: 'eBay',
       specs: { headType: row.head_type || null, dexterity: row.dexterity || null, length: toNumber(row.length_in) },
-      brand: row.brand || null,
+      brand: displayBrand || row.brand || null,
     };
 
     const grade = gradeDeal({
@@ -723,6 +697,24 @@ export default async function handler(req, res) {
    // after you compute `deals` and `payload`
   // --- CONDITIONAL CACHE WRITE (skip empty) -----------------------
   const okAuth = req.headers['x-cron-secret'] === process.env.CRON_SECRET;
+  const modelCount = Array.isArray(deals) ? deals.length : 0;
+  const lookbackWindowHours = windowHours ?? null;
+
+  const baseMeta = {
+    limit,
+    modelCount,
+    lookbackWindowHours,
+    modelKey: modelKey || null,
+    filters: {
+      freshnessHours,
+      minSample,
+      maxDispersion,
+      minSavingsPct,
+    },
+    verified: !!verified,
+    fallbackUsed: !!fallbackUsed,
+  };
+
   const shouldWrite =
     cacheWrite &&
     okAuth &&
@@ -734,20 +726,7 @@ export default async function handler(req, res) {
       ok: true,
       generatedAt: new Date().toISOString(),
       deals,
-      meta: {
-        limit,
-        modelCount,
-        lookbackWindowHours,
-        modelKey: modelKey || null,
-        filters: {
-          freshnessHours,
-          minSample,
-          maxDispersion,
-          minSavingsPct,
-        },
-        verified: !!verified,
-        fallbackUsed: !!fallbackUsed,
-      },
+      meta: baseMeta,
     };
 
     // NOTE: make sure every template/backtick closes properly:
@@ -761,24 +740,13 @@ export default async function handler(req, res) {
   }
 
   // --- RESPONSE ---------------------------------------------------
+  const meta = { ...baseMeta };
+
   const payload = {
     ok: true,
     generatedAt: new Date().toISOString(),
     deals,
-    meta: {
-      limit,
-      modelCount,
-      lookbackWindowHours,
-      modelKey: modelKey || null,
-      filters: {
-        freshnessHours,
-        minSample,
-        maxDispersion,
-        minSavingsPct,
-      },
-      verified: !!verified,
-      fallbackUsed: !!fallbackUsed,
-    },
+    meta,
   };
 
   if (debugAccessories) {
