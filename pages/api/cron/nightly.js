@@ -1,3 +1,5 @@
+import { getHomepageCacheWriteSecret } from '../../../lib/config/collectorFlags';
+
 // Nightly runner (Pages Router) that:
 // 1) Calls /api/cron/seed-browse in small chunks using data/seed-models.txt
 // 2) Stays under Vercel’s 60s cap by using a time budget + resume cursor
@@ -112,7 +114,11 @@ async function computeTopDealsCache(base, cronSecret, overrides = {}) {
     url.searchParams.set("minSavingsPct", String(tdMinSavingsPct));
     url.searchParams.set("maxDispersion", String(tdMaxDispersion));
 
-    const res = await fetch(url.toString(), { headers: { "x-cron-secret": cronSecret } });
+    const homepageSecret = getHomepageCacheWriteSecret() || cronSecret;
+    const headers = {};
+    if (homepageSecret) headers["x-cron-secret"] = homepageSecret;
+
+    const res = await fetch(url.toString(), { headers });
     const json = await res.json().catch(() => ({ ok: false }));
     return json;
   } catch (e) {

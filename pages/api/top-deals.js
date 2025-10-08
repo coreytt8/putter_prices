@@ -9,6 +9,11 @@ import { gradeDeal } from '../../lib/deal-grade';
 import { composeDealLabel, formatModelLabel } from '../../lib/deal-label';
 import { normalizeModelKey } from '../../lib/normalize';
 import { evaluateAccessoryGuard } from '../../lib/text-filters';
+import {
+  getAllowedCacheSecrets,
+  getTopDealsCacheKey,
+  isCollectorModeEnabled,
+} from '../../lib/config/collectorFlags';
 
 // ---------- Hobby-friendly performance knobs ----------
 const TIME_BUDGET_MS = 7500;                  // well under Hobby cap (~10s)
@@ -566,7 +571,7 @@ export default async function handler(req, res) {
     // Parse query
     const limit = Math.min(12, Math.max(3, toNumber(req.query.limit) ?? 12));
     const lookback = toNumber(req.query.lookbackWindowHours) || null;
-    const verify = String(req.query.verify || '') === '1';
+    const verifyMode = String(req.query.verify || '') === '1';
     const modelParam = (req.query.model || '').trim();
     const modelKey = modelParam ? normalizeModelKey(modelParam) : null;
     const debugAccessories = String(req.query.debugAccessories || '') === '1';
@@ -581,17 +586,52 @@ export default async function handler(req, res) {
     const maxDispersion = toNumber(req.query.maxDispersion);
     const minSavingsPct = toNumber(req.query.minSavingsPct);
 
+    const collectorMode = isCollectorModeEnabled();
+    const cacheKey = collectorMode ? getTopDealsCacheKey() : 'default';
+    const fallbackCacheKey = 'default';
+    const cacheSecrets = getAllowedCacheSecrets();
+
     // Serve cached payload first (enabled by default)
     const useCache = String(req.query.cache || '1') === '1' && !debugAccessories;
-    if (useCache && !modelKey && !verify) {
+    if (useCache && !modelKey && !verifyMode) {
       try {
-        const [cached] = await sql/* sql */`
-          SELECT payload, generated_at FROM top_deals_cache WHERE cache_key = 'default'
+        const [primary] = await sql/* sql */`
+          SELECT cache_key, payload, generated_at FROM top_deals_cache WHERE cache_key = ${cacheKey}
         `;
+
+        let cached = primary;
+
+        if (!cached?.payload && collectorMode && cacheKey !== fallbackCacheKey) {
+          const [fallback] = await sql/* sql */`
+            SELECT cache_key, payload, generated_at FROM top_deals_cache WHERE cache_key = ${fallbackCacheKey}
+          `;
+          if (fallback?.payload) {
+            cached = fallback;
+          }
+        }
+
         if (cached?.payload) {
+          const payload = { ...cached.payload };
+          const baseMeta =
+            payload.meta && typeof payload.meta === 'object'
+              ? { ...payload.meta }
+              : {};
+          const meta = {
+            ...baseMeta,
+            cache: {
+              key: cached.cache_key || cacheKey,
+              generatedAt: cached.generated_at,
+            },
+            ...(collectorMode ? { collectorMode: true } : {}),
+          };
+
+          if (collectorMode && (cached.cache_key || cacheKey) !== cacheKey) {
+            meta.cache.requestedKey = cacheKey;
+          }
+
           return res.status(200).json({
-            ...cached.payload,
-            meta: { ...(cached.payload.meta || {}), cache: { key: 'default', generatedAt: cached.generated_at } }
+            ...payload,
+            meta,
           });
         }
       } catch { /* fall through */ }
@@ -609,7 +649,7 @@ export default async function handler(req, res) {
 
     // Try strict-ish first
     let { deals: baseDeals, windowHours } = await loadRankedDeals(sql, limit, windows, filters, modelKey, fast, startTime);
-    let deals = verify ? await verifyDealsActive(baseDeals) : baseDeals;
+    let deals = verifyMode ? await verifyDealsActive(baseDeals) : baseDeals;
 
     // Auto-relax progressively if empty
     let usedFilters = { ...filters };
@@ -627,7 +667,7 @@ export default async function handler(req, res) {
         };
         const windows2 = bump.lookbackWindowHours ? [bump.lookbackWindowHours] : windows;
         const res2 = await loadRankedDeals(sql, limit, windows2, mergedFilters, modelKey, fast, startTime);
-        const d2 = verify ? await verifyDealsActive(res2.deals) : res2.deals;
+        const d2 = verifyMode ? await verifyDealsActive(res2.deals) : res2.deals;
         if (d2.length > 0) {
           deals = d2;
           windowHours = res2.windowHours;
@@ -640,73 +680,84 @@ export default async function handler(req, res) {
 
     // Optional: write computed payload into cache (for nightly cron)
     const cacheWrite = String(req.query.cacheWrite || '') === '1';
-   // after you compute `deals` and `payload`
-  // --- CONDITIONAL CACHE WRITE (skip empty) -----------------------
-  const okAuth = req.headers['x-cron-secret'] === process.env.CRON_SECRET;
-  const modelCount = Array.isArray(deals) ? deals.length : 0;
-  const lookbackWindowHours = windowHours ?? null;
 
-  const baseMeta = {
-    limit,
-    modelCount,
-    lookbackWindowHours,
-    modelKey: modelKey || null,
-    filters: {
-      freshnessHours,
-      minSample,
-      maxDispersion,
-      minSavingsPct,
-    },
-    verified: !!verified,
-    fallbackUsed: !!fallbackUsed,
-  };
+    const incomingSecret = String(req.headers['x-cron-secret'] || '');
+    const okAuth = incomingSecret && cacheSecrets.includes(incomingSecret);
 
-  const shouldWrite =
-    cacheWrite &&
-    okAuth &&
-    Array.isArray(deals) &&
-    deals.length > 0;
+    const modelCount = Array.isArray(deals) ? deals.length : 0;
+    const lookbackWindowHours = windowHours ?? null;
 
-  if (shouldWrite) {
+    const baseMeta = {
+      limit,
+      modelCount,
+      lookbackWindowHours,
+      modelKey: modelKey || null,
+      filters: {
+        freshnessHours,
+        minSample,
+        maxDispersion,
+        minSavingsPct,
+      },
+      verified: !!verifyMode,
+      fallbackUsed: !!fallbackUsed,
+    };
+
+    const generatedAt = new Date().toISOString();
+    const baseCacheMeta = {
+      key: cacheKey,
+      generatedAt,
+    };
+    const baseCollectorMeta = collectorMode ? { collectorMode: true } : {};
+
+    const meta = {
+      ...baseMeta,
+      cache: baseCacheMeta,
+      ...baseCollectorMeta,
+    };
+
     const payload = {
       ok: true,
-      generatedAt: new Date().toISOString(),
+      generatedAt,
       deals,
-      meta: baseMeta,
+      meta: { ...meta },
     };
 
-    // NOTE: make sure every template/backtick closes properly:
-    await sql/* sql */`
-      INSERT INTO top_deals_cache (cache_key, payload)
-      VALUES ('default', ${JSON.stringify(payload)}::jsonb)
-      ON CONFLICT (cache_key) DO UPDATE
-      SET payload = EXCLUDED.payload,
-          generated_at = now()
-    `;
-  }
+    const shouldWrite =
+      cacheWrite &&
+      okAuth &&
+      Array.isArray(deals) &&
+      deals.length > 0;
 
-  // --- RESPONSE ---------------------------------------------------
-  const meta = { ...baseMeta };
+    if (shouldWrite) {
+      const cachePayload = {
+        ...payload,
+        meta: { ...payload.meta },
+      };
 
-  const payload = {
-    ok: true,
-    generatedAt: new Date().toISOString(),
-    deals,
-    meta,
-  };
+      await sql/* sql */`
+        INSERT INTO top_deals_cache (cache_key, payload)
+        VALUES (${cacheKey}, ${JSON.stringify(cachePayload)}::jsonb)
+        ON CONFLICT (cache_key) DO UPDATE
+        SET payload = EXCLUDED.payload,
+            generated_at = now()
+      `;
+    }
 
-  if (debugAccessories) {
-    payload.filteredOut = accessoryDebug;
-    payload.meta.debug = {
-      accessoryDrops: accessoryDebug,
-    };
-  }
+    if (debugAccessories) {
+      payload.filteredOut = accessoryDebug;
+      payload.meta = {
+        ...payload.meta,
+        debug: {
+          accessoryDrops: accessoryDebug,
+        },
+      };
+    }
 
-  return res.status(200).json(payload);
-} catch (err) {
-  console.error(err);
-  return res
-    .status(500)
+    return res.status(200).json(payload);
+  } catch (err) {
+    console.error(err);
+    return res
+      .status(500)
     .json({ ok: false, error: err?.message || String(err) });
  }
 
