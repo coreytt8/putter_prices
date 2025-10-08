@@ -73,12 +73,30 @@ async function backfillForModel(sql, {
     if (rawModel) touchedModels.add(rawModel);
 
     if (!dryRun) {
-      await sql`
-        UPDATE listing_snapshots
-        SET variant_key = ${variantKey}
-        WHERE item_id = ${row.item_id}
-          AND (variant_key IS NULL OR variant_key = '')
+      const withJoin = await sql`
+        UPDATE listing_snapshots AS ls
+        SET variant_key = ${variantKey},
+            category = COALESCE(i.category, ls.category),
+            rarity_tier = COALESCE(i.rarity_tier, ls.rarity_tier),
+            condition_band = COALESCE(i.condition_band, ls.condition_band),
+            updated_at = NOW()
+        FROM items AS i
+        WHERE ls.item_id = ${row.item_id}
+          AND i.item_id = ls.item_id
+          AND (ls.variant_key IS NULL OR ls.variant_key = '')
+        RETURNING 1
       `;
+
+      if (!withJoin.length) {
+        await sql`
+          UPDATE listing_snapshots
+          SET variant_key = ${variantKey},
+              updated_at = NOW()
+          WHERE item_id = ${row.item_id}
+            AND (variant_key IS NULL OR variant_key = '')
+        `;
+      }
+
       updated++;
     }
   }

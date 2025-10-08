@@ -94,6 +94,97 @@ function normalizeSpecsFromTitle(title = '') {
   return { length, headType, dexterity, shaft, hasHeadcover };
 }
 
+const CATEGORY_HEADCOVER_RX = /\b(head\s*cover|headcovers?|head-?covers?|hc|covers?)\b/i;
+const CATEGORY_ACCESSORY_RX = /\b(wrench(?:es)?|tools?|plates?|weights?)\b/i;
+
+const TOKEN_RULES = [
+  // --- Tour tier tokens (highest priority) ---
+  { name: 'Circle T', pattern: /\bcircle\s*t\b/i, rarity: 'tour', collectible: true },
+  { name: 'Tour Only', pattern: /\btour\s*only\b/i, rarity: 'tour', collectible: true },
+  { name: 'Tour Dept', pattern: /\btour\s*(dept|department)\b/i, rarity: null, collectible: true },
+  { name: 'TourType', pattern: /\btour\s*type\b|\btourtype\b/i, rarity: null, collectible: true },
+  { name: 'COA', pattern: /\bcoa\b/i, rarity: 'tour', collectible: true },
+  { name: 'Gallery', pattern: /\bgallery\b/i, rarity: 'tour', collectible: true },
+  { name: '009M', pattern: /\b009m\b/i, rarity: 'tour', collectible: true },
+  { name: '009', pattern: /\b009\b/i, rarity: 'tour', collectible: true },
+  { name: 'GSS', pattern: /\bgss\b|german\s*stainless/i, rarity: 'tour', collectible: true },
+  { name: 'Lamb Crafted', pattern: /\blamb\s*crafted\b/i, rarity: null, collectible: true },
+
+  // --- Limited tier tokens ---
+  { name: 'Button Back', pattern: /\bbutton\s*back\b/i, rarity: 'limited', collectible: true },
+  { name: 'Jet Set', pattern: /\bjet\s*set\b/i, rarity: 'limited', collectible: true },
+  { name: 'T22', pattern: /\bt22\b/i, rarity: 'limited', collectible: true },
+  { name: 'TeI3', pattern: /\btei\s*3\b|\btei3\b/i, rarity: 'limited', collectible: true },
+  { name: 'Hive', pattern: /\bhive\b/i, rarity: 'limited', collectible: true },
+  { name: 'Swag', pattern: /\bswag\b/i, rarity: 'limited', collectible: true },
+  { name: 'Reserve', pattern: /\breserve\b/i, rarity: 'limited', collectible: false },
+  { name: 'My Girl', pattern: /\bmy\s*girl\b/i, rarity: 'limited', collectible: false },
+  { name: 'Garage', pattern: /\bgarage\b/i, rarity: 'limited', collectible: false },
+  { name: 'MOTO', pattern: /\bmoto\b/i, rarity: 'limited', collectible: false },
+  { name: 'LE', pattern: /\ble\b/i, rarity: 'limited', collectible: false },
+  { name: 'Limited', pattern: /\blimited\b/i, rarity: 'limited', collectible: false },
+  { name: 'Ltd', pattern: /\bltd\b/i, rarity: 'limited', collectible: false },
+];
+
+const YEAR_RX = /(20\d{2}|19\d{2})/;
+
+const CONDITION_BAND_MAP = new Map([
+  ['1000', 'NEW'],
+  ['1500', 'NEW'],
+  ['1750', 'MINT'],
+  ['2000', 'VERY_GOOD'],
+  ['2500', 'VERY_GOOD'],
+  ['3000', 'GOOD'],
+  ['4000', 'GOOD'],
+]);
+
+function detectCategory(title = '') {
+  const text = String(title || '');
+  if (CATEGORY_HEADCOVER_RX.test(text)) return 'headcover';
+  if (CATEGORY_ACCESSORY_RX.test(text)) return 'accessory';
+  if (containsAccessoryToken(text)) return 'accessory';
+  return 'putter';
+}
+
+function deriveReleaseMetadata(title = '') {
+  const text = String(title || '');
+  let releaseName = null;
+  let isCollectible = false;
+  let rarityTier = 'retail';
+  let hasTour = false;
+  let hasLimited = false;
+
+  for (const rule of TOKEN_RULES) {
+    if (!rule.pattern.test(text)) continue;
+    if (!releaseName) releaseName = rule.name;
+    if (rule.collectible) isCollectible = true;
+    if (rule.rarity === 'tour') {
+      hasTour = true;
+      rarityTier = 'tour';
+    } else if (rule.rarity === 'limited') {
+      hasLimited = true;
+    }
+  }
+
+  if (!hasTour && hasLimited) rarityTier = 'limited';
+
+  return { releaseName, isCollectible, rarityTier };
+}
+
+function extractReleaseYear(title = '') {
+  const text = String(title || '');
+  const match = text.match(YEAR_RX);
+  if (!match) return null;
+  const year = parseInt(match[1], 10);
+  return Number.isFinite(year) ? year : null;
+}
+
+function mapConditionBand(conditionId) {
+  if (!conditionId) return 'ANY';
+  const key = String(conditionId);
+  return CONDITION_BAND_MAP.get(key) || 'ANY';
+}
+
 function extractListingSnapshot(raw) {
   const itemId = raw?.itemId || raw?.item_id;
   if (!itemId) return null;
@@ -101,11 +192,17 @@ function extractListingSnapshot(raw) {
   const title = raw?.title || null;
   if (title && shouldSkipAccessoryDominatedTitle(title)) return null;
 
+  const category = detectCategory(title || '');
+  const releaseMeta = deriveReleaseMetadata(title || '');
+  const releaseYear = extractReleaseYear(title || '');
+
   const currency = raw?.price?.currency || raw?.price?.convertedFromCurrency || 'USD';
   const price = readNumber(raw?.price?.value) ?? readNumber(raw?.price?.convertedFromValue);
   const shipping = pickShipping(raw);
   const total = price != null && shipping != null ? price + shipping : price ?? null;
   const condition = raw?.condition || raw?.conditionDisplayName || null;
+  const conditionId = raw?.conditionId || raw?.condition_id || null;
+  const conditionBand = mapConditionBand(conditionId);
   const url = raw?.itemWebUrl || raw?.itemAffiliateWebUrl || null;
   const imageUrl =
     raw?.image?.imageUrl ||
@@ -138,6 +235,10 @@ function extractListingSnapshot(raw) {
     specs,
     model_key,
     canonicalBrand,
+    category,
+    releaseMeta,
+    releaseYear,
+    conditionBand,
   };
 }
 
@@ -154,17 +255,24 @@ async function upsertItem(sql, snapshot) {
     sellerPct,
     url,
     imageUrl,
+    category,
+    releaseMeta,
+    releaseYear,
+    conditionBand,
   } = snapshot;
 
   await sql/* sql */`
     INSERT INTO items (
       item_id, url, title, image_url, brand, model_key, head_type, dexterity,
-      length_in, currency, retailer, seller_user, seller_score, seller_pct, updated_at
+      length_in, currency, retailer, seller_user, seller_score, seller_pct,
+      category, is_collectible, rarity_tier, release_name, release_year, condition_band, updated_at
     )
     VALUES (
       ${itemId}, ${url}, ${title}, ${imageUrl}, ${canonicalBrand}, ${model_key},
       ${specs?.headType}, ${specs?.dexterity}, ${specs?.length}, ${currency},
-      'eBay', ${sellerUser}, ${sellerScore}, ${sellerPct}, NOW()
+      'eBay', ${sellerUser}, ${sellerScore}, ${sellerPct},
+      ${category}, ${releaseMeta?.isCollectible || false}, ${releaseMeta?.rarityTier},
+      ${releaseMeta?.releaseName}, ${releaseYear}, ${conditionBand}, NOW()
     )
     ON CONFLICT (item_id) DO UPDATE SET
       url = EXCLUDED.url,
@@ -180,6 +288,12 @@ async function upsertItem(sql, snapshot) {
       seller_user = EXCLUDED.seller_user,
       seller_score = EXCLUDED.seller_score,
       seller_pct = EXCLUDED.seller_pct,
+      category = EXCLUDED.category,
+      is_collectible = EXCLUDED.is_collectible,
+      rarity_tier = EXCLUDED.rarity_tier,
+      release_name = EXCLUDED.release_name,
+      release_year = EXCLUDED.release_year,
+      condition_band = EXCLUDED.condition_band,
       updated_at = NOW()
   `;
 }
