@@ -5,7 +5,7 @@ import DealGradeBadge from "@/components/DealGradeBadge";
 import MarketSnapshot from "@/components/MarketSnapshot";
 import HeroSection from "@/components/HeroSection";
 import SectionWrapper from "@/components/SectionWrapper";
-import HighlightCard from "@/components/HighlightCard";
+import TopDealsGrid from "@/components/TopDealsGrid";
 import PriceComparisonTable from "@/components/PriceComparisonTable";
 import TrendingSparkline from "@/components/TrendingSparkline";
 import { sanitizeModelKey } from "@/lib/sanitizeModelKey";
@@ -82,6 +82,8 @@ export default async function Home() {
     }
   );
 
+  const collectorModeEnabled = process.env.COLLECTOR_MODE === "1";
+
   const [topDealsRes, trendingRes, snapshotResponse] = await Promise.all([
     topDealsPromise,
     trendingPromise,
@@ -132,6 +134,9 @@ export default async function Home() {
       model: item?.model || null,
       brand: item?.brand || item?.bestOffer?.brand || null,
       variantKey: item?.variantKey || null,
+      category: typeof item?.category === "string" ? item.category : null,
+      rarityTier: typeof item?.rarityTier === "string" ? item.rarityTier : null,
+      conditionBand: typeof item?.conditionBand === "string" ? item.conditionBand : null,
       bestPrice: Number.isFinite(bestPrice) ? bestPrice : null,
       currency,
       image: item?.image || item?.bestOffer?.image || null,
@@ -148,8 +153,49 @@ export default async function Home() {
         amount: Number.isFinite(savingsAmount) ? savingsAmount : null,
         percent: Number.isFinite(savingsPercent) ? savingsPercent : null,
       },
+      watchCount: safeNumber(item?.watchCount ?? item?.bestOffer?.watchCount),
+      premiumDelta: safeNumber(item?.recentPremium ?? item?.premiumDelta ?? item?.savings?.percent),
     };
   });
+
+  const rarityRank = (tier) => {
+    const normalized = typeof tier === "string" ? tier.toLowerCase() : "";
+    if (normalized.includes("tour")) return 0;
+    if (normalized.includes("limit")) return 1;
+    if (normalized.includes("retail")) return 2;
+    return 3;
+  };
+
+  const sortedCollectorPutters = collectorModeEnabled
+    ? deals
+        .filter((deal) => (deal?.category || "").toLowerCase() === "putter")
+        .slice()
+        .sort((a, b) => {
+          const rankDiff = rarityRank(a?.rarityTier) - rarityRank(b?.rarityTier);
+          if (rankDiff !== 0) return rankDiff;
+          const savingsA = Number.isFinite(a?.savings?.percent) ? a.savings.percent : 0;
+          const savingsB = Number.isFinite(b?.savings?.percent) ? b.savings.percent : 0;
+          return savingsB - savingsA;
+        })
+        .slice(0, 6)
+    : [];
+
+  const sortedHeadcovers = collectorModeEnabled
+    ? deals
+        .filter((deal) => (deal?.category || "").toLowerCase() === "headcover")
+        .slice()
+        .sort((a, b) => {
+          const watchA = Number.isFinite(a?.watchCount) ? a.watchCount : 0;
+          const watchB = Number.isFinite(b?.watchCount) ? b.watchCount : 0;
+          if (watchA !== watchB) return watchB - watchA;
+          const premiumA = Number.isFinite(a?.premiumDelta) ? a.premiumDelta : 0;
+          const premiumB = Number.isFinite(b?.premiumDelta) ? b.premiumDelta : 0;
+          return premiumB - premiumA;
+        })
+        .slice(0, 6)
+    : [];
+
+  const prioritizedDeals = collectorModeEnabled ? deals.slice(0, 12) : deals;
 
   const trending = Array.isArray(trendingRes?.models)
     ? trendingRes.models.slice(0, 6).map((m) => {
@@ -295,144 +341,59 @@ export default async function Home() {
       <PriceComparisonTable deals={deals} />
 
       <SectionWrapper variant="light">
-          <div className="max-w-3xl">
-            <h2 className="text-3xl font-bold tracking-tight text-slate-900 sm:text-4xl">
-              Today&apos;s best deals pulled straight from live listings
-            </h2>
-            <p className="mt-4 text-base text-slate-600">
-              These models currently have {deals.filter((d) => Number.isFinite(d.bestPrice)).length} Smart Price-verified listings with market-leading asks. Click through for filtered searches that stay synced with the live feed.
-            </p>
-          </div>
-          <div className="mt-12 grid gap-8 md:grid-cols-2 xl:grid-cols-3">
-            {deals.length === 0 ? (
-              <div className="col-span-full rounded-3xl border border-slate-200 bg-white p-8 text-center text-slate-600">
-                Smart Price is refreshing today&apos;s leaderboard—check back soon for verified deals.
+        <div className="space-y-16">
+          {collectorModeEnabled && sortedCollectorPutters.length > 0 ? (
+            <div>
+              <div className="max-w-3xl">
+                <h2 className="text-3xl font-bold tracking-tight text-slate-900 sm:text-4xl">Top Collector Putters</h2>
+                <p className="mt-4 text-base text-slate-600">
+                  Smart Price surfaces the most desirable tour and limited runs with verified below-median asks pulled from the live feed.
+                </p>
               </div>
-            ) : (
-              deals.map((deal) => {
-                const median = Number.isFinite(deal?.stats?.p50) ? Number(deal.stats.p50) : null;
-                const diff =
-                  Number.isFinite(median) && Number.isFinite(deal.bestPrice)
-                    ? median - deal.bestPrice
-                    : null;
-                const diffPct =
-                  Number.isFinite(median) && Number.isFinite(deal.bestPrice) && median > 0
-                    ? Math.round(((median - deal.bestPrice) / median) * 100)
-                    : null;
-                const displayedLabel =
-                  typeof deal?.label === "string" ? deal.label.trim() : "";
-                const bestOfferTitle =
-                  typeof deal?.bestOffer?.title === "string"
-                    ? deal.bestOffer.title.trim()
-                    : "";
-                const canonicalQuery = buildCanonicalQuery({
-                  brand: deal?.brand || deal?.bestOffer?.brand,
-                  model: deal?.model,
-                  modelKey: deal?.modelKey,
-                  label: deal?.rawLabel || displayedLabel,
-                  rawLabel: deal?.rawLabel,
-                  variantKey: deal?.variantKey,
-                  bestOfferTitle,
-                  bestOffer: deal?.bestOffer,
-                });
-                const ctaHref = canonicalQuery
-                  ? `/putters?q=${encodeURIComponent(canonicalQuery)}&view=flat`
-                  : "/putters?view=flat";
-                const bestOfferUrl =
-                  typeof deal?.bestOffer?.url === "string" && deal.bestOffer.url.trim().length > 0
-                    ? deal.bestOffer.url
-                    : "";
-                const grade = deal && typeof deal.grade === "object" ? deal.grade : null;
-                return (
-                  <HighlightCard key={deal.query} className="md:flex-row md:items-start">
-                    <div className="relative aspect-[4/3] w-full overflow-hidden bg-slate-100 md:w-56 md:flex-shrink-0 md:border-r md:border-slate-100">
-                      {deal.image ? (
-                        <img
-                          src={deal.image}
-                          alt={deal.label}
-                          className="absolute inset-0 h-full w-full object-contain p-4"
-                          loading="lazy"
-                        />
-                      ) : (
-                        <div className="flex h-full items-center justify-center p-4 text-sm text-slate-500">
-                          Live data populates images as we refresh listings.
-                        </div>
-                      )}
-                    </div>
-                    <div className="flex flex-1 flex-col gap-4 p-5 sm:p-6">
-                      <div>
-                        <h3 className="text-xl font-semibold text-slate-900">{deal.label}</h3>
-                        <p className="mt-2 text-sm text-slate-600">{deal.blurb}</p>
-                      </div>
-                      <div className="flex flex-col gap-3 rounded-2xl bg-slate-50 p-4">
-                        <div className="flex flex-wrap items-center justify-between gap-3">
-                          <div>
-                            <p className="text-xs uppercase tracking-wide text-slate-500">Best live ask</p>
-                            <div className="flex items-center gap-2">
-                              <span className="text-2xl font-semibold text-slate-900">
-                                {Number.isFinite(deal.bestPrice)
-                                  ? formatCurrency(deal.bestPrice, deal.currency)
-                                  : "Price updating"}
-                              </span>
-                              {grade ? <DealGradeBadge grade={grade} /> : null}
-                            </div>
-                          </div>
-                          {Number.isFinite(deal.bestPrice) && (
-                            <SmartPriceBadge
-                              price={deal.bestPrice}
-                              baseStats={deal.stats}
-                              title={deal.bestOffer?.title}
-                              specs={deal.bestOffer?.specs}
-                              brand={deal.bestOffer?.brand}
-                            />
-                          )}
-                        </div>
-                        {Number.isFinite(median) && (
-                          <p className="text-xs text-slate-600">
-                            Median from live percentile baseline: {formatCurrency(median, deal.currency)}
-                            {Number.isFinite(diff) && diff > 0 ? (
-                              <>
-                                {" "}· Save about {formatCurrency(diff, deal.currency)}
-                                {diffPct ? ` (${diffPct}% below)` : ""}
-                              </>
-                            ) : null}
-                          </p>
-                        )}
-                        {Number.isFinite(deal.totalListings) && deal.totalListings > 0 && (
-                          <p className="text-xs text-slate-500">
-                            Tracking {deal.totalListings} live listings in this search right now.
-                          </p>
-                        )}
-                      </div>
-                      <div className="mt-auto">
-                        <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:gap-3">
-                          <Link
-                            href={ctaHref}
-                            className="inline-flex items-center justify-center rounded-full bg-slate-900 px-5 py-2 text-sm font-semibold text-white shadow-sm transition hover:bg-slate-700"
-                          >
-                            See the latest listings
-                          </Link>
-                          {bestOfferUrl ? (
-                            <a
-                              href={bestOfferUrl}
-                              target="_blank"
-                              rel="noopener noreferrer"
-                              className="inline-flex items-center justify-center rounded-full border border-slate-300 px-5 py-2 text-sm font-semibold text-slate-900 transition hover:border-slate-400 hover:bg-slate-100"
-                            >
-                              Open this eBay listing
-                            </a>
-                          ) : null}
-                        </div>
-                        <p className="mt-2 text-xs text-emerald-600">
-                          We send you to the best eBay listing with verified savings.
-                        </p>
-                      </div>
-                    </div>
-                  </HighlightCard>
-                );
-              })
-            )}
+              <div className="mt-8">
+                <TopDealsGrid items={sortedCollectorPutters} />
+              </div>
+            </div>
+          ) : null}
+
+          {collectorModeEnabled && sortedHeadcovers.length > 0 ? (
+            <div>
+              <div className="max-w-3xl">
+                <h2 className="text-3xl font-bold tracking-tight text-slate-900 sm:text-4xl">Most Watched Headcovers</h2>
+                <p className="mt-4 text-base text-slate-600">
+                  High-attention headcovers ranked by live watcher counts and recent premiums so you can jump on the hottest drops first.
+                </p>
+              </div>
+              <div className="mt-8">
+                <TopDealsGrid items={sortedHeadcovers} />
+              </div>
+            </div>
+          ) : null}
+
+          <div>
+            <div className="max-w-3xl">
+              <h2 className="text-3xl font-bold tracking-tight text-slate-900 sm:text-4xl">
+                {collectorModeEnabled
+                  ? "Undervalued Collector Finds"
+                  : "Today&apos;s best deals pulled straight from live listings"}
+              </h2>
+              <p className="mt-4 text-base text-slate-600">
+                {collectorModeEnabled
+                  ? `Daily shortlist of Smart Price-verified collector listings sitting below live medians across the marketplace.`
+                  : `These models currently have ${deals.filter((d) => Number.isFinite(d.bestPrice)).length} Smart Price-verified listings with market-leading asks. Click through for filtered searches that stay synced with the live feed.`}
+              </p>
+            </div>
+            <div className="mt-8">
+              {prioritizedDeals.length === 0 ? (
+                <div className="rounded-3xl border border-slate-200 bg-white p-8 text-center text-slate-600">
+                  Smart Price is refreshing today&apos;s leaderboard—check back soon for verified deals.
+                </div>
+              ) : (
+                <TopDealsGrid items={prioritizedDeals} />
+              )}
+            </div>
           </div>
+        </div>
       </SectionWrapper>
 
       <SectionWrapper variant="muted">
