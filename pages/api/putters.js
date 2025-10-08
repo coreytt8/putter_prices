@@ -12,6 +12,7 @@ import {
   stripHeadcoverSpecTokens,
 } from "../../lib/sanitizeModelKey.js";
 import { BRAND_LIMITED_TOKENS } from "../../lib/config/brandLimitedTokens.js";
+import { buildCanonicalQuery, resolveModelKeyFromQuery } from "../../lib/search-normalize.js";
 
 /**
  * Required ENV (Vercel + .env.local):
@@ -961,7 +962,26 @@ export default async function handler(req, res) {
 
   // Normalize + enforce "putters-only" semantics
   const rawQ = (sp.q || "").toString().trim();
-  const q = normalizeSearchQ(rawQ);
+  const modelKeyParam = ((sp.modelKey ?? sp.model) || "").toString().trim();
+  let resolvedModel = null;
+  if (modelKeyParam) {
+    resolvedModel = resolveModelKeyFromQuery(modelKeyParam);
+  }
+  if (!resolvedModel && rawQ) {
+    resolvedModel = resolveModelKeyFromQuery(rawQ);
+  }
+
+  const primaryQuery = resolvedModel
+    ? buildCanonicalQuery({ brand: resolvedModel.brand, model: resolvedModel.model })
+    : rawQ;
+
+  const q = normalizeSearchQ(primaryQuery);
+  let normalizedModelParam = "";
+  if (resolvedModel && resolvedModel.normalizedKey) {
+    normalizedModelParam = resolvedModel.normalizedKey;
+  } else if (modelKeyParam) {
+    normalizedModelParam = norm(modelKeyParam);
+  }
 
   const group = (sp.group || "true") === "true";
   const onlyComplete = sp.onlyComplete === "true";
@@ -972,8 +992,6 @@ export default async function handler(req, res) {
   const normalizedBuyingOptionFilters = normalizeBuyingOptions(buyingOptions);
   const hasBids = (sp.hasBids || "").toString() === "true";
   const sort = (sp.sort || "").toString();
-  const modelKeyParam = ((sp.modelKey ?? sp.model) || "").toString().trim();
-  const normalizedModelParam = modelKeyParam ? norm(modelKeyParam) : "";
 
   const dex = (sp.dex || "").toString().toUpperCase();
   const head = (sp.head || "").toString().toUpperCase();
@@ -1009,6 +1027,8 @@ export default async function handler(req, res) {
     // Primary + limited/collectible recall variants
     const calls = [];
     const recallQs = buildLimitedRecallQueries(rawQ, q);
+    const recallSet = new Set(recallQs);
+    let fallbackQueriesUsed = [];
     for (const qq of recallQs) {
       for (let i = 0; i < samplePages; i++) {
         calls.push(
@@ -1054,6 +1074,49 @@ export default async function handler(req, res) {
         const arr = Array.isArray(extra?.itemSummaries) ? extra.itemSummaries : [];
         items.push(...arr);
         totalFromEbay = Math.max(totalFromEbay, Number(extra?.total || 0));
+      }
+    }
+
+    if (items.length === 0 && resolvedModel && Array.isArray(resolvedModel.aliasQueries) && resolvedModel.aliasQueries.length) {
+      const aliasCandidates = new Set();
+      for (const alias of resolvedModel.aliasQueries) {
+        const aliasQuery = normalizeSearchQ(alias);
+        if (aliasQuery) aliasCandidates.add(aliasQuery);
+        if (resolvedModel.brand) {
+          const branded = normalizeSearchQ(`${resolvedModel.brand} ${alias}`);
+          if (branded) aliasCandidates.add(branded);
+        }
+      }
+
+      const aliasCalls = [];
+      const uniqueAliasQueries = [];
+      for (const aliasQuery of aliasCandidates) {
+        if (!aliasQuery || recallSet.has(aliasQuery)) continue;
+        uniqueAliasQueries.push(aliasQuery);
+        aliasCalls.push(
+          fetchEbayBrowse({
+            q: aliasQuery,
+            limit,
+            offset: 0,
+            sort,
+            forceCategory,
+            buyingOptions: normalizedBuyingOptionFilters,
+            hasBids,
+          })
+        );
+      }
+
+      if (aliasCalls.length) {
+        const aliasResponses = await Promise.allSettled(aliasCalls);
+        fallbackQueriesUsed = uniqueAliasQueries;
+        for (const r of aliasResponses) {
+          if (r.status === "fulfilled") {
+            const data = r.value || {};
+            totalFromEbay = Math.max(totalFromEbay, Number(data?.total || 0));
+            const arr = Array.isArray(data?.itemSummaries) ? data.itemSummaries : [];
+            items.push(...arr);
+          }
+        }
       }
     }
 
@@ -1392,6 +1455,17 @@ if (sort === "newlylisted") {
           sort: sort || "default",
           source: "merged",
           sources: Array.from(new Set(mergedOffers.map(o => o.retailer))).sort(),
+          search: {
+            query: q,
+            canonicalModel: resolvedModel
+              ? {
+                  brand: resolvedModel.brand,
+                  model: resolvedModel.model,
+                  normalizedKey: resolvedModel.normalizedKey,
+                }
+              : null,
+            fallbackQueries: fallbackQueriesUsed,
+          },
           debug: { droppedNoPrice, droppedNoImage, totalFromEbay }
         },
         analytics,
@@ -1468,16 +1542,27 @@ if (sort === "newlylisted") {
       hasPrev: page > 1,
       fetchedCount,
       keptCount,
-      meta: {
-        total: groups.length,
-        returned: pageGroups.length,
-        cards: pageGroups.length,
-        page,
-        perPage,
-        sort: sort || "bestprice",
-        source: "merged",
-        sources: Array.from(new Set(mergedOffers.map(o => o.retailer))).sort(),
-        debug: { droppedNoPrice, droppedNoImage, totalFromEbay },
+        meta: {
+          total: groups.length,
+          returned: pageGroups.length,
+          cards: pageGroups.length,
+          page,
+          perPage,
+          sort: sort || "bestprice",
+          source: "merged",
+          sources: Array.from(new Set(mergedOffers.map(o => o.retailer))).sort(),
+          search: {
+            query: q,
+            canonicalModel: resolvedModel
+              ? {
+                  brand: resolvedModel.brand,
+                  model: resolvedModel.model,
+                  normalizedKey: resolvedModel.normalizedKey,
+                }
+              : null,
+            fallbackQueries: fallbackQueriesUsed,
+          },
+          debug: { droppedNoPrice, droppedNoImage, totalFromEbay },
       },
       analytics,
     });

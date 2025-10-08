@@ -3,16 +3,12 @@ export const runtime = 'nodejs';
 
 import { getSql } from '../../lib/db';
 import { getEbayToken } from '../../lib/ebayAuth';
-import {
-  sanitizeModelKey,
-  stripAccessoryTokens,
-  HEAD_COVER_TOKEN_VARIANTS,
-  HEAD_COVER_TEXT_RX,
-} from '../../lib/sanitizeModelKey';
+import { sanitizeModelKey, stripAccessoryTokens } from '../../lib/sanitizeModelKey';
 import { decorateEbayUrl } from '../../lib/affiliate';
 import { gradeDeal } from '../../lib/deal-grade';
 import { composeDealLabel, formatModelLabel } from '../../lib/deal-label';
 import { normalizeModelKey } from '../../lib/normalize';
+import { evaluateAccessoryGuard } from '../../lib/text-filters';
 
 // ---------- Hobby-friendly performance knobs ----------
 const TIME_BUDGET_MS = 7500;                  // well under Hobby cap (~10s)
@@ -41,57 +37,6 @@ function ensurePutterQuery(text = '') {
   s = s.replace(/\bputters\b/gi, 'putter');
   if (!/\bputter\b/i.test(s)) s = `${s} putter`;
   return s.replace(/\s+/g, ' ').trim();
-}
-
-// ---------- likely putter title (so we don't require literal "putter") ----------
-function isLikelyPutterTitle(title = '') {
-  const t = String(title || '').toLowerCase();
-  if (/\bputter\b/i.test(t)) return true;
-  if (/\b(newport|phantom\s?x|anser|spider|odyssey|rossie|squareback|fastback|del\s*mar|studio|sigma|tomcat|monza|monte|er[ -]?\d)\b/i.test(t)) return true;
-  if (/\b(32|33|34|35|36)\s?(in|inch|")\b/.test(t)) return true;
-  if (/\b(blade|mallet|center\s?shaft(ed)?|face\s?balanced|milled)\b/i.test(t)) return true;
-  return false;
-}
-
-// ---------- accessory dominated title filter (hardened but tolerant) ----------
-function isAccessoryDominatedTitle(title = '') {
-  if (!title) return false;
-  const raw = String(title);
-
-  // 1) If headcover tokens in free text → drop
-  if (HEAD_COVER_TEXT_RX.test(raw)) return true;
-
-  const tokens = raw.split(/\s+/).filter(Boolean);
-  const ACCESSORY_TOKENS = new Set([
-    'weight','weights','screw','screws','wrench','tool','tools','kit','adapter',
-    'plate','plates','sole','soleplate','cap','plug','plugs','bumper',
-    'shaft','shaft-only','shafonly','grip','grip-only','griponly','hosel','neck',
-    'cover','headcover','head-cover','head','plate',
-  ]);
-
-  let accessoryCount = 0;
-  let substantiveCount = 0;
-
-  for (const token of tokens) {
-    const norm = token.replace(/[^a-z0-9]/gi, '').toLowerCase();
-    if (!norm) continue;
-
-    if (HEAD_COVER_TOKEN_VARIANTS.has(norm)) { accessoryCount++; continue; }
-    if (ACCESSORY_TOKENS.has(norm)) { accessoryCount++; continue; }
-
-    if (
-      /\b(32|33|34|35|36)\b/.test(norm) ||
-      /newport|phantom|anser|spider|odyssey|rossie|er\d+/.test(norm) ||
-      /blade|mallet|milled|center|face|balanced/.test(norm)
-    ) {
-      substantiveCount++;
-    }
-  }
-
-  const likely = isLikelyPutterTitle(raw);
-  if (likely && accessoryCount <= substantiveCount + 1) return false;
-  if (!likely && accessoryCount >= 2) return true;
-  return false;
 }
 
 // ---------- fast=1 helper: if aggregates exist, ignore live_* fields afterwards ----------
@@ -292,34 +237,35 @@ export function buildDealsFromRows(rows, limit, arg3) {
   for (const row of rows) {
     const title = row?.title || '';
     const modelKey = row.model_key || '';
-    const knownModel = Boolean(modelKey);
-    const hasPutterToken = /\bputter\b/i.test(title);
-    const likelyTitle = isLikelyPutterTitle(title);
 
-    const recordDrop = (reason) => {
+    const recordDrop = (reason, extra = {}) => {
       if (!captureAccessoryDrops || !debugSink) return;
-      const payload = { reason, title };
+      const payload = {
+        title,
+        reason,
+        ...(extra && typeof extra === 'object' ? extra : {}),
+      };
       if (row?.item_id) payload.itemId = row.item_id;
       if (row?.model_key) payload.modelKey = row.model_key;
       debugSink.push(payload);
     };
 
-    if (!hasPutterToken && !knownModel) {
-      recordDrop('missing_putter_token');
+    const guard = evaluateAccessoryGuard(title);
+
+    if (guard.isAccessory) {
+      recordDrop(guard.reason || 'accessory_filtered', {
+        dropTokens: guard.dropTokens,
+        hasCoreToken: guard.hasCoreToken,
+      });
       continue;
     }
 
-    if (!likelyTitle && !knownModel) {
-      recordDrop('not_putter_title');
+    if (!modelKey) {
+      recordDrop('missing_model_key', {
+        hasCoreToken: guard.hasCoreToken,
+      });
       continue;
     }
-
-    if (isAccessoryDominatedTitle(title)) {
-      recordDrop('accessory_dominated');
-      continue;
-    }
-
-    if (!modelKey) continue;
 
     const total = toNumber(row.total);
     const price = toNumber(row.price);
@@ -750,6 +696,7 @@ export default async function handler(req, res) {
   };
 
   if (debugAccessories) {
+    payload.filteredOut = accessoryDebug;
     payload.meta.debug = {
       accessoryDrops: accessoryDebug,
     };
