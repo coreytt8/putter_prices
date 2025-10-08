@@ -344,17 +344,22 @@ export default async function Home() {
                     : "";
                 const grade = deal && typeof deal.grade === "object" ? deal.grade : null;
                 return (
-                  <HighlightCard key={deal.query}>
-                    <div className="aspect-[3/2] w-full bg-slate-100">
+                  <HighlightCard key={deal.query} className="md:flex-row md:items-stretch">
+                    <div className="relative aspect-[4/3] w-full overflow-hidden bg-slate-100 md:h-full md:max-h-64 md:w-52 md:flex-shrink-0 md:border-r md:border-slate-100">
                       {deal.image ? (
-                        <img src={deal.image} alt={deal.label} className="h-full w-full object-cover" loading="lazy" />
+                        <img
+                          src={deal.image}
+                          alt={deal.label}
+                          className="absolute inset-0 h-full w-full object-contain p-4"
+                          loading="lazy"
+                        />
                       ) : (
-                        <div className="flex h-full items-center justify-center text-sm text-slate-500">
+                        <div className="flex h-full items-center justify-center p-4 text-sm text-slate-500">
                           Live data populates images as we refresh listings.
                         </div>
                       )}
                     </div>
-                    <div className="flex flex-1 flex-col gap-4 p-6">
+                    <div className="flex flex-1 flex-col gap-4 p-5 sm:p-6">
                       <div>
                         <h3 className="text-xl font-semibold text-slate-900">{deal.label}</h3>
                         <p className="mt-2 text-sm text-slate-600">{deal.blurb}</p>
