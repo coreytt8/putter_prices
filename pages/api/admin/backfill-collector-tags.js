@@ -1,9 +1,8 @@
 // pages/api/admin/backfill-collector-tags.js
 export const runtime = 'nodejs';
 
-import { tagAndFilter } from '@/lib/collector/tagAndFilter.js';
-// Use the same DB entrypoint you already use elsewhere (collect-prices.js uses getSql)
-import { getSql } from '@/lib/db';
+import { tagAndFilter } from '../../../lib/collector/tagAndFilter.js';
+import { getSql } from '../../../lib/db.js';
 
 function isAuthorized(req) {
   const adminKey = req.headers['x-admin-key'] || req.headers['x-admin-key'.toLowerCase()];
@@ -24,7 +23,7 @@ export default async function handler(req, res) {
 
     const sql = await getSql();
 
-    // make sure columns exist (no-op if already there)
+    // Ensure columns exist (no-op if already present)
     await sql/* sql */`
       DO $$
       BEGIN
@@ -49,7 +48,6 @@ export default async function handler(req, res) {
       END$$;
     `;
 
-    // fetch a batch of rows missing tags
     const rows = await sql/* sql */`
       SELECT id, title
         FROM items
@@ -69,10 +67,7 @@ export default async function handler(req, res) {
     try {
       for (const r of rows) {
         const [maybe] = tagAndFilter([{ title: r.title }]);
-        if (!maybe) {
-          rejected++;
-          continue;
-        }
+        if (!maybe) { rejected++; continue; }
         await sql/* sql */`
           UPDATE items
              SET category = ${maybe.category},
@@ -89,12 +84,7 @@ export default async function handler(req, res) {
       throw e;
     }
 
-    return res.status(200).json({
-      ok: true,
-      scanned: rows.length,
-      updated,
-      rejected,
-    });
+    return res.status(200).json({ ok: true, scanned: rows.length, updated, rejected });
   } catch (err) {
     return res.status(500).json({ ok: false, error: err?.message || 'backfill failed' });
   }
