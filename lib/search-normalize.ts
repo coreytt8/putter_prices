@@ -218,7 +218,7 @@ export function buildCanonicalQuery(details: BuildCanonicalQueryDetails = {}): s
     base = formatFullModelName(details);
   }
 
-  const variantHint = humanizeVariantKey(details.variantKey);
+  const variantHint = humanizeVariantKey(details.variantKey ?? undefined);
   if (variantHint) {
     const lowerBase = base.toLowerCase();
     if (!lowerBase.includes(variantHint.toLowerCase())) {
