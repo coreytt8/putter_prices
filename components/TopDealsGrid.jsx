@@ -96,26 +96,14 @@ export default function TopDealsGrid({ items = [], deals = [] }) {
                             ) : null}
                         </div>
 
-                        {(d.bestOffer?.url || canonicalQuery) ? (
-                            <div className="mt-auto flex flex-wrap items-center gap-2 border-t border-slate-100 pt-3">
-                                {d.bestOffer?.url ? (
-                                    <a
-                                        href={d.bestOffer.url}
-                                        target="_blank"
-                                        rel="noopener noreferrer"
-                                        className="inline-flex items-center rounded-xl bg-emerald-600 px-3 py-2 text-sm font-semibold text-white shadow-sm transition hover:bg-emerald-500"
-                                    >
-                                        View on eBay
-                                    </a>
-                                ) : null}
-                                {canonicalQuery ? (
-                                    <Link
-                                        href={latestHref}
-                                        className="inline-flex items-center rounded-xl border border-emerald-100 bg-emerald-50 px-3 py-2 text-sm font-semibold text-emerald-700 transition hover:border-emerald-200 hover:bg-emerald-100"
-                                    >
-                                        See latest listings
-                                    </Link>
-                                ) : null}
+                        {canonicalQuery ? (
+                            <div className="text-right text-xs">
+                                <Link
+                                    href={latestHref}
+                                    className="font-medium text-emerald-700 hover:underline"
+                                >
+                                    Explore this model →
+                                </Link>
                             </div>
                         ) : null}
                     </article>
