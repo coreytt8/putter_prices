@@ -12,7 +12,7 @@ import {
   stripHeadcoverSpecTokens,
 } from "../../lib/sanitizeModelKey.js";
 import { BRAND_LIMITED_TOKENS } from "../../lib/config/brandLimitedTokens.js";
-import { buildCanonicalQuery, resolveModelKeyFromQuery } from "../../lib/search-normalize.js";
+import { buildCanonicalQuery, resolveModelKeyFromQuery } from "../../lib/search-normalize";
 
 /**
  * Required ENV (Vercel + .env.local):

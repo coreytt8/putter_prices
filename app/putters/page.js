@@ -5,6 +5,8 @@ import MarketSnapshot from "@/components/MarketSnapshot";
 import HeroSection from "@/components/HeroSection";
 import SectionWrapper from "@/components/SectionWrapper";
 import HighlightCard from "@/components/HighlightCard";
+import RarityBadge from "@/components/RarityBadge";
+import { formatFullModelName } from "@/lib/format-model";
 import CompareBar from "@/components/CompareBar";
 import CompareTray from "@/components/CompareTray";
 import { detectVariant } from "@/lib/variantMap";
@@ -36,6 +38,13 @@ function ConditionPill({ condition }) {
       {label}
     </span>
   );
+}
+
+function arrayEquals(a = [], b = []) {
+  if (a.length !== b.length) return false;
+  const left = [...a].sort();
+  const right = [...b].sort();
+  return left.every((val, idx) => val === right[idx]);
 }
 
 const bandPretty = (b) => {
@@ -241,6 +250,15 @@ const sortParam = {
   count_desc: "count_desc",
 };
 
+const CATEGORY_TABS = [
+  { key: "all", label: "All", categoryIn: [], rarityIn: [] },
+  { key: "putters", label: "Putters", categoryIn: ["putter"], rarityIn: [] },
+  { key: "headcovers", label: "Headcovers", categoryIn: ["headcover"], rarityIn: [] },
+  { key: "tour", label: "Tour-Only", categoryIn: [], rarityIn: ["tour"] },
+  { key: "limited", label: "Limited", categoryIn: [], rarityIn: ["limited"] },
+  { key: "retail", label: "Retail", categoryIn: [], rarityIn: ["retail"] },
+];
+
 const FIXED_PER_PAGE = 10;
 
 const retailerLogos = {
@@ -330,6 +348,8 @@ export default function PuttersPage() {
   const [modelKeyParam, setModelKeyParam] = useState("");
   const [broaden, setBroaden] = useState(false);
   const [includeProShops, setIncludeProShops] = useState(false);
+  const [categoryFilter, setCategoryFilter] = useState([]);
+  const [rarityFilter, setRarityFilter] = useState([]);
 
 
 
@@ -352,6 +372,15 @@ export default function PuttersPage() {
   const [isCompareOpen, setIsCompareOpen] = useState(false);
 
   const compareIds = useMemo(() => new Set(compareItems.map((item) => item._cid)), [compareItems]);
+
+  const activeTab = useMemo(() => {
+    for (const tab of CATEGORY_TABS) {
+      if (arrayEquals(categoryFilter, tab.categoryIn) && arrayEquals(rarityFilter, tab.rarityIn)) {
+        return tab.key;
+      }
+    }
+    return "all";
+  }, [categoryFilter, rarityFilter]);
 
 
   // Per-model caches
@@ -394,6 +423,8 @@ export default function PuttersPage() {
       const fromUrlModel = (sp.get("model") || "").trim();
       setModelKeyParam(fromUrlModel);
     }
+    if (sp.has("categoryIn")) setCategoryFilter(gList("categoryIn"));
+    if (sp.has("rarityIn")) setRarityFilter(gList("rarityIn"));
   }, []);
 
   useEffect(() => {
@@ -418,13 +449,15 @@ export default function PuttersPage() {
     if (lengths.length) params.set("lengths", lengths.join(","));
     if (includeProShops) params.set("pro","true");
     if (modelKeyParam.trim()) params.set("modelKey", modelKeyParam.trim());
+    if (categoryFilter.length) params.set("categoryIn", categoryFilter.join(","));
+    if (rarityFilter.length) params.set("rarityIn", rarityFilter.join(","));
     params.set("page", String(page));
     params.set("group", groupMode ? "true" : "false");
 
     const qs = params.toString();
     const url = qs ? `/putters?${qs}` : "/putters";
     window.history.replaceState({}, "", url);
-  }, [q, onlyComplete, minPrice, maxPrice, conds, buying, hasBids, sortBy, page, groupMode, broaden, dex, head, lengths, includeProShops, modelKeyParam]);
+  }, [q, onlyComplete, minPrice, maxPrice, conds, buying, hasBids, sortBy, page, groupMode, broaden, dex, head, lengths, includeProShops, modelKeyParam, categoryFilter, rarityFilter]);
 
   useEffect(() => {
     if (!q.trim() || !modelKeyParam) return;
@@ -448,18 +481,20 @@ export default function PuttersPage() {
     if (head) params.set("head", head);
     if (lengths.length) params.set("lengths", lengths.join(","));
     if (modelKeyParam.trim()) params.set("modelKey", modelKeyParam.trim());
+    if (categoryFilter.length) params.set("categoryIn", categoryFilter.join(","));
+    if (rarityFilter.length) params.set("rarityIn", rarityFilter.join(","));
     params.set("page", String(page));
     params.set("perPage", String(FIXED_PER_PAGE));
     params.set("group", groupMode ? "true" : "false");
     params.set("samplePages", "3");
     params.set("_ts", String(Date.now()));
     return `/api/putters?${params.toString()}`;
-  }, [q, onlyComplete, minPrice, maxPrice, conds, buying, hasBids, sortBy, page, groupMode, broaden, dex, head, lengths, includeProShops, modelKeyParam]);
+  }, [q, onlyComplete, minPrice, maxPrice, conds, buying, hasBids, sortBy, page, groupMode, broaden, dex, head, lengths, includeProShops, modelKeyParam, categoryFilter, rarityFilter]);
 
   // Reset to page 1 when inputs change
   useEffect(() => {
     setPage(1);
-  }, [q, onlyComplete, minPrice, maxPrice, conds, buying, hasBids, sortBy, groupMode, broaden, dex, head, lengths, includeProShops, modelKeyParam]);
+  }, [q, onlyComplete, minPrice, maxPrice, conds, buying, hasBids, sortBy, groupMode, broaden, dex, head, lengths, includeProShops, modelKeyParam, categoryFilter, rarityFilter]);
 
   // Fetch results
   useEffect(() => {
@@ -487,6 +522,27 @@ export default function PuttersPage() {
 
         const nextGroups = Array.isArray(data.groups) ? data.groups : [];
         let pageOffers = Array.isArray(data.offers) ? data.offers : [];
+
+        if (categoryFilter.length) {
+          const categorySet = new Set(categoryFilter.map((c) => c.toLowerCase()));
+          pageOffers = pageOffers.filter((offer) => {
+            const raw = typeof offer?.category === "string" ? offer.category.toLowerCase() : "";
+            return categorySet.size === 0 || categorySet.has(raw);
+          });
+        }
+
+        if (rarityFilter.length) {
+          const raritySet = new Set(rarityFilter.map((r) => r.toLowerCase()));
+          pageOffers = pageOffers.filter((offer) => {
+            const raw =
+              typeof offer?.rarityTier === "string"
+                ? offer.rarityTier.toLowerCase()
+                : typeof offer?.release?.rarityTier === "string"
+                ? offer.release.rarityTier.toLowerCase()
+                : "";
+            return raritySet.size === 0 || raritySet.has(raw);
+          });
+        }
 
         if (!groupMode && pageOffers.length) {
           if (sortBy === "best_price_asc") {
@@ -676,7 +732,17 @@ export default function PuttersPage() {
     setPage(1); setGroupMode(true); setBroaden(false);
     setIncludeProShops(false);
     setModelKeyParam("");
+    setCategoryFilter([]);
+    setRarityFilter([]);
   };
+
+  const handleSelectTab = useCallback((tabKey) => {
+    const tab = CATEGORY_TABS.find((entry) => entry.key === tabKey);
+    if (!tab) return;
+    setCategoryFilter(Array.from(tab.categoryIn));
+    setRarityFilter(Array.from(tab.rarityIn));
+    setPage(1);
+  }, []);
 
   const handleToggleCompare = useCallback((offer) => {
     const id = getOfferId(offer);
@@ -819,6 +885,25 @@ export default function PuttersPage() {
             </a>
             .
           </p>
+          <div className="mt-6 flex flex-wrap items-center gap-2">
+            {CATEGORY_TABS.map((tab) => {
+              const isActive = activeTab === tab.key;
+              return (
+                <button
+                  key={tab.key}
+                  type="button"
+                  onClick={() => handleSelectTab(tab.key)}
+                  className={`inline-flex items-center rounded-full px-4 py-1.5 text-sm font-semibold transition ${
+                    isActive
+                      ? "bg-white text-slate-900 shadow"
+                      : "border border-white/10 bg-white/10 text-white/80 hover:bg-white/20"
+                  }`}
+                >
+                  {tab.label}
+                </button>
+              );
+            })}
+          </div>
         </div>
       </HeroSection>
 
@@ -1498,6 +1583,28 @@ export default function PuttersPage() {
                       const lengthValue = Number(o?.specs?.length);
                       const bandValue = stats?.usedBand || null;
                       const bandSample = stats?.bandSampleSize ?? stats?.n ?? null;
+                      const rarityTier = o?.rarityTier || o?.release?.rarityTier || o?.tags?.rarityTier || null;
+                      const displayTitle = formatFullModelName({
+                        brand: o?.brand || o?.specs?.brand,
+                        model: o?.model || modelKey,
+                        label: o?.modelLabel,
+                        rawLabel: o?.title,
+                        variantKey: variant,
+                      });
+                      const badge = Number.isFinite(priceValue)
+                        ? makeSmartBadge({ listingPrice: priceValue, stats })
+                        : null;
+                      const showBadge = badge && badge.tier !== "insufficient";
+                      const medianValue = Number.isFinite(stats?.p50) ? Number(stats.p50) : null;
+                      const diffValue =
+                        Number.isFinite(medianValue) && Number.isFinite(priceValue)
+                          ? priceValue - medianValue
+                          : null;
+                      const diffAbs = Number.isFinite(diffValue) ? Math.abs(diffValue) : null;
+                      const diffPct =
+                        Number.isFinite(diffValue) && Number.isFinite(medianValue) && medianValue > 0
+                          ? Math.round(Math.abs((diffValue / medianValue) * 100))
+                          : null;
 
                       return (
                         <article
@@ -1522,29 +1629,44 @@ export default function PuttersPage() {
                             </div>
 
                             <div className="flex flex-1 flex-col gap-4">
-                              <div>
-                                <h3 className="text-lg font-semibold leading-6 text-slate-900">
-                                  {o.title}
-                                </h3>
-                                <div className="mt-3 flex flex-wrap items-center gap-2 text-xs text-slate-600">
-                                  <ConditionPill condition={o.conditionBand || o.conditionId || o.condition} />
-                                  <BandChip band={bandValue} sample={bandSample} />
-                                  {dex === "LEFT" || dex === "RIGHT" ? (
-                                    <span className="inline-flex items-center rounded-full bg-slate-100 px-2 py-0.5 text-[10px] font-medium text-slate-700">
-                                      {dex === "LEFT" ? "Left-hand" : "Right-hand"}
-                                    </span>
-                                  ) : null}
-                                  {head === "MALLET" || head === "BLADE" ? (
-                                    <span className="inline-flex items-center rounded-full bg-indigo-100 px-2 py-0.5 text-[10px] font-medium text-indigo-700">
-                                      {head === "MALLET" ? "Mallet" : "Blade"}
-                                    </span>
-                                  ) : null}
-                                  {Number.isFinite(lengthValue) ? (
-                                    <span className="inline-flex items-center rounded-full bg-amber-100 px-2 py-0.5 text-[10px] font-medium text-amber-800">
-                                      {`${lengthValue}"`}
-                                    </span>
-                                  ) : null}
+                              <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+                                <div className="min-w-0">
+                                  <h3 className="text-lg font-semibold leading-6 text-slate-900 [display:-webkit-box] [-webkit-box-orient:vertical] [-webkit-line-clamp:2] overflow-hidden">
+                                    {displayTitle || o.title}
+                                  </h3>
+                                  <p className="mt-1 text-sm text-slate-600 [display:-webkit-box] [-webkit-box-orient:vertical] [-webkit-line-clamp:2] overflow-hidden">{o.title}</p>
                                 </div>
+                                <div className="flex flex-col items-end gap-2">
+                                  {showBadge ? (
+                                    <span
+                                      className={`inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[11px] font-medium ring-1 ring-inset ${badge.color}`}
+                                    >
+                                      <span aria-hidden="true">{badge.icon}</span>
+                                      <span>{badge.label}</span>
+                                    </span>
+                                  ) : null}
+                                  <RarityBadge tier={rarityTier} />
+                                </div>
+                              </div>
+
+                              <div className="flex flex-wrap items-center gap-2 text-xs text-slate-600">
+                                <ConditionPill condition={o.conditionBand || o.conditionId || o.condition} />
+                                <BandChip band={bandValue} sample={bandSample} />
+                                {dex === "LEFT" || dex === "RIGHT" ? (
+                                  <span className="inline-flex items-center rounded-full bg-slate-100 px-2 py-0.5 text-[10px] font-medium text-slate-700">
+                                    {dex === "LEFT" ? "Left-hand" : "Right-hand"}
+                                  </span>
+                                ) : null}
+                                {head === "MALLET" || head === "BLADE" ? (
+                                  <span className="inline-flex items-center rounded-full bg-indigo-100 px-2 py-0.5 text-[10px] font-medium text-indigo-700">
+                                    {head === "MALLET" ? "Mallet" : "Blade"}
+                                  </span>
+                                ) : null}
+                                {Number.isFinite(lengthValue) ? (
+                                  <span className="inline-flex items-center rounded-full bg-amber-100 px-2 py-0.5 text-[10px] font-medium text-amber-800">
+                                    {`${lengthValue}"`}
+                                  </span>
+                                ) : null}
                               </div>
 
                               <div className="mt-auto flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between">
@@ -1553,6 +1675,17 @@ export default function PuttersPage() {
                                   <p className="text-xl font-semibold text-slate-900">
                                     {Number.isFinite(priceValue) ? formatPrice(priceValue, o.currency) : "—"}
                                   </p>
+                                  {Number.isFinite(medianValue) ? (
+                                    <p className="mt-1 text-xs text-slate-600">
+                                      Median: {formatPrice(medianValue, o.currency)}
+                                      {Number.isFinite(diffValue) && diffAbs ? (
+                                        <>
+                                          {" "}· ≈{formatPrice(diffAbs, o.currency)} {diffValue < 0 ? "below" : "above"}
+                                          {diffPct ? ` (${diffPct}% ${diffValue < 0 ? "below" : "above"})` : ""}
+                                        </>
+                                      ) : null}
+                                    </p>
+                                  ) : null}
                                 </div>
                                 <div className="flex flex-wrap items-center justify-end gap-2">
                                   {offerId ? (

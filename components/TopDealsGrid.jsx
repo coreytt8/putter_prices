@@ -1,6 +1,7 @@
 // components/TopDealsGrid.jsx
 import Link from "next/link";
 import DealGradeBadge from "@/components/DealGradeBadge";
+import RarityBadge from "@/components/RarityBadge";
 import { formatFullModelName } from "@/lib/format-model";
 import { buildCanonicalQuery } from "@/lib/search-normalize";
 
@@ -42,9 +43,14 @@ export default function TopDealsGrid({ items = [], deals = [] }) {
                     ? Number(d.bestPrice)
                     : Number(d?.bestOffer?.total ?? d?.bestOffer?.price);
                 const currency = d?.currency || d?.bestOffer?.currency || "USD";
-                const bandLabel = bandPretty(d?.stats?.usedBand);
+                const bandLabel = bandPretty(d?.stats?.usedBand || d?.conditionBand);
                 const bandSampleRaw = Number(d?.statsMeta?.bandSampleSize);
                 const bandSample = Number.isFinite(bandSampleRaw) && bandSampleRaw > 0 ? bandSampleRaw : null;
+                const rarityTier = d?.rarityTier || d?.bestOffer?.rarityTier || null;
+                const watchCountRaw = Number(d?.watchCount ?? d?.bestOffer?.watchCount);
+                const watchCount = Number.isFinite(watchCountRaw) && watchCountRaw > 0 ? watchCountRaw : null;
+                const premiumRaw = Number(d?.recentPremium ?? d?.premiumDelta ?? d?.savings?.percent ?? 0);
+                const premiumPct = Number.isFinite(premiumRaw) ? premiumRaw : null;
                 const canonicalQuery = buildCanonicalQuery({
                     brand: d?.brand || d?.bestOffer?.brand,
                     model: d?.model,
@@ -52,6 +58,7 @@ export default function TopDealsGrid({ items = [], deals = [] }) {
                     label: d?.rawLabel || d?.label,
                     rawLabel: d?.rawLabel,
                     variantKey: d?.variantKey,
+                    rarityTier,
                     bestOfferTitle: d?.bestOffer?.title,
                     bestOffer: d?.bestOffer,
                 });
@@ -62,7 +69,7 @@ export default function TopDealsGrid({ items = [], deals = [] }) {
                 return (
                     <article
                         key={id || label}
-                        className="flex h-full flex-col gap-4 rounded-2xl border border-slate-200 bg-white p-4 shadow-sm"
+                        className="flex h-full flex-col justify-between gap-4 rounded-2xl border border-slate-200 bg-white p-4 shadow-sm"
                     >
                         <div className="flex items-start justify-between gap-3">
                             <div className="min-w-0">
@@ -71,18 +78,16 @@ export default function TopDealsGrid({ items = [], deals = [] }) {
                                 >
                                     {label}
                                 </h3>
-                                {d.modelKey ? (
-                                    <p className="mt-1 truncate text-xs text-slate-500">{d.modelKey}</p>
-                                ) : null}
-                            </div>
-                            <div className="flex flex-col items-end gap-2">
-                                {d.grade ? <DealGradeBadge grade={d.grade} /> : null}
-                                {bandLabel ? (
-                                    <span className="inline-flex items-center rounded-full bg-gray-100 px-2 py-0.5 text-[10px] font-medium text-gray-700">
-                                        {bandLabel}
-                                        {bandSample ? <span className="ml-1 opacity-70">n={bandSample}</span> : null}
-                                    </span>
-                                ) : null}
+                                <div className="mt-2 flex flex-wrap items-center gap-2 text-xs text-slate-500">
+                                    {d.grade ? <DealGradeBadge grade={d.grade} /> : null}
+                                    <RarityBadge tier={rarityTier} />
+                                    {bandLabel ? (
+                                        <span className="inline-flex items-center rounded-full bg-gray-100 px-2 py-0.5 text-[10px] font-medium text-gray-700">
+                                            {bandLabel}
+                                            {bandSample ? <span className="ml-1 opacity-70">n={bandSample}</span> : null}
+                                        </span>
+                                    ) : null}
+                                </div>
                             </div>
                         </div>
 
@@ -91,21 +96,39 @@ export default function TopDealsGrid({ items = [], deals = [] }) {
                             <p className="text-xl font-semibold text-slate-900">
                                 {Number.isFinite(bestPrice) ? fmt(bestPrice, currency) : "—"}
                             </p>
-                            {!d.bestOffer?.url ? (
-                                <p className="mt-1 text-sm text-slate-500">No live link available</p>
-                            ) : null}
+                            <div className="mt-2 text-xs text-slate-500">
+                                {watchCount ? <span>{watchCount.toLocaleString()} watchers</span> : null}
+                                {watchCount && premiumPct ? <span className="mx-1">·</span> : null}
+                                {premiumPct ? (
+                                    <span>
+                                        {premiumPct > 0
+                                            ? `~${Math.round(premiumPct * 100)}% premium`
+                                            : `~${Math.round(Math.abs(premiumPct * 100))}% savings`}
+                                    </span>
+                                ) : null}
+                            </div>
                         </div>
 
-                        {canonicalQuery ? (
-                            <div className="text-right text-xs">
+                        <div className="mt-auto flex flex-wrap justify-end gap-2 text-xs">
+                            {canonicalQuery ? (
                                 <Link
                                     href={latestHref}
-                                    className="font-medium text-emerald-700 hover:underline"
+                                    className="inline-flex items-center justify-center rounded-full bg-slate-900 px-4 py-1.5 font-semibold text-white transition hover:bg-slate-700"
                                 >
-                                    Explore this model →
+                                    See live listings
                                 </Link>
-                            </div>
-                        ) : null}
+                            ) : null}
+                            {d.bestOffer?.url ? (
+                                <a
+                                    href={d.bestOffer.url}
+                                    target="_blank"
+                                    rel="noreferrer"
+                                    className="inline-flex items-center justify-center rounded-full border border-slate-300 px-4 py-1.5 font-semibold text-slate-700 transition hover:border-emerald-200 hover:text-emerald-700"
+                                >
+                                    View on eBay
+                                </a>
+                            ) : null}
+                        </div>
                     </article>
                 );
             })}
