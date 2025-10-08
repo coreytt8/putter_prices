@@ -9,7 +9,7 @@
     { "path": "/api/cron/nightly?secret=12qwaszx!@QWASZX", "schedule": "0 4 * * *" },
     {
       "path": "/api/top-deals?cache=0&fast=1&cacheWrite=1&cronSecret=12qwaszx!@QWASZX",
-      "schedule": "0 */3 * * *"
+      "schedule": "30 10 * * *"
     }
   ]
 }
