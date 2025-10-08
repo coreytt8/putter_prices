@@ -1,16 +1,18 @@
 // pages/api/top-deals.js
 export const runtime = 'nodejs';
 
-import { getSql } from '../../lib/db';
-import { decorateEbayUrl } from '../../lib/affiliate';
-import { gradeDeal } from '../../lib/deal-grade';
-import { normalizeModelKey } from '../../lib/normalize';
-import { evaluateAccessoryGuard } from '../../lib/text-filters';
+import { getSql } from '../../lib/db.js';
+import { decorateEbayUrl } from '../../lib/affiliate.js';
+import { gradeDeal } from '../../lib/deal-grade.js';
+import { sanitizeModelKey, stripAccessoryTokens } from '../../lib/sanitizeModelKey.js';
+import { composeDealLabel, formatModelLabel } from '../../lib/deal-label.js';
+import { normalizeModelKey } from '../../lib/normalize.js';
+import { evaluateAccessoryGuard } from '../../lib/text-filters.js';
 import {
   getAllowedCacheSecrets,
   getTopDealsCacheKey,
   isCollectorModeEnabled,
-} from '../../lib/config/collectorFlags';
+} from '../../lib/config/collectorFlags.js';
 
 const AVAILABLE_WINDOWS = [60, 90, 180];
 const DEFAULT_LIMIT = 12;
@@ -35,6 +37,23 @@ function toFiniteNumber(value) {
 function centsToDollars(value) {
   const num = toFiniteNumber(value);
   return num == null ? null : num / 100;
+}
+
+function toNumber(value) {
+  const num = toFiniteNumber(value);
+  return Number.isFinite(num) ? num : null;
+}
+
+function centsToNumber(value) {
+  return centsToDollars(value);
+}
+
+function ensurePutterQuery(text = '') {
+  let s = String(text || '').trim();
+  if (!s) return 'golf putter';
+  s = s.replace(/\bputters\b/gi, 'putter');
+  if (!/\bputter\b/i.test(s)) s = `${s} putter`;
+  return s.replace(/\s+/g, ' ').trim();
 }
 
 function parseCategoryList(param) {
@@ -331,6 +350,320 @@ function buildDeal(item, aggregate, fallbackLevel, { minSavingsPct, maxDispersio
       sourceVariant: aggregate.variant_key,
     },
   };
+}
+
+export function buildDealsFromRows(rows, limit, arg3) {
+  const opts = (typeof arg3 === 'number' || arg3 == null)
+    ? { lookbackHours: (typeof arg3 === 'number' ? arg3 : null) }
+    : (arg3 || {});
+
+  const {
+    now = new Date(),
+    freshnessHours = null,
+    minSample = null,
+    maxDispersion = null,
+    minSavingsPct = 0,
+    lookbackHours = null,
+    debugAccessoryList = null,
+    captureAccessoryDrops = false,
+  } = opts;
+
+  const grouped = new Map();
+  const debugSink = Array.isArray(debugAccessoryList) ? debugAccessoryList : null;
+
+  for (const row of rows) {
+    const title = row?.title || '';
+    const modelKey = row?.model_key || '';
+
+    const recordDrop = (reason, extra = {}) => {
+      if (!captureAccessoryDrops || !debugSink) return;
+      const payload = { title, reason, ...(extra && typeof extra === 'object' ? extra : {}) };
+      if (row?.item_id) payload.itemId = row.item_id;
+      if (row?.model_key) payload.modelKey = row.model_key;
+      debugSink.push(payload);
+    };
+
+    const guard = evaluateAccessoryGuard(title);
+    if (guard.isAccessory) {
+      const modelMentionsHeadcover = /headcover/i.test(row?.model_key || '')
+        || /headcover/i.test(row?.variant_key || '');
+      const allowHeadcover = modelMentionsHeadcover && guard.reason === 'headcover';
+      if (!allowHeadcover) {
+        recordDrop(guard.reason || 'accessory_filtered', {
+          dropTokens: guard.dropTokens,
+          hasCoreToken: guard.hasCoreToken,
+        });
+        continue;
+      }
+    }
+
+    if (!modelKey) {
+      recordDrop('missing_model_key', { hasCoreToken: guard.hasCoreToken });
+      continue;
+    }
+
+    const total = toNumber(row.total);
+    const price = toNumber(row.price);
+    const shipping = toNumber(row.shipping);
+    const variantKey = typeof row.variant_key === 'string' ? row.variant_key : '';
+
+    const varMedian = centsToNumber(row.var_p50_cents);
+    const varN = toNumber(row.var_n);
+    const modMedian = centsToNumber(row.mod_p50_cents);
+    const modN = toNumber(row.mod_n);
+
+    const varBandMedian = centsToNumber(row.var_band_p50_cents);
+    const varBandN = toNumber(row.var_band_n);
+    const modBandMedian = centsToNumber(row.mod_band_p50_cents);
+    const modBandN = toNumber(row.mod_band_n);
+    const usedBand = row.cond_band || null;
+
+    const liveMedian = centsToNumber(row.p50_cents);
+
+    let median = null;
+    let bandSample = null;
+    let bandUsed = null;
+    let medianSource = null;
+    let medianSample = null;
+
+    if (Number.isFinite(varBandN) && varBandN >= (minSample ?? 0) && Number.isFinite(varBandMedian)) {
+      median = varBandMedian;
+      bandSample = varBandN;
+      bandUsed = usedBand;
+      medianSource = 'variant_band';
+      medianSample = varBandN;
+    } else if (Number.isFinite(modBandN) && modBandN >= (minSample ?? 0) && Number.isFinite(modBandMedian)) {
+      median = modBandMedian;
+      bandSample = modBandN;
+      bandUsed = usedBand;
+      medianSource = 'model_band';
+      medianSample = modBandN;
+    } else if (Number.isFinite(varN) && varN >= (minSample ?? 0) && Number.isFinite(varMedian)) {
+      median = varMedian;
+      medianSource = 'variant_any';
+      medianSample = varN;
+    } else if (Number.isFinite(modN) && modN >= (minSample ?? 0) && Number.isFinite(modMedian)) {
+      median = modMedian;
+      medianSource = 'model_any';
+      medianSample = modN;
+    } else {
+      median = liveMedian;
+      medianSource = 'live';
+      medianSample = toNumber(row.n);
+    }
+
+    if (!Number.isFinite(total) || !Number.isFinite(median) || median <= 0) continue;
+
+    const sampleSize = toNumber(row.n);
+    const dispersion = toNumber(row.dispersion_ratio);
+    if (minSample != null && sampleSize != null && sampleSize < minSample) continue;
+    if (maxDispersion != null && dispersion != null && dispersion > maxDispersion) continue;
+
+    if (freshnessHours != null && row.observed_at) {
+      const obs = new Date(row.observed_at);
+      if (now - obs > freshnessHours * 3600 * 1000) continue;
+    }
+
+    const savingsAmount = median - total;
+    const savingsPercent = median > 0 ? savingsAmount / median : null;
+    if (!Number.isFinite(savingsPercent) || savingsPercent <= (minSavingsPct ?? 0)) continue;
+
+    const current = grouped.get(modelKey);
+    if (!current
+      || savingsPercent > current.savingsPercent
+      || (savingsPercent === current.savingsPercent && total < current.total)) {
+      grouped.set(modelKey, {
+        row,
+        total,
+        price,
+        shipping,
+        median,
+        savingsAmount,
+        savingsPercent,
+        bandUsed,
+        bandSample,
+        medianSource,
+        medianSample,
+      });
+    }
+  }
+
+  const ranked = Array.from(grouped.values())
+    .sort((a, b) => {
+      if (Number.isFinite(b.savingsPercent) && Number.isFinite(a.savingsPercent) && b.savingsPercent !== a.savingsPercent) {
+        return b.savingsPercent - a.savingsPercent;
+      }
+      if (Number.isFinite(a.total) && Number.isFinite(b.total) && a.total !== b.total) {
+        return a.total - b.total;
+      }
+      return 0;
+    })
+    .slice(0, limit);
+
+  return ranked.map(({ row, total, price, shipping, median, savingsAmount, savingsPercent, bandUsed, bandSample, medianSource, medianSample }) => {
+    const sanitized = sanitizeModelKey(row.model_key, { storedBrand: row.brand });
+    const { label, brand: displayBrand } = composeDealLabel(row, sanitized);
+    const variantKey = typeof row.variant_key === 'string' ? row.variant_key : '';
+    const {
+      query: canonicalQuery,
+      queryVariants: canonicalVariants = {},
+      rawLabel: rawWithAccessories,
+      cleanLabel: cleanWithoutAccessories,
+    } = sanitized || {};
+
+    let cleanQuery = canonicalQuery || null;
+    let accessoryQuery = canonicalVariants.accessory || null;
+    let query = cleanQuery;
+
+    const fallbackCandidates = [
+      label,
+      formatModelLabel(row.model_key, row.brand, row.title),
+      [row.brand, row.title].filter(Boolean).join(' ').trim(),
+    ].filter(Boolean);
+
+    if (!query && row.brand) {
+      const brandBacked = sanitizeModelKey(`${row.brand} ${row.model_key}`, { storedBrand: row.brand });
+      if (brandBacked?.query) {
+        query = brandBacked.query;
+        cleanQuery = cleanQuery || brandBacked.query;
+      }
+      if (!accessoryQuery && brandBacked?.queryVariants?.accessory) accessoryQuery = brandBacked.queryVariants.accessory;
+    }
+
+    if (!query) {
+      for (const candidate of fallbackCandidates) {
+        const s = sanitizeModelKey(candidate, { storedBrand: row.brand });
+        if (s?.query) {
+          query = s.query;
+          cleanQuery = cleanQuery || s.query;
+          if (!accessoryQuery && s?.queryVariants?.accessory) accessoryQuery = s.queryVariants.accessory;
+          break;
+        }
+      }
+    }
+
+    if (!query) {
+      const base = stripAccessoryTokens(`${row.brand || ''} ${label}`.trim());
+      query = ensurePutterQuery(base || label || row.brand || '');
+      if (!cleanQuery) cleanQuery = query;
+      const accessoryBase = `${row.brand || ''} ${label}`.trim();
+      if (!accessoryQuery && accessoryBase) accessoryQuery = ensurePutterQuery(accessoryBase);
+    }
+
+    const labelWasAccessoryOnly = Boolean(rawWithAccessories) && !cleanWithoutAccessories;
+    const shouldPromoteAccessoryQuery = Boolean(accessoryQuery) && labelWasAccessoryOnly && !cleanQuery;
+    if (shouldPromoteAccessoryQuery) query = accessoryQuery;
+    else if (cleanQuery) query = cleanQuery;
+
+    const currency = row.currency || 'USD';
+    const statsSource = row.stats_source || null;
+    const resolvedCondition = bandUsed || row.cond_band || null;
+
+    const stats = {
+      p10: centsToNumber(row.p10_cents),
+      p50: median,
+      p90: centsToNumber(row.p90_cents),
+      n: toNumber(row.n),
+      dispersionRatio: toNumber(row.dispersion_ratio),
+      source: statsSource,
+      usedBand: resolvedCondition,
+      conditionBand: resolvedCondition,
+      variantKey: variantKey || null,
+      medianSource,
+    };
+
+    const statsMeta = {
+      source: statsSource,
+      windowDays: statsSource === 'aggregated' ? toNumber(row.window_days) : null,
+      updatedAt: statsSource === 'aggregated'
+        ? (row.aggregated_updated_at || row.updated_at || null)
+        : (row.live_updated_at || row.updated_at || null),
+      sampleSize: statsSource === 'aggregated'
+        ? toNumber(row.aggregated_n ?? row.n)
+        : toNumber(row.live_n ?? row.n),
+      bandSampleSize: bandSample,
+      medianSource,
+      conditionBand: resolvedCondition,
+      variantKey: variantKey || null,
+      medianSampleSize: Number.isFinite(medianSample) ? medianSample : null,
+    };
+
+    if (statsSource === 'live' && lookbackHours != null) statsMeta.lookbackHours = lookbackHours;
+
+    const bestOffer = {
+      itemId: row.item_id,
+      title: row.title,
+      url: decorateEbayUrl(row.url),
+      price,
+      total,
+      shipping,
+      currency,
+      image: row.image_url,
+      observedAt: row.observed_at || null,
+      condition: row.condition || null,
+      conditionBand: resolvedCondition,
+      retailer: 'eBay',
+      specs: { headType: row.head_type || null, dexterity: row.dexterity || null, length: toNumber(row.length_in) },
+      brand: displayBrand || row.brand || null,
+    };
+
+    const grade = gradeDeal({
+      savingsPct: Number.isFinite(savingsPercent) ? savingsPercent : null,
+    });
+
+    const conditionBand = resolvedCondition;
+    const sampleLabel = Number.isFinite(medianSample) && medianSample > 0 ? ` (n=${medianSample})` : '';
+    let gradeReason = null;
+    switch (medianSource) {
+      case 'variant_band':
+        gradeReason = `variant ${conditionBand || 'ANY'} median${sampleLabel}`;
+        break;
+      case 'model_band':
+        gradeReason = `model ${conditionBand || 'ANY'} median${sampleLabel}`;
+        break;
+      case 'variant_any':
+        gradeReason = `fallback: variant p50${sampleLabel}`;
+        break;
+      case 'model_any':
+        gradeReason = `fallback: model p50${sampleLabel}`;
+        break;
+      default:
+        gradeReason = `fallback: live p50${sampleLabel}`;
+        break;
+    }
+
+    return {
+      modelKey: row.model_key,
+      label,
+      query,
+      image: row.image_url || null,
+      currency,
+      bestPrice: total,
+      bestOffer,
+      stats,
+      statsMeta,
+      totalListings: toNumber(row.listing_count),
+      brand: row.brand || null,
+      model: row.model_key || null,
+      conditionBand,
+      variantKey: variantKey || null,
+      dealGrade: typeof grade.letter === 'string' ? grade.letter : null,
+      gradeReason,
+      savingsPct: Number.isFinite(savingsPercent) ? savingsPercent : null,
+      medianPrice: Number.isFinite(median) ? median : null,
+      grade: {
+        letter: typeof grade.letter === 'string' ? grade.letter : null,
+        label: typeof grade.label === 'string' ? grade.label : null,
+        color: typeof grade.color === 'string' ? grade.color : null,
+        deltaPct: Number.isFinite(grade.deltaPct) ? grade.deltaPct : null,
+      },
+      savings: {
+        amount: Number.isFinite(savingsAmount) ? savingsAmount : null,
+        percent: Number.isFinite(savingsPercent) ? savingsPercent : null,
+      },
+      queryVariants: { clean: cleanQuery || null, accessory: accessoryQuery || null },
+    };
+  });
 }
 
 async function loadDeals(sql, {
