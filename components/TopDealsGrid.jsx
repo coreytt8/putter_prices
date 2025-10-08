@@ -66,7 +66,11 @@ export default function TopDealsGrid({ items = [], deals = [] }) {
                     >
                         <div className="flex items-start justify-between gap-3">
                             <div className="min-w-0">
-                                <h3 className="truncate text-base font-semibold text-slate-900">{label}</h3>
+                                <h3
+                                    className="text-base font-semibold leading-snug text-slate-900 [display:-webkit-box] [-webkit-box-orient:vertical] [-webkit-line-clamp:2] overflow-hidden"
+                                >
+                                    {label}
+                                </h3>
                                 {d.modelKey ? (
                                     <p className="mt-1 truncate text-xs text-slate-500">{d.modelKey}</p>
                                 ) : null}
