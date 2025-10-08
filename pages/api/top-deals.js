@@ -697,6 +697,24 @@ export default async function handler(req, res) {
    // after you compute `deals` and `payload`
   // --- CONDITIONAL CACHE WRITE (skip empty) -----------------------
   const okAuth = req.headers['x-cron-secret'] === process.env.CRON_SECRET;
+  const modelCount = Array.isArray(deals) ? deals.length : 0;
+  const lookbackWindowHours = windowHours ?? null;
+
+  const baseMeta = {
+    limit,
+    modelCount,
+    lookbackWindowHours,
+    modelKey: modelKey || null,
+    filters: {
+      freshnessHours,
+      minSample,
+      maxDispersion,
+      minSavingsPct,
+    },
+    verified: !!verified,
+    fallbackUsed: !!fallbackUsed,
+  };
+
   const shouldWrite =
     cacheWrite &&
     okAuth &&
@@ -708,20 +726,7 @@ export default async function handler(req, res) {
       ok: true,
       generatedAt: new Date().toISOString(),
       deals,
-      meta: {
-        limit,
-        modelCount,
-        lookbackWindowHours,
-        modelKey: modelKey || null,
-        filters: {
-          freshnessHours,
-          minSample,
-          maxDispersion,
-          minSavingsPct,
-        },
-        verified: !!verified,
-        fallbackUsed: !!fallbackUsed,
-      },
+      meta: baseMeta,
     };
 
     // NOTE: make sure every template/backtick closes properly:
@@ -735,24 +740,13 @@ export default async function handler(req, res) {
   }
 
   // --- RESPONSE ---------------------------------------------------
+  const meta = { ...baseMeta };
+
   const payload = {
     ok: true,
     generatedAt: new Date().toISOString(),
     deals,
-    meta: {
-      limit,
-      modelCount,
-      lookbackWindowHours,
-      modelKey: modelKey || null,
-      filters: {
-        freshnessHours,
-        minSample,
-        maxDispersion,
-        minSavingsPct,
-      },
-      verified: !!verified,
-      fallbackUsed: !!fallbackUsed,
-    },
+    meta,
   };
 
   if (debugAccessories) {
