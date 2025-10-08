@@ -4,7 +4,7 @@ import { getHomepageCacheWriteSecret } from '../../../lib/config/collectorFlags'
 // 1) Calls /api/cron/seed-browse in small chunks using data/seed-models.txt
 // 2) Stays under Vercel’s 60s cap by using a time budget + resume cursor
 // 3) Triggers /api/admin/aggregate at the end (using the same CRON secret)
-// 4) Precomputes and caches Top Deals (fast=1) with friendly gates for instant homepage reads
+// 4) Precomputes and caches Top Deals (fast=1, cacheWrite=1) for homepage reads
 
 export const config = {
   api: { bodyParser: false },
@@ -61,7 +61,7 @@ async function callRefresh(base, secret) {
     const url = new URL(`${base}/api/cron/collect-prices`);
     url.searchParams.set("key", secret);
     url.searchParams.set("mode", "refresh");
-    url.searchParams.set("limit", "400");
+    url.searchParams.set("limit", "300");
     const res = await fetch(url.toString());
     return await res.json().catch(() => ({ ok: false }));
   } catch (e) { return { ok: false, error: String(e) }; }

@@ -822,7 +822,12 @@ export default async function handler(req, res) {
     }
 
     const cacheSecrets = getAllowedCacheSecrets();
-    const incomingSecret = String(req.headers['x-cron-secret'] || '');
+    const querySecret = req.query?.cronSecret || req.query?.secret;
+    const incomingSecret = String(
+      req.headers['x-cron-secret'] ||
+        (Array.isArray(querySecret) ? querySecret[0] : querySecret) ||
+        ''
+    );
     const canWriteCache = cacheWrite && cacheSecrets.includes(incomingSecret) && deals.length > 0;
 
     if (canWriteCache) {
