@@ -1,4 +1,14 @@
 // pages/index.js
+// Add this to the top of pages/index.js (and optionally collector-feed.js)
+
+<nav style={{ marginBottom: '2rem' }}>
+  <a href="/" style={{ marginRight: '1rem' }}>🏠 Home</a>
+  <a href="/collector-feed" style={{ marginRight: '1rem' }}>🕵️ Collector Feed</a>
+  <a href="/headcovers-feed">🧢 Headcovers Feed</a>
+</nav>
+
+
+
 
 import { useEffect, useState } from 'react';
 import Link from 'next/link';
