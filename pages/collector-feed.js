@@ -2,19 +2,20 @@ import { useEffect, useState } from 'react';
 import Header from '@/components/Header';
 import ListingGrid from '@/components/ListingGrid';
 
+const COLLECTOR_KEYWORDS = ['limited', 'tour', 'circle t', 'prototype', 'rare', 'vault', 'custom', 'craft batch'];
+
 export default function CollectorFeed() {
   const [listings, setListings] = useState([]);
   const [filtered, setFiltered] = useState([]);
   const [sort, setSort] = useState('recent');
   const [filterTerm, setFilterTerm] = useState('');
-  const [filterBrand, setFilterBrand] = useState('');
-  const [filterModel, setFilterModel] = useState('');
   const [lastUpdated, setLastUpdated] = useState(null);
 
   useEffect(() => {
     fetch(`/api/collectors`)
       .then(res => res.json())
       .then(data => {
+        console.log("📦 Collector API response:", data);
         const payload = data?.listings || {};
         setListings(payload.items || []);
         setLastUpdated(payload.timestamp || null);
@@ -27,16 +28,15 @@ export default function CollectorFeed() {
   useEffect(() => {
     let result = [...listings];
 
-    result = result.filter(item => {
-      const titleMatch = item.title?.toLowerCase().includes(filterTerm.toLowerCase());
-      const brandMatch = filterBrand
-        ? item.brand?.toLowerCase().includes(filterBrand.toLowerCase())
-        : true;
-      const modelMatch = filterModel
-        ? item.model?.toLowerCase().includes(filterModel.toLowerCase())
-        : true;
+    const term = filterTerm.trim().toLowerCase();
 
-      return titleMatch && brandMatch && modelMatch;
+    result = result.filter(item => {
+      const title = item.title?.toLowerCase() || '';
+      const matchesTerm = !term || title.includes(term);
+      const hasCollectorKeyword = COLLECTOR_KEYWORDS.some(keyword =>
+        title.includes(keyword)
+      );
+      return matchesTerm && hasCollectorKeyword;
     });
 
     switch (sort) {
@@ -55,7 +55,7 @@ export default function CollectorFeed() {
     }
 
     setFiltered(result);
-  }, [listings, filterTerm, filterBrand, filterModel, sort]);
+  }, [listings, filterTerm, sort]);
 
   return (
     <div style={{ padding: '2rem', maxWidth: '1000px', margin: '0 auto' }}>
@@ -64,19 +64,10 @@ export default function CollectorFeed() {
 
       <div style={{ display: 'flex', flexWrap: 'wrap', gap: '1rem', margin: '1rem 0' }}>
         <input
-          placeholder="Search by title"
+          placeholder="Search collector titles (e.g. Spider, Circle T, Olson...)"
           value={filterTerm}
           onChange={e => setFilterTerm(e.target.value)}
-        />
-        <input
-          placeholder="Brand"
-          value={filterBrand}
-          onChange={e => setFilterBrand(e.target.value)}
-        />
-        <input
-          placeholder="Model"
-          value={filterModel}
-          onChange={e => setFilterModel(e.target.value)}
+          style={{ flex: 1 }}
         />
         <select value={sort} onChange={e => setSort(e.target.value)}>
           <option value="recent">Recently Added</option>
