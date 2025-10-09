@@ -22,7 +22,7 @@ export default function ListingGrid({ listings = [] }) {
       }}
     >
       {listings.map((item) => (
-        <ListingCard key={item.id} item={item} />
+        <ListingCard key={item.url || item.title} item={item} />
       ))}
     </div>
   );
