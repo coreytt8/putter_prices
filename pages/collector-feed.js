@@ -15,7 +15,6 @@ export default function CollectorFeed() {
     fetch(`/api/collectors`)
       .then(res => res.json())
       .then(data => {
-        console.log("📦 Collector API response:", data);
         const payload = data?.listings || {};
         setListings(payload.items || []);
         setLastUpdated(payload.timestamp || null);
@@ -28,14 +27,18 @@ export default function CollectorFeed() {
   useEffect(() => {
     let result = [...listings];
 
-    // Filtering logic
-    result = result.filter(item =>
-      item.title?.toLowerCase().includes(filterTerm.toLowerCase()) &&
-      item.brand?.toLowerCase().includes(filterBrand.toLowerCase()) &&
-      item.model?.toLowerCase().includes(filterModel.toLowerCase())
-    );
+    result = result.filter(item => {
+      const titleMatch = item.title?.toLowerCase().includes(filterTerm.toLowerCase());
+      const brandMatch = filterBrand
+        ? item.brand?.toLowerCase().includes(filterBrand.toLowerCase())
+        : true;
+      const modelMatch = filterModel
+        ? item.model?.toLowerCase().includes(filterModel.toLowerCase())
+        : true;
 
-    // Sorting logic
+      return titleMatch && brandMatch && modelMatch;
+    });
+
     switch (sort) {
       case 'lowToHigh':
         result.sort((a, b) => a.priceValue - b.priceValue);
@@ -48,7 +51,7 @@ export default function CollectorFeed() {
         break;
       case 'recent':
       default:
-        break; // future: sort by timestamp if available
+        break;
     }
 
     setFiltered(result);
