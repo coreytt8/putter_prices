@@ -34,7 +34,7 @@ module.exports = async function handler(req, res) {
           title: item.title,
           price: item.price.value + ' ' + item.price.currency,
           image: item.image?.imageUrl || null,
-          url: item.itemWebUrl,
+          url: `https://rover.ebay.com/rover/1/711-53200-19255-0/1?ff3=4&pub=5339121522&toolid=10001&campid=5339121522&customid=putteriq&mpre=${encodeURIComponent(item.itemWebUrl)}`,
           term,
         })));
       }
