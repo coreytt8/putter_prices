@@ -1,5 +1,3 @@
-// pages/api/headcovers.js
-
 const { HEAD_COVER_SEARCH_TERMS } = require('@/lib/headcoverSearchTerms');
 const { getCached, setCached } = require('@/lib/cache');
 const { getEbayToken } = require('@/lib/ebayAuth');
@@ -17,11 +15,8 @@ module.exports = async function handler(req, res) {
 
     for (const term of HEAD_COVER_SEARCH_TERMS) {
       const url = `${EBAY_API_ENDPOINT}?q=${encodeURIComponent(term)}&limit=5&filter=price:[200..]`;
-
       const response = await fetch(url, {
-        headers: {
-          Authorization: `Bearer ${token}`,
-        },
+        headers: { Authorization: `Bearer ${token}` },
       });
 
       if (!response.ok) {
@@ -42,8 +37,11 @@ module.exports = async function handler(req, res) {
       }
     }
 
-    setCached(cacheKey, allResults);
-    res.status(200).json({ listings: allResults });
+    const timestamp = Date.now();
+    const payload = { items: allResults, timestamp };
+    setCached(cacheKey, payload);
+    res.status(200).json({ listings: payload });
+
   } catch (err) {
     console.error('Headcover fetch failed', err);
     res.status(500).json({ error: 'Failed to fetch headcover items' });

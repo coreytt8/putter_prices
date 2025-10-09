@@ -9,7 +9,7 @@
 
 
 
-
+import Header from '@/components/Header';
 import { useEffect, useState } from 'react';
 import Link from 'next/link';
 
@@ -27,6 +27,7 @@ export default function HomePage() {
 
   return (
     <div style={{ padding: '2rem' }}>
+      <Header />
       <h1>PutterIQ</h1>
       <p>The ultimate collector guide for putters & headcovers ⛳️</p>
 

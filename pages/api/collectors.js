@@ -1,6 +1,6 @@
 const { COLLECTOR_SEARCH_TERMS } = require('@/lib/collectorSearchTerms');
 const { getCached, setCached } = require('@/lib/cache');
-const { getEbayToken } = require('@/lib/ebayAuth'); // ✅ auto-refreshing token function
+const { getEbayToken } = require('@/lib/ebayAuth');
 
 const EBAY_API_ENDPOINT = "https://api.ebay.com/buy/browse/v1/item_summary/search";
 
@@ -10,16 +10,13 @@ module.exports = async function handler(req, res) {
   if (cached) return res.status(200).json({ listings: cached });
 
   try {
-    const token = await getEbayToken(); // ✅ get fresh eBay token
+    const token = await getEbayToken();
     const allResults = [];
 
     for (const term of COLLECTOR_SEARCH_TERMS) {
       const url = `${EBAY_API_ENDPOINT}?q=${encodeURIComponent(term)}&limit=5&filter=price:[500..]`;
-
       const response = await fetch(url, {
-        headers: {
-          Authorization: `Bearer ${token}`,
-        },
+        headers: { Authorization: `Bearer ${token}` },
       });
 
       if (!response.ok) {
@@ -40,8 +37,11 @@ module.exports = async function handler(req, res) {
       }
     }
 
-    setCached(cacheKey, allResults);
-    res.status(200).json({ listings: allResults });
+    const timestamp = Date.now();
+    const payload = { items: allResults, timestamp };
+    setCached(cacheKey, payload);
+    res.status(200).json({ listings: payload });
+
   } catch (err) {
     console.error('Collector fetch failed', err);
     res.status(500).json({ error: 'Failed to fetch collector items' });
