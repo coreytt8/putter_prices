@@ -52,6 +52,8 @@ export default async function handler(req, res) {
         }
       }
     }
+    
+    console.log("Fetched items:", allResults.length);
 
     const timestamp = Date.now();
     const start = (page - 1) * limit;
