@@ -1,94 +1,80 @@
-// pages/headcovers-feed.js
-
 import { useEffect, useState } from 'react';
 import Header from '@/components/Header';
 import ListingGrid from '@/components/ListingGrid';
 
-export default function HeadcoversFeed() {
+export default function HeadcoverFeed() {
   const [listings, setListings] = useState([]);
-  const [filterTerm, setFilterTerm] = useState("");
-  const [minPrice, setMinPrice] = useState(0);
-  const [sortOrder, setSortOrder] = useState("default");
+  const [searchTerm, setSearchTerm] = useState('');
+  const [page, setPage] = useState(1);
+  const [total, setTotal] = useState(0);
   const [lastUpdated, setLastUpdated] = useState(null);
 
   useEffect(() => {
-    fetch('/api/headcovers')
-      .then(res => res.json())
-      .then(data => {
-        const { items, timestamp } = data.listings || {};
-        setListings(items || []);
-        setLastUpdated(timestamp || null);
-      });
-  }, []);
+    const fetchListings = async () => {
+      try {
+        const res = await fetch(`/api/headcovers?page=${page}&q=${encodeURIComponent(searchTerm)}`);
+        const data = await res.json();
 
-  const filteredListings = listings.filter(item =>
-    item.title.toLowerCase().includes(filterTerm.toLowerCase()) &&
-    parseFloat(item.price) >= minPrice
-  );
+        setListings(data.listings.items || []);
+        setTotal(data.listings.total || 0);
+        setLastUpdated(data.listings.timestamp || null);
+      } catch (err) {
+        console.error("❌ Error fetching headcovers:", err);
+      }
+    };
 
-  const sortedListings = [...filteredListings].sort((a, b) => {
-    const priceA = parseFloat(a.price);
-    const priceB = parseFloat(b.price);
+    fetchListings();
+  }, [page, searchTerm]);
 
-    switch (sortOrder) {
-      case 'price-asc':
-        return priceA - priceB;
-      case 'price-desc':
-        return priceB - priceA;
-      case 'alpha':
-        return a.title.localeCompare(b.title);
-      case 'offers':
-        const hasOfferA = /offer/i.test(a.title + a.term);
-        const hasOfferB = /offer/i.test(b.title + b.term);
-        return hasOfferB - hasOfferA;
-      case 'default':
-      default:
-        return 0;
-    }
-  });
+  const handleSearchChange = (e) => {
+    setSearchTerm(e.target.value);
+    setPage(1);
+  };
+
+  const totalPages = Math.ceil(total / 10);
 
   return (
-    <div style={{ padding: '2rem' }}>
+    <div style={{ padding: '2rem', maxWidth: '1100px', margin: '0 auto' }}>
       <Header />
-      <h1>🧢 Rare Headcovers Feed</h1>
-      <p>Live eBay listings for limited headcovers</p>
+      <h1>🎯 Headcover Collector Feed</h1>
 
-      {lastUpdated && (
-        <p style={{ fontSize: '0.85rem', color: '#777' }}>
-          Last updated: {new Date(lastUpdated).toLocaleString()}
-        </p>
-      )}
-
-      <div style={{ marginBottom: '1rem' }}>
+      <div style={{
+        display: 'flex',
+        flexWrap: 'wrap',
+        gap: '1rem',
+        marginBottom: '1rem'
+      }}>
         <input
           type="text"
-          placeholder="Search headcover..."
-          value={filterTerm}
-          onChange={(e) => setFilterTerm(e.target.value)}
-          style={{ marginRight: '1rem', padding: '0.5rem' }}
+          placeholder="Search rare headcovers..."
+          value={searchTerm}
+          onChange={handleSearchChange}
+          style={{ flex: '1', minWidth: '250px', padding: '0.5rem' }}
         />
-        <input
-          type="number"
-          placeholder="Min Price"
-          value={minPrice}
-          onChange={(e) => setMinPrice(e.target.value)}
-          style={{ marginRight: '1rem', padding: '0.5rem' }}
-        />
-        <select
-          value={sortOrder}
-          onChange={(e) => setSortOrder(e.target.value)}
-          style={{ padding: '0.5rem' }}
-        >
-          <option value="default">Sort by: Recently Added</option>
-          <option value="price-desc">Price: High to Low</option>
-          <option value="price-asc">Price: Low to High</option>
-          <option value="alpha">Alphabetical</option>
-          <option value="offers">Most Offers</option>
-        </select>
       </div>
 
-      <ListingGrid listings={sortedListings} />
+      <p style={{ fontSize: '0.9rem', color: '#666' }}>
+        {total} results found.
+        {lastUpdated && <> Last updated: {new Date(lastUpdated).toLocaleString()}</>}
+      </p>
+
+      {listings.length > 0 ? (
+        <>
+          <ListingGrid listings={listings} />
+
+          <div style={{ marginTop: '1rem', display: 'flex', justifyContent: 'center', gap: '1rem' }}>
+            <button onClick={() => setPage(p => Math.max(p - 1, 1))} disabled={page === 1}>
+              ⬅️ Prev
+            </button>
+            <span>Page {page} of {totalPages}</span>
+            <button onClick={() => setPage(p => Math.min(p + 1, totalPages))} disabled={page === totalPages}>
+              Next ➡️
+            </button>
+          </div>
+        </>
+      ) : (
+        <p>No listings found.</p>
+      )}
     </div>
   );
 }
-

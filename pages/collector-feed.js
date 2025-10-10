@@ -1,72 +1,77 @@
-// pages/collector-feed.js
 import { useEffect, useState } from 'react';
 import Header from '@/components/Header';
 import ListingGrid from '@/components/ListingGrid';
 
 export default function CollectorFeed() {
   const [listings, setListings] = useState([]);
-  const [filterTerm, setFilterTerm] = useState('');
+  const [searchTerm, setSearchTerm] = useState('');
+  const [page, setPage] = useState(1);
+  const [total, setTotal] = useState(0);
   const [lastUpdated, setLastUpdated] = useState(null);
-  const [sort, setSort] = useState('recent');
 
   useEffect(() => {
     const fetchListings = async () => {
-      const query = filterTerm.trim();
-      const url = `/api/collectors?q=${encodeURIComponent(query)}`;
-
       try {
-        const res = await fetch(url);
+        const res = await fetch(`/api/collectors?page=${page}&q=${encodeURIComponent(searchTerm)}`);
         const data = await res.json();
-        const payload = data?.listings || {};
-        setListings(payload.items || []);
-        setLastUpdated(payload.timestamp || null);
+
+        setListings(data.listings.items || []);
+        setTotal(data.listings.total || 0);
+        setLastUpdated(data.listings.timestamp || null);
       } catch (err) {
-        console.error("❌ Error fetching collectors:", err);
+        console.error("❌ Fetch error:", err);
       }
     };
 
     fetchListings();
-  }, [filterTerm]);
+  }, [page, searchTerm]);
 
-  const sorted = [...listings].sort((a, b) => {
-    switch (sort) {
-      case 'lowToHigh':
-        return a.priceValue - b.priceValue;
-      case 'highToLow':
-        return b.priceValue - a.priceValue;
-      case 'alpha':
-        return a.title.localeCompare(b.title);
-      default:
-        return 0;
-    }
-  });
+  const handleSearchChange = (e) => {
+    setSearchTerm(e.target.value);
+    setPage(1); // Reset to first page
+  };
+
+  const totalPages = Math.ceil(total / 10);
 
   return (
-    <div style={{ padding: '2rem', maxWidth: '1000px', margin: '0 auto' }}>
+    <div style={{ padding: '2rem', maxWidth: '1100px', margin: '0 auto' }}>
       <Header />
       <h1>🧠 Collector Putter Feed</h1>
 
-      <div style={{ display: 'flex', gap: '1rem', margin: '1rem 0' }}>
+      <div style={{
+        display: 'flex',
+        flexWrap: 'wrap',
+        gap: '1rem',
+        marginBottom: '1rem'
+      }}>
         <input
-          placeholder="Search for rare or tour putters"
-          value={filterTerm}
-          onChange={e => setFilterTerm(e.target.value)}
+          type="text"
+          placeholder="Search putters or covers..."
+          value={searchTerm}
+          onChange={handleSearchChange}
+          style={{ flex: '1', minWidth: '250px', padding: '0.5rem' }}
         />
-        <select value={sort} onChange={e => setSort(e.target.value)}>
-          <option value="recent">Recently Added</option>
-          <option value="lowToHigh">Price: Low to High</option>
-          <option value="highToLow">Price: High to Low</option>
-          <option value="alpha">Alphabetical</option>
-        </select>
       </div>
 
-      <p style={{ fontSize: '0.85rem', color: '#666' }}>
-        {sorted.length} results.
+      <p style={{ fontSize: '0.9rem', color: '#666' }}>
+        {total} results found.
         {lastUpdated && <> Last updated: {new Date(lastUpdated).toLocaleString()}</>}
       </p>
 
-      {sorted.length > 0 ? (
-        <ListingGrid listings={sorted} />
+      {listings.length > 0 ? (
+        <>
+          <ListingGrid listings={listings} />
+
+          <div style={{ marginTop: '1rem', display: 'flex', justifyContent: 'center', gap: '1rem' }}>
+            <button onClick={() => setPage(p => Math.max(p - 1, 1))} disabled={page === 1}>
+              ⬅️ Prev
+            </button>
+            <span>Page {page} of {totalPages}</span>
+            <button onClick={() => setPage(p => Math.min(p + 1, totalPages))} disabled={page === totalPages}>
+              Next ➡️
+            </button>
+          </div>
+        </>
       ) : (
         <p>No listings found.</p>
       )}
