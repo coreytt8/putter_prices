@@ -15,8 +15,9 @@ export default function CollectorFeed() {
     const fetchListings = async () => {
       try {
         const res = await fetch(
-           `/api/collectors?q=${encodeURIComponent(searchTerm)}&page=${page}&limit=10&sort=${sort}`)
-        });
+  `/api/collectors?q=${encodeURIComponent(searchTerm)}&page=${page}&limit=10&sort=${sort}`
+);
+
         const data = await res.json();
         const payload = data?.listings || {};
         setListings(payload.items || []);
