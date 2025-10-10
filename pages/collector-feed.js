@@ -10,6 +10,7 @@ export default function CollectorFeed() {
   const [page, setPage] = useState(1);
   const [total, setTotal] = useState(0);
   const [lastUpdated, setLastUpdated] = useState(null);
+ const [sort, setSort] = useState('recent');
 
   useEffect(() => {
     const fetchListings = async () => {
