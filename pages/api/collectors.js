@@ -1,73 +1,67 @@
 import { getEbayToken } from '@/lib/ebayAuth';
 import { makeAffiliateLink } from '@/lib/affiliateLink';
-import { getCached, setCached } from '@/lib/cache';
 
 const CATEGORY_ID = 115280; // Golf
-const PUTTER_TERMS = ['putter', 'putters', 'headcover', 'headcovers'];
-const COLLECTOR_KEYWORDS = ['tour', 'circle t', 'limited', 'rare', 'proto', 'gallery', 'vault', 'custom', 'issue', 'craft batch', 'ct'];
+const COLLECTOR_KEYWORDS = ['tour', 'circle t', 'limited', 'rare', 'proto', 'gallery', 'vault', 'custom', 'issue', 'craft batch', 'ct', 'masterful', 'gss'];
+const PUTTER_TERMS = ['putter', 'headcover'];
 
 export default async function handler(req, res) {
-  const searchTerm = (req.query.q || '').toLowerCase().trim();
-  const page = Number(req.query.page || 1);
-  const limit = Number(req.query.limit || 10);
+  const rawQuery = (req.query.q || '').toLowerCase().trim();
+  const page = parseInt(req.query.page || 1, 10);
+  const limit = parseInt(req.query.limit || 10, 10);
   const offset = (page - 1) * limit;
   const sort = req.query.sort || 'recent';
 
   try {
     const token = await getEbayToken();
-    const url = `https://api.ebay.com/buy/browse/v1/item_summary/search?q=${encodeURIComponent(searchTerm || 'putter')}&category_ids=${CATEGORY_ID}&limit=50&offset=${offset}`;
-    const ebayRes = await fetch(url, {
+
+    // Dynamically build search query if short
+    let searchQuery = rawQuery;
+    if (rawQuery && rawQuery.split(' ').length < 4) {
+      searchQuery = COLLECTOR_KEYWORDS.map(k => `${rawQuery} ${k}`).join(' OR ');
+    }
+
+    const ebayUrl = `https://api.ebay.com/buy/browse/v1/item_summary/search?q=${encodeURIComponent(searchQuery)}&category_ids=${CATEGORY_ID}&limit=${limit}&offset=${offset}`;
+
+    const ebayRes = await fetch(ebayUrl, {
       headers: {
         'Authorization': `Bearer ${token}`,
-        'Content-Type': 'application/json'
-      }
+        'Content-Type': 'application/json',
+      },
     });
-    const data = await ebayRes.json();
-    const raw = data.itemSummaries || [];
 
-    console.log('🔍 Raw titles:', raw.map(i => i.title));
+    const ebayData = await ebayRes.json();
+    const rawItems = ebayData.itemSummaries || [];
 
-    const filtered = raw.filter(item => {
+    const filtered = rawItems.filter(item => {
       const title = (item.title || '').toLowerCase();
-
-      const hasCollectorKeyword = COLLECTOR_KEYWORDS.some(k => title.includes(k));
-      const hasPutterWord = PUTTER_TERMS.some(w => title.includes(w));
-      const matchesSearch = searchTerm ? title.includes(searchTerm) : true;
-
-      return hasPutterWord && hasCollectorKeyword && matchesSearch;
+      return PUTTER_TERMS.some(term => title.includes(term));
     }).map(item => ({
       title: item.title,
       image: item.image?.imageUrl || null,
       price: item.price?.value ? `$${item.price.value}` : 'N/A',
       priceValue: parseFloat(item.price?.value) || 0,
-      term: searchTerm,
       brand: item.brand || '',
       model: item.model || '',
       url: makeAffiliateLink(item.itemWebUrl),
     }));
 
-    console.log('✅ Filtered titles:', filtered.map(i => i.title));
-
-    // Sort logic
+    // Sorting logic
     if (sort === 'lowToHigh') filtered.sort((a, b) => a.priceValue - b.priceValue);
     if (sort === 'highToLow') filtered.sort((a, b) => b.priceValue - a.priceValue);
     if (sort === 'alpha') filtered.sort((a, b) => a.title.localeCompare(b.title));
 
-    const timestamp = Date.now();
-    const paginated = filtered.slice(0, limit);
-
-    return res.status(200).json({
+    res.status(200).json({
       listings: {
-        items: paginated,
-        total: filtered.length,
+        items: filtered,
         page,
         limit,
-        timestamp
-      }
+        total: ebayData.total || filtered.length,
+        timestamp: Date.now(),
+      },
     });
-
   } catch (err) {
-    console.error('❌ API error:', err);
-    return res.status(500).json({ error: 'Internal Server Error' });
+    console.error('❌ Collector API Error:', err);
+    res.status(500).json({ error: 'Internal Server Error' });
   }
 }
