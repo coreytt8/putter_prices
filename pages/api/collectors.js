@@ -2,101 +2,72 @@ import { getEbayToken } from '@/lib/ebayAuth';
 import { makeAffiliateLink } from '@/lib/affiliateLink';
 import { getCached, setCached } from '@/lib/cache';
 
-const COLLECTOR_KEYWORDS = [
-  'tour', 'circle t', 'limited', 'rare', 'vault', 'prototype', 'custom', 'craft', 'batch', 'masterful'
-];
-const PUTTER_TERMS = ['putter', 'headcover', 'head cover', 'cover'];
+const CATEGORY_ID = 115280; // Golf
+const PUTTER_TERMS = ['putter', 'putters', 'headcover', 'headcovers'];
+const COLLECTOR_KEYWORDS = ['tour', 'circle t', 'limited', 'rare', 'proto', 'gallery', 'vault', 'custom', 'issue', 'craft batch', 'ct'];
 
 export default async function handler(req, res) {
-  const { q = '', page = 1, limit = 10, sort = '' } = req.query;
-  const searchTerm = q.trim().toLowerCase();
-
-  // compute offset
-  const limitNum = Number(limit);
-  const offset = (Number(page) - 1) * limitNum;
-
-  const cacheKey = `collector-${searchTerm}-${page}-${limit}-${sort}`;
-  const cached = getCached(cacheKey);
-  if (cached) {
-    return res.status(200).json({ listings: cached });
-  }
+  const searchTerm = (req.query.q || '').toLowerCase().trim();
+  const page = Number(req.query.page || 1);
+  const limit = Number(req.query.limit || 10);
+  const offset = (page - 1) * limit;
+  const sort = req.query.sort || 'recent';
 
   try {
     const token = await getEbayToken();
-    const categoryId = '115280'; // adjust if you have more specific putters category
-
-    // build sort param for eBay
-    let sortParam = '';
-    if (sort === 'lowToHigh') sortParam = '&sort=price';
-    else if (sort === 'highToLow') sortParam = '&sort=price_desc';
-    else if (sort === 'recent') sortParam = '&sort=newlyListed';
-    // eBay also supports “distance” etc, but you may not need.
-
-    const ebayUrl =
-      `https://api.ebay.com/buy/browse/v1/item_summary/search` +
-      `?q=${encodeURIComponent(searchTerm)}` +
-      `&category_ids=${categoryId}` +
-      `&limit=${limitNum}` +
-      `&offset=${offset}` +
-      `${sortParam}`;
-
-    console.log('🔍 eBay request', ebayUrl);
-
-    const ebayRes = await fetch(ebayUrl, {
+    const url = `https://api.ebay.com/buy/browse/v1/item_summary/search?q=${encodeURIComponent(searchTerm || 'putter')}&category_ids=${CATEGORY_ID}&limit=50&offset=${offset}`;
+    const ebayRes = await fetch(url, {
       headers: {
-        Authorization: `Bearer ${token}`,
-        'Content-Type': 'application/json',
-      },
+        'Authorization': `Bearer ${token}`,
+        'Content-Type': 'application/json'
+      }
     });
-
     const data = await ebayRes.json();
-    const raw = Array.isArray(data.itemSummaries) ? data.itemSummaries : [];
+    const raw = data.itemSummaries || [];
 
-    console.log('📦 raw count', raw.length);
+    console.log('🔍 Raw titles:', raw.map(i => i.title));
 
-    // filter logic (loosened)
     const filtered = raw.filter(item => {
       const title = (item.title || '').toLowerCase();
 
-      // require putter or cover
-      if (!PUTTER_TERMS.some(pt => title.includes(pt))) return false;
+      const hasCollectorKeyword = COLLECTOR_KEYWORDS.some(k => title.includes(k));
+      const hasPutterWord = PUTTER_TERMS.some(w => title.includes(w));
+      const matchesSearch = searchTerm ? title.includes(searchTerm) : true;
 
-      // if the title matches the search term directly, allow
-      if (searchTerm && title.includes(searchTerm)) {
-        return true;
-      }
-
-      // else require collector keyword
-      if (!COLLECTOR_KEYWORDS.some(kw => title.includes(kw))) {
-        return false;
-      }
-
-      return true;
-    });
-
-    console.log('✅ filtered count', filtered.length);
-
-    const listings = filtered.map(item => ({
+      return hasPutterWord && hasCollectorKeyword && matchesSearch;
+    }).map(item => ({
       title: item.title,
       image: item.image?.imageUrl || null,
       price: item.price?.value ? `$${item.price.value}` : 'N/A',
       priceValue: parseFloat(item.price?.value) || 0,
+      term: searchTerm,
+      brand: item.brand || '',
+      model: item.model || '',
       url: makeAffiliateLink(item.itemWebUrl),
     }));
 
-    const payload = {
-      items: listings,
-      total: filtered.length,
-      timestamp: Date.now(),
-      page: Number(page),
-      limit: limitNum,
-    };
+    console.log('✅ Filtered titles:', filtered.map(i => i.title));
 
-    setCached(cacheKey, payload);
+    // Sort logic
+    if (sort === 'lowToHigh') filtered.sort((a, b) => a.priceValue - b.priceValue);
+    if (sort === 'highToLow') filtered.sort((a, b) => b.priceValue - a.priceValue);
+    if (sort === 'alpha') filtered.sort((a, b) => a.title.localeCompare(b.title));
 
-    return res.status(200).json({ listings: payload });
+    const timestamp = Date.now();
+    const paginated = filtered.slice(0, limit);
+
+    return res.status(200).json({
+      listings: {
+        items: paginated,
+        total: filtered.length,
+        page,
+        limit,
+        timestamp
+      }
+    });
+
   } catch (err) {
-    console.error('❌ error in api/collectors', err);
-    return res.status(500).json({ error: 'Error fetching listings' });
+    console.error('❌ API error:', err);
+    return res.status(500).json({ error: 'Internal Server Error' });
   }
 }
