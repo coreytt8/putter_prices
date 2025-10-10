@@ -1,3 +1,5 @@
+// pages/collector-feed.js
+
 import { useEffect, useState } from 'react';
 import Header from '@/components/Header';
 import ListingGrid from '@/components/ListingGrid';
@@ -12,38 +14,42 @@ export default function CollectorFeed() {
   useEffect(() => {
     const fetchListings = async () => {
       try {
-        const res = await fetch(`/api/collectors?page=${page}&q=${encodeURIComponent(searchTerm)}`);
+        const res = await fetch(
+          `/api/collectors?q=${encodeURIComponent(searchTerm)}&page=${page}`
+        );
         const data = await res.json();
-
-        setListings(data.listings.items || []);
-        setTotal(data.listings.total || 0);
-        setLastUpdated(data.listings.timestamp || null);
+        const payload = data?.listings || {};
+        setListings(payload.items || []);
+        setTotal(payload.total || 0);
+        setLastUpdated(payload.timestamp || null);
       } catch (err) {
-        console.error("❌ Fetch error:", err);
+        console.error('❌ Fetch error:', err);
       }
     };
 
     fetchListings();
-  }, [page, searchTerm]);
+  }, [searchTerm, page]);
 
   const handleSearchChange = (e) => {
     setSearchTerm(e.target.value);
-    setPage(1); // Reset to first page
+    setPage(1);
   };
 
-  const totalPages = Math.ceil(total / 10);
+  const totalPages = total ? Math.ceil(total / (listings.length || 1)) : 1;
 
   return (
     <div style={{ padding: '2rem', maxWidth: '1100px', margin: '0 auto' }}>
       <Header />
       <h1>🧠 Collector Putter Feed</h1>
 
-      <div style={{
-        display: 'flex',
-        flexWrap: 'wrap',
-        gap: '1rem',
-        marginBottom: '1rem'
-      }}>
+      <div
+        style={{
+          display: 'flex',
+          flexWrap: 'wrap',
+          gap: '1rem',
+          marginBottom: '1rem',
+        }}
+      >
         <input
           type="text"
           placeholder="Search putters or covers..."
@@ -55,19 +61,36 @@ export default function CollectorFeed() {
 
       <p style={{ fontSize: '0.9rem', color: '#666' }}>
         {total} results found.
-        {lastUpdated && <> Last updated: {new Date(lastUpdated).toLocaleString()}</>}
+        {lastUpdated && (
+          <> Last updated: {new Date(lastUpdated).toLocaleString()}</>
+        )}
       </p>
 
       {listings.length > 0 ? (
         <>
           <ListingGrid listings={listings} />
 
-          <div style={{ marginTop: '1rem', display: 'flex', justifyContent: 'center', gap: '1rem' }}>
-            <button onClick={() => setPage(p => Math.max(p - 1, 1))} disabled={page === 1}>
+          <div
+            style={{
+              marginTop: '1rem',
+              display: 'flex',
+              justifyContent: 'center',
+              gap: '1rem',
+            }}
+          >
+            <button
+              onClick={() => setPage((p) => Math.max(p - 1, 1))}
+              disabled={page === 1}
+            >
               ⬅️ Prev
             </button>
-            <span>Page {page} of {totalPages}</span>
-            <button onClick={() => setPage(p => Math.min(p + 1, totalPages))} disabled={page === totalPages}>
+            <span>
+              Page {page} of {totalPages}
+            </span>
+            <button
+              onClick={() => setPage((p) => Math.min(p + 1, totalPages))}
+              disabled={page === totalPages}
+            >
               Next ➡️
             </button>
           </div>
