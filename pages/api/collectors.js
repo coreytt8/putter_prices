@@ -1,42 +1,46 @@
-// pages/api/collectors.js
 import { getEbayToken } from '@/lib/ebayAuth';
 import { makeAffiliateLink } from '@/lib/affiliateLink';
 import { getCached, setCached } from '@/lib/cache';
 
-// keywords we care about
 const COLLECTOR_KEYWORDS = [
-  'tour', 'circle t', 'limited', 'rare', 'proto',
-  'prototype', 'custom', 'vault', 'craft', 'batch', 'gallery'
+  'tour', 'circle t', 'limited', 'rare', 'vault', 'prototype', 'custom', 'craft', 'batch', 'masterful'
 ];
-
 const PUTTER_TERMS = ['putter', 'headcover', 'head cover', 'cover'];
 
 export default async function handler(req, res) {
-  const { q = '', page = 1, limit = 10 } = req.query;
+  const { q = '', page = 1, limit = 10, sort = '' } = req.query;
   const searchTerm = q.trim().toLowerCase();
-  const cacheKey = `collectorListings-${searchTerm}`;
 
-  if (!searchTerm) {
-    return res.status(200).json({ listings: { items: [], total: 0, page, limit } });
-  }
+  // compute offset
+  const limitNum = Number(limit);
+  const offset = (Number(page) - 1) * limitNum;
 
-  // Try cache first
+  const cacheKey = `collector-${searchTerm}-${page}-${limit}-${sort}`;
   const cached = getCached(cacheKey);
   if (cached) {
-    console.log('💾 Returning cached results for', searchTerm);
     return res.status(200).json({ listings: cached });
   }
 
   try {
     const token = await getEbayToken();
+    const categoryId = '115280'; // adjust if you have more specific putters category
 
-    // eBay Browse API call — limit to Golf category if possible
-    const categoryId = '115280'; // Golf Clubs & Equipment → Putters
-    const ebayUrl = `https://api.ebay.com/buy/browse/v1/item_summary/search?q=${encodeURIComponent(
-      searchTerm
-    )}&category_ids=${categoryId}&limit=50`;
+    // build sort param for eBay
+    let sortParam = '';
+    if (sort === 'lowToHigh') sortParam = '&sort=price';
+    else if (sort === 'highToLow') sortParam = '&sort=price_desc';
+    else if (sort === 'recent') sortParam = '&sort=newlyListed';
+    // eBay also supports “distance” etc, but you may not need.
 
-    console.log('🌐 Fetching from eBay:', ebayUrl);
+    const ebayUrl =
+      `https://api.ebay.com/buy/browse/v1/item_summary/search` +
+      `?q=${encodeURIComponent(searchTerm)}` +
+      `&category_ids=${categoryId}` +
+      `&limit=${limitNum}` +
+      `&offset=${offset}` +
+      `${sortParam}`;
+
+    console.log('🔍 eBay request', ebayUrl);
 
     const ebayRes = await fetch(ebayUrl, {
       headers: {
@@ -46,32 +50,33 @@ export default async function handler(req, res) {
     });
 
     const data = await ebayRes.json();
-    const rawItems = Array.isArray(data.itemSummaries) ? data.itemSummaries : [];
+    const raw = Array.isArray(data.itemSummaries) ? data.itemSummaries : [];
 
-    console.log(`📦 Raw eBay items for "${searchTerm}":`, rawItems.length);
+    console.log('📦 raw count', raw.length);
 
-    // filtering logic
-    const filtered = rawItems.filter((item) => {
+    // filter logic (loosened)
+    const filtered = raw.filter(item => {
       const title = (item.title || '').toLowerCase();
 
-      // must include "putter" or "headcover"
-      const hasPutterWord = PUTTER_TERMS.some((word) => title.includes(word));
-      if (!hasPutterWord) return false;
+      // require putter or cover
+      if (!PUTTER_TERMS.some(pt => title.includes(pt))) return false;
 
-      // allow if matches search term directly (like "spider")
-      if (searchTerm && title.includes(searchTerm)) return true;
+      // if the title matches the search term directly, allow
+      if (searchTerm && title.includes(searchTerm)) {
+        return true;
+      }
 
-      // otherwise must include collector keyword
-      const hasCollectorKeyword = COLLECTOR_KEYWORDS.some((kw) =>
-        title.includes(kw)
-      );
-      return hasCollectorKeyword;
+      // else require collector keyword
+      if (!COLLECTOR_KEYWORDS.some(kw => title.includes(kw))) {
+        return false;
+      }
+
+      return true;
     });
 
-    console.log(`✅ Filtered results: ${filtered.length}`);
+    console.log('✅ filtered count', filtered.length);
 
-    // Map items
-    const listings = filtered.map((item) => ({
+    const listings = filtered.map(item => ({
       title: item.title,
       image: item.image?.imageUrl || null,
       price: item.price?.value ? `$${item.price.value}` : 'N/A',
@@ -81,16 +86,17 @@ export default async function handler(req, res) {
 
     const payload = {
       items: listings,
-      total: listings.length,
+      total: filtered.length,
       timestamp: Date.now(),
       page: Number(page),
-      limit: Number(limit),
+      limit: limitNum,
     };
 
     setCached(cacheKey, payload);
+
     return res.status(200).json({ listings: payload });
   } catch (err) {
-    console.error('❌ Collector fetch failed:', err);
-    return res.status(500).json({ error: 'Failed to fetch collector listings.' });
+    console.error('❌ error in api/collectors', err);
+    return res.status(500).json({ error: 'Error fetching listings' });
   }
 }
