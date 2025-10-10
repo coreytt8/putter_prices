@@ -21,10 +21,6 @@ export default function Home() {
         <Link href="/collector-feed" style={linkStyle}>🔎 Collector Feed →</Link>
         <Link href="/headcovers-feed" style={linkStyle}>🧢 Headcovers Feed →</Link>
       </div>
-
-      <footer style={{ marginTop: '3rem', fontSize: '0.9rem', color: '#888' }}>
-        Built with ❤️ by putter collectors. Powered by eBay.
-      </footer>
     </div>
   );
 }
